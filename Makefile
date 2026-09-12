@@ -16,7 +16,7 @@ revision:
 	docker compose exec core alembic revision -m "$(m)"
 
 lint:
-	ruff check core
+	docker compose exec core ruff check core
 
 test:
-	pytest
+	docker compose exec core pytest

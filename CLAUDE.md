@@ -35,8 +35,8 @@
 - `make logs` — логи `core`
 - `make migrate` — применить миграции (`alembic upgrade head`)
 - `make revision m="сообщение"` — новая миграция
-- `make lint` — `ruff check core`
-- `make test` — `pytest`
+- `make lint` — `ruff check core` внутри контейнера `core`
+- `make test` — `pytest` внутри контейнера `core` (нужна живая Postgres со схемой — сначала `make migrate`)
 
 Локальная проверка без Docker: `.env` из `.env.example` (не коммитится), затем
 `pip install -e .` и `uvicorn core.main:app --reload` — но основной путь именно через Docker Compose.

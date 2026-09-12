@@ -8,9 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml ./
 COPY core ./core
+COPY tests ./tests
 COPY alembic.ini ./
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir .[dev]
 
 EXPOSE 8000
 
