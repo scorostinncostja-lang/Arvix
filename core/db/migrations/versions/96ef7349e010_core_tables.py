@@ -5,7 +5,7 @@ Revises: 7c6d88df0e8c
 Create Date: 2026-09-12 17:17:03.458898
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
 
@@ -13,9 +13,9 @@ from core.db.models import Base
 
 # revision identifiers, used by Alembic.
 revision: str = '96ef7349e010'
-down_revision: Union[str, Sequence[str], None] = '7c6d88df0e8c'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = '7c6d88df0e8c'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
