@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Arvix — онбординг</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0;
+    padding: 16px;
+    padding-bottom: 32px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--tg-theme-bg-color, #ffffff);
+    color: var(--tg-theme-text-color, #111111);
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.hint { color: var(--tg-theme-hint-color, #888); font-size: 13px; margin: 0 0 20px; }
+  label { display: block; font-size: 13px; margin: 16px 0 6px; font-weight: 600; }
+  input, textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--tg-theme-hint-color, #ccc);
+    background: var(--tg-theme-secondary-bg-color, #f4f4f5);
+    color: var(--tg-theme-text-color, #111111);
+    font-size: 15px;
+  }
+  textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+  .row { display: flex; gap: 10px; }
+  .row > div { flex: 1; }
+  .weekdays { display: flex; gap: 6px; flex-wrap: wrap; }
+  .weekdays label {
+    margin: 0; display: flex; align-items: center; gap: 6px;
+    padding: 8px 10px; border-radius: 8px;
+    background: var(--tg-theme-secondary-bg-color, #f4f4f5);
+    font-weight: 400; font-size: 13px;
+  }
+  .weekdays input { width: auto; padding: 0; }
+  button {
+    margin-top: 24px;
+    width: 100%;
+    padding: 13px;
+    border: none;
+    border-radius: 10px;
+    background: var(--tg-theme-button-color, #2481cc);
+    color: var(--tg-theme-button-text-color, #ffffff);
+    font-size: 16px;
+    font-weight: 600;
+  }
+  button:disabled { opacity: 0.5; }
+  #error { color: #e53e3e; font-size: 13px; margin-top: 10px; display: none; }
+</style>
+</head>
+<body>
+  <h1>Прежде чем начать</h1>
+  <p class="hint">Минимум для запуска. Остальное — в диалоге со мной, по ходу.</p>
+
+  <form id="f">
+    <label for="name">Имя</label>
+    <input id="name" required />
+
+    <div class="row">
+      <div>
+        <label for="birth_date">Дата рождения</label>
+        <input id="birth_date" type="date" required />
+      </div>
+      <div>
+        <label for="city">Город</label>
+        <input id="city" required />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="bedtime">Отбой</label>
+        <input id="bedtime" type="time" value="23:30" required />
+      </div>
+      <div>
+        <label for="wake">Подъём</label>
+        <input id="wake" type="time" value="07:15" required />
+      </div>
+    </div>
+
+    <label>Какие дни заняты (учёба / смены)</label>
+    <div class="weekdays" id="weekdays">
+      <label><input type="checkbox" value="0" />Пн</label>
+      <label><input type="checkbox" value="1" />Вт</label>
+      <label><input type="checkbox" value="2" />Ср</label>
+      <label><input type="checkbox" value="3" />Чт</label>
+      <label><input type="checkbox" value="4" />Пт</label>
+      <label><input type="checkbox" value="5" />Сб</label>
+      <label><input type="checkbox" value="6" />Вс</label>
+    </div>
+
+    <label for="goal_title">Главная цель на ближайший год</label>
+    <input id="goal_title" required />
+
+    <label for="goal_why">Зачем — одной фразой</label>
+    <textarea id="goal_why" required></textarea>
+
+    <button type="submit">Проверить</button>
+    <div id="error"></div>
+  </form>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    tg?.ready();
+    tg?.expand();
+
+    const form = document.getElementById("f");
+    const errorBox = document.getElementById("error");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorBox.style.display = "none";
+
+      const busyWeekdays = Array.from(
+        document.querySelectorAll('#weekdays input:checked')
+      ).map((el) => Number(el.value));
+
+      const payload = {
+        name: document.getElementById("name").value.trim(),
+        birth_date: document.getElementById("birth_date").value,
+        city: document.getElementById("city").value.trim(),
+        bedtime_target: document.getElementById("bedtime").value,
+        wake_target: document.getElementById("wake").value,
+        busy_weekdays: busyWeekdays,
+        goal_title: document.getElementById("goal_title").value.trim(),
+        goal_why: document.getElementById("goal_why").value.trim(),
+      };
+
+      const submitBtn = form.querySelector("button");
+      submitBtn.disabled = true;
+
+      try {
+        const res = await fetch("/api/onboarding/core", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Telegram-Init-Data": tg?.initData || "",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || `Ошибка ${res.status}`);
+        }
+
+        tg?.close();
+      } catch (err) {
+        errorBox.textContent = err.message || "Не получилось сохранить. Попробуй ещё раз.";
+        errorBox.style.display = "block";
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
