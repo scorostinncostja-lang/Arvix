@@ -6,15 +6,13 @@
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db.models import Event
 from core.events.kinds import EventKind, EventSource
 from core.events.projections import apply as apply_projection
-
-LOCAL_TZ = ZoneInfo("Europe/Moscow")
+from core.utils.time import LOCAL_TZ
 
 
 async def emit(
