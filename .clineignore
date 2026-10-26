@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+node_modules/
+twa/dist/
+firmware/.pio/
+*.db
+*.sql.gz

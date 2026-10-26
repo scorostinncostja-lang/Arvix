@@ -9,7 +9,7 @@ from core.bot.instance import bot, dp
 from core.bot.middlewares import OwnerOnlyMiddleware
 from core.config import settings
 from core.db.session import async_session_factory
-from core.scheduler.jobs import scheduler, start_scheduler
+from core.scheduler.jobs import scheduler, start_scheduler, sync_today_jobs
 from core.scheduler.materialize import seed_default_templates
 
 dp.update.outer_middleware(OwnerOnlyMiddleware())
@@ -24,6 +24,10 @@ async def lifespan(app: FastAPI):
 
     polling_task = asyncio.create_task(dp.start_polling(bot, handle_signals=False))
     start_scheduler()
+    
+    # Синхронизировать задачи сегодняшнего дня с APScheduler (Шаг 0.5)
+    await sync_today_jobs(scheduler)
+    
     yield
     scheduler.shutdown(wait=False)
     await dp.stop_polling()
@@ -37,3 +41,4 @@ app.include_router(onboarding.router)
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "domain": settings.domain}
+

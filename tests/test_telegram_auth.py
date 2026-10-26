@@ -11,7 +11,7 @@ import pytest
 
 from core.api.telegram_auth import InitDataError, verify_init_data
 
-BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"  # noqa: S105 — тестовый, не настоящий
+BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"  # тестовый токен, не настоящий
 
 
 def _build_init_data(bot_token: str, user_id: int, auth_date: int | None = None) -> str:

@@ -1,0 +1,113 @@
+# Конфигурация провайдеров и ролей для ИИ-слоя Arvix
+# Имена моделей проверяются при развертывании и могут меняться
+
+providers:
+  groq:
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY
+    rate_limit:
+      requests_per_minute: 30
+      tokens_per_minute: 14400
+  
+  gemini:
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    api_key_env: GEMINI_API_KEY
+    rate_limit:
+      requests_per_minute: 15
+      tokens_per_minute: 30000
+  
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    rate_limit:
+      requests_per_minute: 20
+      tokens_per_minute: 50000
+  
+  deepseek:
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+    rate_limit:
+      requests_per_minute: 60
+      tokens_per_minute: 40000
+  
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    rate_limit:
+      requests_per_minute: 500
+      tokens_per_minute: 150000
+  
+  apinet:
+    base_url_env: APINET_BASE_URL
+    api_key_env: APINET_API_KEY
+    rate_limit:
+      requests_per_minute: 20
+      tokens_per_minute: 30000
+
+roles:
+  voice:
+    provider: groq
+    model: llama-3.3-70b-versatile
+    timeout: 3
+    temperature: 0.8
+    max_tokens: 1200
+  
+  analyst:
+    provider: deepseek
+    model: deepseek-chat
+    timeout: 90
+    temperature: 0.3
+    max_tokens: 8000
+  
+  planner:
+    provider: gemini
+    model: gemini-2.0-flash-exp
+    timeout: 60
+    temperature: 0.4
+    max_tokens: 4000
+  
+  researcher:
+    provider: gemini
+    model: gemini-2.0-flash-exp
+    timeout: 90
+    temperature: 0.5
+    max_tokens: 6000
+  
+  vision:
+    provider: gemini
+    model: gemini-2.0-flash-exp
+    timeout: 30
+    temperature: 0.2
+    max_tokens: 2000
+  
+  chief:
+    provider: openai
+    model: gpt-4o-mini
+    timeout: 60
+    temperature: 0.5
+    max_tokens: 4000
+  
+  stt:
+    provider: groq
+    model: whisper-large-v3-turbo
+    timeout: 10
+
+# Fallback-цепочки при отказе провайдера
+fallback:
+  voice:
+    - gemini
+    - deepseek
+  analyst:
+    - gemini
+    - groq
+  planner:
+    - deepseek
+    - groq
+  researcher:
+    - deepseek
+    - openrouter
+  vision:
+    - openrouter
+  chief:
+    - gemini
+    - deepseek

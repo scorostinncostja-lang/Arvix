@@ -12,10 +12,14 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str
 
+    # LLM провайдеры (OpenAI-compatible API)
     groq_api_key: str | None = None
     gemini_api_key: str | None = None
+    openrouter_api_key: str | None = None
     deepseek_api_key: str | None = None
     openai_api_key: str | None = None
+    apinet_api_key: str | None = None
+    apinet_base_url: str = "https://apinet.cloud/v1"
 
 
 settings = Settings()  # type: ignore[call-arg]
