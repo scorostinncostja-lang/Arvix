@@ -15,7 +15,6 @@ from core.bot.templates import reminder_completion_check, reminder_started, remi
 from core.config import settings
 from core.db.session import async_session_factory
 from core.domain.tasks import start_task
-from core.events.kinds import EventSource
 from core.scheduler.materialize import materialize_day
 from core.utils.time import now_local, today_local
 

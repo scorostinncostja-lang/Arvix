@@ -5,13 +5,12 @@
 
 import re
 
-
 # Паттерны для распознавания чувствительных данных
 PATTERNS = [
     # Банковские карты (16 цифр с опциональными пробелами/дефисами)
     (re.compile(r"\b(?:\d{4}[\s\-]?){3}\d{4}\b"), "[CARD]"),
-    # API-ключи OpenAI, Anthropic, Groq и подобные
-    (re.compile(r"\b[sa]k-[a-zA-Z0-9]{20,}\b"), "[API_KEY]"),
+    # API-ключи OpenAI, Anthropic, Groq и подобные (включая sk-proj-...)
+    (re.compile(r"\b[sa]k-[a-zA-Z0-9\-]{20,}\b"), "[API_KEY]"),
     (re.compile(r"\bgsk_[a-zA-Z0-9]{20,}\b"), "[API_KEY]"),
     # Bearer токены
     (re.compile(r"\bBearer\s+[a-zA-Z0-9\-_\.]+\b", re.IGNORECASE), "Bearer [TOKEN]"),

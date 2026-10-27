@@ -18,7 +18,6 @@ from core.events.log import emit
 from core.scheduler.materialize import derive_proof
 from core.utils.time import LOCAL_TZ, now_local
 
-
 # Коэффициенты XP из 02-MECHANICS.md §2
 K_DIFF = {1: 0.6, 2: 0.8, 3: 1.0, 4: 1.4, 5: 2.0}
 K_IMP = {1: 0.7, 2: 0.9, 3: 1.0, 4: 1.3, 5: 1.6}

@@ -4,7 +4,7 @@
 задачи на сегодня, активные директивы, профиль.
 """
 
-from datetime import date, datetime
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -90,7 +90,7 @@ async def build_context_packet(session: AsyncSession) -> str:
 
     if directives:
         directive_lines = [f"- [{d.priority}] {d.content}" for d in directives]
-        sections.append(f"=== Директивы L2 ===\n" + "\n".join(directive_lines))
+        sections.append("=== Директивы L2 ===\n" + "\n".join(directive_lines))
 
     # 6. Долги (если есть)
     result = await session.execute(select(Task).where(Task.status == "debt"))

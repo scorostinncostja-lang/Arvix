@@ -121,9 +121,9 @@ async def execute_propose_schedule_change(
     debts = len(list(result.scalars().all()))
 
     lines = [
-        f"=== Факты для решения ===",
+        "=== Факты для решения ===",
         f"Запрос: {changes_description}",
-        f"",
+        "",
         f"Выполнено сегодня: {completed}/{total}",
         f"Глубокая работа: {daily.deep_minutes if daily else 0} мин",
         f"Режим: {state.mode.upper() if state else 'неизвестно'}",

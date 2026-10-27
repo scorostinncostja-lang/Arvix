@@ -8,7 +8,6 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from core.bot.instance import bot
 from core.bot.keyboards import completion_check_keyboard
 from core.bot.states import TaskProofStates
 from core.bot.templates import (
@@ -19,7 +18,6 @@ from core.bot.templates import (
     task_failed_message,
     task_started_message,
 )
-from core.config import settings
 from core.db.session import async_session_factory
 from core.domain import tasks as domain_tasks
 from core.scheduler.jobs import schedule_task_reminders, scheduler
@@ -104,7 +102,7 @@ async def cmd_status(message: Message) -> None:
         return
 
     lines = [
-        f"📊 Статус:",
+        "📊 Статус:",
         f"Уровень: {current.level}",
         f"XP: {current.xp_total}",
         f"HP: {current.hp}/100",

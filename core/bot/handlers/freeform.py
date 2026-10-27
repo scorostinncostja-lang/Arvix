@@ -2,7 +2,6 @@
 
 from aiogram import F, Router
 from aiogram.types import Message
-from sqlalchemy import select
 
 from core.ai.constitution.loader import build_system_prompt
 from core.ai.context import build_context_packet
@@ -46,7 +45,7 @@ async def handle_voice(message: Message) -> None:
             audio_bytes=audio_bytes.read(),
             filename="voice.ogg",
         )
-    except Exception as e:
+    except Exception:
         await message.answer("Не удалось распознать голос. Попробуй еще раз.")
         return
 

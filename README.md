@@ -1,144 +1,85 @@
 # Arvix
 
-**Arvix** — личный ИИ-ментор и productivity-система для одного пользователя (single-user). Помогает планировать день, отслеживать задачи, управлять энергией и защищать от выгорания.
+Личный ИИ-ментор для одного владельца (single-user): планирует день, напоминает о задачах,
+считает XP/HP, следит за режимом нагрузки (Burnout Guard) и разговаривает через Telegram.
+Подробное видение — в [docs/00-VISION.md](docs/00-VISION.md).
 
-## Концепция: трёхуровневая архитектура (L0/L1/L2)
+## Концепция L0 / L1 / L2
 
-- **L0 (Рефлексы)** — детерминированные операции без ИИ: расчёт XP/HP, Burnout Guard, таймеры, квоты, напоминания. Если задача решается формулой или шаблоном — ИИ не вызывается.
-- **L1 (Голос)** — быстрый диалоговый интерфейс в Telegram (<1.5 сек), использует LLM для понимания запросов и формулирования ответов. Не считает XP/HP самостоятельно — вызывает инструменты (tools) из L0.
-- **L2 (Совет)** — тяжёлая аналитика (Analyst, Planner, Chief), работает в фоне/воркере, никогда не блокирует ответ пользователю. Результаты записываются в таблицу `directives`.
+| Слой | Роль | Правило |
+|------|------|---------|
+| **L0 — Рефлексы** | Чистый детерминированный Python: таймеры, напоминания, расчёт XP/HP, Burnout Guard, квоты | Если задачу решает формула или шаблон — ИИ не вызывается |
+| **L1 — Голос** | Быстрый ответ пользователю (< 1.5 с), максимум 1–2 итерации вызова tools | XP/HP не считает — только вызывает tools из L0 |
+| **L2 — Совет** | Тяжёлая аналитика (Analyst, Planner, Chief) | Только в фоне, никогда не в цепочке ответа; результат пишет в `directives` |
 
-## Стек технологий
+Состояние хранится как **Event Log + проекции**: любое изменение идёт через `emit()` в
+`core/events/log.py`, прямые `UPDATE` проекций (`state_current`, `state_daily`, `state_weekly`) запрещены.
+Инвариант «`rebuild()` = накопленный `apply()`» проверяется в `tests/test_projections.py`.
 
-- **Backend**: Python 3.12+, FastAPI, aiogram 3.x
-- **БД**: PostgreSQL 16 (с pgvector), SQLAlchemy 2.0 (async)
-- **Кеш**: Redis 7
-- **Frontend**: React + Vite (Telegram Web App)
-- **Embedded**: ESP32 (PlatformIO) — в будущем
+## Стек
 
-## Архитектурные принципы
+Версии — из `pyproject.toml` и `docker-compose.yml`:
 
-1. **Event Sourcing** — любое изменение состояния проходит через `core/events/log.py -> emit()`. Прямые UPDATE проекций запрещены.
-2. **Универсальный AI-клиент** — все LLM-провайдеры (Groq, Gemini, DeepSeek, OpenRouter, APINET) подключаются через единый `AsyncOpenAI`-совместимый интерфейс.
-3. **Burnout Guard** — в режиме RED (🟥) и при `mentor_enabled = false` жёсткие тон-блоки исключаются из контекста. Это тестируется.
-4. **Single-User** — строго один владелец (`OWNER_ID`), никакой мультитенантности.
+- Python 3.12+, FastAPI + uvicorn, aiogram 3.x
+- PostgreSQL 16 (образ `pgvector/pgvector:pg16`), SQLAlchemy 2.0 async + asyncpg, Alembic
+- Redis 7, APScheduler
+- LLM: единый клиент `openai.AsyncOpenAI` для всех провайдеров; модели и параметры — в `core/ai/roles.yaml`
+- Caddy (реверс-прокси, TLS)
+- Тесты и линтер: pytest + pytest-asyncio, ruff
 
-## Структура проекта
+## Структура
 
 ```
-arvix/
-├── core/                    # Основной пакет (бот + API + WS)
-│   ├── main.py              # Точка входа
-│   ├── config.py            # Конфигурация через Pydantic Settings
-│   ├── db/                  # SQLAlchemy модели и миграции
-│   ├── events/              # Event log и проекции
-│   ├── domain/              # Бизнес-логика (tasks, ledger, guard, quotas)
-│   ├── ai/                  # LLM-клиенты, роутер, конституция, tools
-│   ├── bot/                 # Telegram bot (aiogram 3.x)
-│   ├── api/                 # REST API + WebSocket
-│   └── scheduler/           # APScheduler задачи
-├── worker/                  # Фоновые задачи L2 (будущее)
-├── twa/                     # React фронтенд (Telegram Web App)
-├── firmware/                # ESP32 прошивка (будущее)
-├── tests/                   # Тесты
-└── docs/                    # Документация и спецификация
+core/            # пакет приложения
+  ai/            # провайдеры, router, constitution, context, tools
+  api/           # FastAPI: авторизация Telegram initData и т.д.
+  bot/           # aiogram: handlers, keyboards, templates, states
+  db/            # модели SQLAlchemy, сессия, миграции
+  domain/        # бизнес-логика (tasks, ...)
+  events/        # log.py (emit), kinds.py, projections.py
+  scheduler/     # APScheduler-задачи, materialize
+  utils/
+tests/           # pytest
+docs/            # спецификация
+firmware/        # ESP32
 ```
 
 ## Документация
 
-Полная спецификация системы находится в директории `docs/`:
+Спецификация лежит в `docs/`:
 
-- `00-VISION.md` — видение и философия проекта
-- `01-ARCHITECTURE.md` — архитектура L0/L1/L2, Event Sourcing
-- `02-MECHANICS.md` — игровая механика (XP, HP, стрики, режимы, квоты)
-- `03-DATA-MODEL.md` — модель данных и проекции
-- `04-AI-STACK.md` — LLM-провайдеры, роли моделей, конституция
-- `05-VOICE-L1.md` — диалоговый интерфейс в Telegram
-- `06-REFLEXES-L0.md` — детерминированная логика без ИИ
-- `07-COUNCIL-L2.md` — фоновая аналитика (Analyst, Planner, Chief)
-- `08-TWA-FRONTEND.md` — веб-интерфейс
-- `09-PHASE-0-1-PLAN.md` — детальный план реализации по шагам
+- [00-VISION.md](docs/00-VISION.md) — видение и принципы
+- [01-ARCHITECTURE.md](docs/01-ARCHITECTURE.md) — архитектура, три слоя
+- [02-MECHANICS.md](docs/02-MECHANICS.md) — механики (задачи, XP/HP, режимы)
+- [03-DATA-MODEL.md](docs/03-DATA-MODEL.md) — модель данных, Event Log и проекции
+- [04-AI-LAYER.md](docs/04-AI-LAYER.md) — ИИ-слой
+- [05-BOT-TWA.md](docs/05-BOT-TWA.md) — бот и Telegram Web App
+- [06-IOT-BIOMETRICS.md](docs/06-IOT-BIOMETRICS.md) — IoT и биометрия
+- [07-SECOND-BRAIN.md](docs/07-SECOND-BRAIN.md) — второй мозг и обучение
+- [08-ROADMAP.md](docs/08-ROADMAP.md) — фазы реализации
+- [09-PHASE-0-1-PLAN.md](docs/09-PHASE-0-1-PLAN.md) — пошаговый план фаз 0 и 1
+- [10-ESP32-BUILD.md](docs/10-ESP32-BUILD.md) — сборка умного таймера
 
-## Быстрый старт
+Правила для ИИ-ассистента — в `CLAUDE.md` и `.clinerules/`.
 
-### Требования
-
-- Docker & Docker Compose
-- Python 3.12+
-- Node.js 18+ (для фронтенда)
-
-### Установка
-
-1. Склонируйте репозиторий:
-```bash
-git clone <repo-url>
-cd arvix
-```
-
-2. Скопируйте `.env.example` в `.env` и заполните переменные:
-```bash
-cp .env.example .env
-# Отредактируйте .env: укажите BOT_TOKEN, OWNER_ID, API ключи
-```
-
-3. Поднимите инфраструктуру:
-```bash
-make up
-```
-
-4. Выполните миграции:
-```bash
-make migrate
-```
-
-### Команды разработки
+## Запуск
 
 ```bash
-make up        # Запустить все сервисы (docker compose up -d --build)
-make down      # Остановить все сервисы
-make logs      # Смотреть логи core-сервиса
-make migrate   # Применить миграции Alembic
-make test      # Запустить тесты (pytest)
-make lint      # Проверить код линтером (ruff check)
+cp .env.example .env     # заполнить BOT_TOKEN, OWNER_ID, POSTGRES_PASSWORD, ключи провайдеров
+make up                  # docker compose up -d --build
+make migrate             # alembic upgrade head
+make test                # pytest внутри контейнера core
+make lint                # ruff check core внутри контейнера core
 ```
 
-### Проверка работы
+Остальные цели `Makefile`: `make down`, `make logs`, `make revision m="описание"`.
 
-После запуска система должна быть доступна:
-- **Telegram Bot**: найдите своего бота в Telegram и отправьте `/start`
-- **Health Check**: `https://your-domain.com/health` → 200 OK
-- **API Docs**: `https://your-domain.com/docs` (FastAPI Swagger UI)
+> **Важно:** образ `core` копирует код при сборке (`COPY core`, `COPY tests`), а `docker-compose.yml`
+> не монтирует исходники. После правок кода или тестов выполните `make up`, иначе `make test`
+> и `make lint` отработают на старой копии.
 
-## Разработка
-
-### Правила работы
-
-1. **Event Sourcing**: все изменения состояния через `emit()` в `core/events/log.py`
-2. **Строгая типизация**: type hints везде, используем `mypy` / `ruff`
-3. **Тестирование**: каждый новый функционал покрывается тестами
-4. **По шагам**: работаем строго по одному шагу из `docs/09-PHASE-0-1-PLAN.md`
-
-### Правила для Cline/Claude Code
-
-См. файлы в `.clinerules/`:
-- `01-architecture-invariants.md` — незыблемые архитектурные правила
-- `02-coding-standards.md` — стандарты кода и стека
-- `03-git-and-testing.md` — workflow разработки
-- `workflows/implement-step.md` — как реализовывать шаги из плана
-- `workflows/pre-commit-check.md` — что проверять перед коммитом
-
-## Текущий статус
-
-**Фаза 0**: Базовая инфраструктура и модель данных
-- ✅ Шаг 0.1: Docker Compose, PostgreSQL, Redis, Alembic
-- ✅ Шаг 0.2: Модели данных, Event Log, проекции, тест инварианта
-- 🚧 Шаг 0.3: Бот (скелет и онбординг) — в разработке
+`/health` отвечает 200 — на нём построен healthcheck контейнера `core`.
 
 ## Лицензия
 
-Проект находится в разработке и предназначен для личного использования.
-
-## Контакты
-
-Создатель: [имя]  
-GitHub: [ссылка]
+См. [LICENSE](LICENSE).
