@@ -11,11 +11,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+import structlog
 import yaml
 
 from core.ai.providers.base import LLMMessage, LLMResponse
 from core.ai.providers.openai_compat import OpenAICompatProvider
 from core.config import settings
+
+logger = structlog.get_logger(__name__)
 
 
 class RateLimiter:
@@ -145,8 +148,6 @@ class LLMRouter:
         fallback_chain = self.config.get("fallback", {}).get(role, [])
         provider_names.extend(fallback_chain)
 
-        last_error = None
-
         for provider_name in provider_names:
             provider = self.providers.get(provider_name)
             if not provider:
@@ -168,8 +169,8 @@ class LLMRouter:
                 )
                 return response
 
-            except Exception as e:
-                last_error = e
+            except Exception as exc:  # noqa: BLE001 — любой сбой провайдера → следующий в fallback-цепочке
+                logger.warning("llm_provider_failed", provider=provider_name, error=repr(exc))
                 continue
 
         # Если все провайдеры упали, возвращаем безопасный L0-фоллбэк

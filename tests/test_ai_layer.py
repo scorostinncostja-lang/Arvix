@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from core.ai.constitution.loader import build_system_prompt
+from core.ai.constitution.loader import build_system_prompt, load_xml_section
 from core.ai.context import build_context_packet
 from core.ai.privacy import scrub_pii
 from core.ai.providers.base import LLMMessage, LLMResponse
@@ -31,10 +31,13 @@ async def test_red_mode_excludes_harsh_tone(async_session):
 
     prompt_red = build_system_prompt(mode="red", mentor_enabled=True)
 
-    # Проверяем, что жёсткие фразы из norm/pressure отсутствуют
-    assert "провал" not in prompt_red.lower()
-    assert "слил" not in prompt_red.lower()
-    assert "саботаж" not in prompt_red.lower()
+    # Жёсткие тон-блоки norm/pressure физически отсутствуют (статичная конституция,
+    # например voice.xml, может содержать слова вроде «слил» как пример критики действия).
+    assert "<tone_norm>" not in prompt_red
+    assert "<tone_pressure>" not in prompt_red
+    assert load_xml_section("tone_norm") not in prompt_red
+    assert load_xml_section("tone_pressure") not in prompt_red
+    assert "<tone_red>" in prompt_red
 
     # Проверяем, что есть мягкий тон
     assert "мягкий" in prompt_red.lower() or "поддерживающ" in prompt_red.lower()

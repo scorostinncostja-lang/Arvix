@@ -82,14 +82,14 @@ async def build_context_packet(session: AsyncSession) -> str:
     # 5. Активные директивы из L2
     result = await session.execute(
         select(Directive)
-        .where(Directive.status == "active")
-        .order_by(Directive.priority.desc())
+        .where(Directive.valid_until.is_(None) | (Directive.valid_until >= today))
+        .order_by(Directive.priority.asc(), Directive.created_at.desc())
         .limit(3)
     )
     directives = list(result.scalars().all())
 
     if directives:
-        directive_lines = [f"- [{d.priority}] {d.content}" for d in directives]
+        directive_lines = [f"- [{d.priority}] {d.text}" for d in directives]
         sections.append("=== Директивы L2 ===\n" + "\n".join(directive_lines))
 
     # 6. Долги (если есть)

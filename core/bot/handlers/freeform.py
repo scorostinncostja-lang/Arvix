@@ -45,7 +45,7 @@ async def handle_voice(message: Message) -> None:
             audio_bytes=audio_bytes.read(),
             filename="voice.ogg",
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 — любой сбой STT → понятный ответ пользователю
         await message.answer("Не удалось распознать голос. Попробуй еще раз.")
         return
 

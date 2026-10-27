@@ -33,6 +33,14 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Внутри контейнера localhost — это сам контейнер: ходим в сервисы compose-сети
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-arvix}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-arvix}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      # Локальная разработка: актуальный код без пересборки образа
+      - ./core:/app/core
+      - ./tests:/app/tests
     depends_on:
       postgres:
         condition: service_healthy
