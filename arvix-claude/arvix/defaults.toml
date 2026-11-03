@@ -1,0 +1,58 @@
+# Настройки по умолчанию. Перекрываются файлом ~/.config/arvix/config.toml
+# (его пишет `arvix setup`). Имена моделей живут только здесь и в конфиге
+# пользователя — в коде их нет (правило №4).
+
+timezone = "Europe/Moscow"
+vault = ""            # путь к Obsidian-хранилищу
+home = "~/Arvix"      # папка, где Claude Code запускается в режиме Арвикса
+
+[telegram]
+token = ""
+owner_id = 0
+
+# Где в хранилище живут файлы Арвикса. Пути — от корня хранилища.
+# Чужие заметки Арвикс только дополняет; перезаписывает лишь свои и нетронутые.
+[vault_paths]
+profile = "05_System/Профиль Арвикса.md"
+goals = "05_System/Цели"
+roadmaps = "03_Resources/Роадмапы"
+notes = "03_Resources/Обучение"     # каркасы конспектов, если нет папки предмета
+weekly = "05_System/Недели"
+inbox = "05_System/Inbox.md"
+system = "05_System/Арвикс"         # журнал, инсайты, бэкапы
+daily = ""                          # пусто — папка ежедневных заметок из настроек Obsidian
+daily_template = ""                 # пусто — шаблон из настроек Obsidian
+
+[schedule]
+brief = "auto"          # auto = время подъёма из профиля + 15 мин
+midday = "15:00"        # чек-ин, если к этому времени выполнено < 40%
+debrief = "22:30"
+retro_weekday = 6       # 0 = пн … 6 = вс
+retro = "20:00"
+rollover = "04:00"      # вчерашний день закрывается в 04:00
+bedtime_warning_min = 30
+silent_weekday = -1     # -1 = автоматических тихих дней нет
+
+[brain]
+claude_bin = "claude"
+timeout_sec = 180
+vault_tools = true      # даёт голове Read/Grep/Glob по хранилищу
+
+[roles.voice]           # L1: всё, что пишется в чат
+model = "sonnet"
+
+[roles.analyst]         # L2: разбор дня и недельное ретро, только в фоне
+model = "sonnet"
+
+[mechanics]
+sleep_target_min = 450        # 7.5 ч, 02-MECHANICS §5
+deep_target_min = 120         # глубокая работа в день
+week_budget_min = 1560        # 26 ч — месяц 1
+week_deep_budget_min = 480    # 8 ч
+shields_per_month = 2
+
+[mechanics.quotas]            # недельные минимумы, 02-MECHANICS §8
+sport = 3
+social = 2
+novelty = 1
+offscreen = 3

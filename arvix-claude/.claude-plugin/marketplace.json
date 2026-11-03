@@ -1,0 +1,12 @@
+{
+  "name": "arvix",
+  "owner": { "name": "Arvix" },
+  "description": "Локальный маркетплейс Арвикса — личного ментора для Claude Code.",
+  "plugins": [
+    {
+      "name": "arvix",
+      "source": "./",
+      "description": "Арвикс: план, отчёты, XP/HP, Burnout Guard, интервью, Obsidian, Telegram."
+    }
+  ]
+}
