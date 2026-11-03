@@ -88,6 +88,18 @@ class McpToolsTest(ArvixCase):
         self.assertIn("сохранён", out)
         self.assertEqual(self.core.state.templates[0]["blocks"][0]["title"], "Практика")
 
+    def test_goal_hierarchy_and_progress(self) -> None:
+        self.assertTrue(self.call("profile", action="goal", title="Фронтенд-джун")["isError"])  # без «зачем» нельзя
+        gid = self.text("profile", action="goal", title="Фронтенд-джун", why="уйти со смен", deadline="2027-06-01").split("[")[1][:8]
+        stage = self.text("profile", action="goal", title="3 компонента на React", parent_id=gid, deadline="2026-12-15").split("[")[1][:8]
+        self.assertTrue(self.call("profile", action="goal", title="x", parent_id="nope0000")["isError"])
+        tree = self.text("profile", action="goals")
+        self.assertLess(tree.index("Фронтенд-джун"), tree.index("  ○ [" + stage))
+        self.assertIn("ЭТАПЫ: 0/1", self.text("context"))
+        self.text("profile", action="goal", goal_id=stage, status="done")
+        self.assertEqual(self.core.state.goals[stage]["title"], "3 компонента на React")  # остальные поля сохранились
+        self.assertIn("● [" + stage, self.text("profile", action="goals"))
+
     def test_notes_write_only_inside_arvix_folder(self) -> None:
         self.assertIn("Arvix/Roadmaps/JS.md", self.text("notes", action="write", path="Roadmaps/JS.md", content="# JS"))
         escaped = self.call("notes", action="write", path="../outside.md", content="x")

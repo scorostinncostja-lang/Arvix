@@ -75,9 +75,10 @@ TOOLS: dict[str, dict[str, Any]] = {
         }, ["kind"]),
     },
     "profile": {
-        "description": "Профиль и долговременная память: get, set (key/value), goal (title, why — обязательно), trait (kind: fear|weakness|bad_habit|good_habit|trigger), remember (topic, fact), forget (fact_id), template (шаблон дня: weekdays 0=пн…6=вс, day_type, blocks).",
+        "description": "Профиль и долговременная память: get, set (key/value), goal (новая цель: title, why обязательно; этап: parent_id; обновить: goal_id + status active|done|dropped), goals (дерево целей), trait (kind: fear|weakness|bad_habit|good_habit|trigger), remember (topic, fact), forget (fact_id), template (шаблон дня: weekdays 0=пн…6=вс, day_type, blocks).",
         "inputSchema": _obj({
-            "action": _enum("get", "set", "goal", "trait", "remember", "forget", "template"),
+            "action": _enum("get", "set", "goal", "goals", "trait", "remember", "forget", "template"),
+            "goal_id": STR, "parent_id": STR, "status": _enum("active", "done", "dropped"),
             "key": STR, "value": STR, "title": STR, "why": STR, "kind": STR, "deadline": STR, "metric": STR,
             "description": STR, "severity": INT, "counter_strategy": STR, "topic": STR, "fact": STR,
             "confidence": INT, "valid_days": INT, "fact_id": STR,
@@ -201,8 +202,17 @@ def t_profile(core: Core, a: dict[str, Any]) -> str:
         core.profile_set(a["key"], a.get("value"))
         return f"Профиль: {a['key']} = {a.get('value')}"
     if action == "goal":
-        gid = core.set_goal(a.get("title", ""), why=a.get("why", ""), kind=a.get("kind") or "main", deadline=a.get("deadline"), metric=a.get("metric"))
+        gid = core.set_goal(a.get("title", ""), why=a.get("why", ""), kind=a.get("kind"), deadline=a.get("deadline"),
+                            metric=a.get("metric"), goal_id=a.get("goal_id"), parent_id=a.get("parent_id"), status=a.get("status"))
         return f"Цель [{gid}] записана."
+    if action == "goals":
+        icons = {"active": "○", "done": "●", "dropped": "✖"}
+        rows = [
+            "  " * depth + f"{icons.get(g.get('status'), '○')} [{g['id']}] {g['title']}"
+            + (f" · до {g['deadline']}" if g.get("deadline") else "") + (f" · метрика: {g['metric']}" if g.get("metric") else "")
+            for depth, g in core.goal_tree()
+        ]
+        return "\n".join(rows) or "Целей пока нет."
     if action == "trait":
         tid = core.add_trait(a.get("kind", ""), a.get("title", ""), description=a.get("description", ""),
                              severity=a.get("severity") or 3, counter_strategy=a.get("counter_strategy", ""))

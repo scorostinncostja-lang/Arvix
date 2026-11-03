@@ -138,7 +138,12 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     main = [g for g in goals if g.get("kind") == "main"] or goals
     if main:
         goal = main[0]
-        lines.append(f"ГЛАВНАЯ ЦЕЛЬ: {goal['title']} (зачем: {goal.get('why', '—')})" + (f" · до {goal['deadline']}" if goal.get("deadline") else ""))
+        lines.append(f"ГЛАВНАЯ ЦЕЛЬ: [{goal['id']}] {goal['title']} (зачем: {goal.get('why', '—')})" + (f" · до {goal['deadline']}" if goal.get("deadline") else ""))
+        stages = [g for g in goals if g.get("parent_id") == goal["id"]]
+        if stages:
+            done = sum(1 for g in st.goals.values() if g.get("parent_id") == goal["id"] and g.get("status") == "done")
+            nxt = min(stages, key=lambda g: g.get("deadline") or "9999")
+            lines.append(f"ЭТАПЫ: {done}/{done + len(stages)} пройдено · следующий: [{nxt['id']}] {nxt['title']}" + (f" до {nxt['deadline']}" if nxt.get("deadline") else ""))
     traits = sorted(st.traits.values(), key=lambda t: -int(t.get("severity", 3)))[:4]
     if traits:
         lines.append("ЧЕРТЫ: " + " · ".join(f"{t['kind']}: {t['title']}" + (f" → {t['counter_strategy']}" if t.get("counter_strategy") else "") for t in traits))

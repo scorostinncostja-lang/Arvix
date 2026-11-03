@@ -220,7 +220,7 @@ def init_home(home: Path, vault: str) -> list[str]:
             "Здесь Claude работает как Арвикс — личный ментор (стиль Arvix включён в .claude/settings.json).\n\n"
             "- Состояние, задачи, XP/HP, интервью — MCP-инструменты `arvix` (начинай с `context`).\n"
             f"- Obsidian: `{vault or 'не настроено'}` — читать можно всё, писать только в `Arvix/`.\n"
-            "- Скиллы: /arvix:onboarding, /arvix:brief, /arvix:debrief, /arvix:retro, /arvix:learn, /arvix:notes.\n",
+            "- Скиллы: /arvix:onboarding, /arvix:plan, /arvix:goal, /arvix:brief, /arvix:debrief, /arvix:retro, /arvix:learn, /arvix:notes.\n",
             encoding="utf-8",
         )
         created.append(str(readme))

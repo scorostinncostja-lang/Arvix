@@ -27,6 +27,7 @@ STATUS_RU = {
 DIRECTIVE_KINDS = ("focus", "warning", "schedule_change", "insight", "quota_push")
 TRAIT_KINDS = ("fear", "weakness", "bad_habit", "good_habit", "trigger")
 GOAL_KINDS = ("dream", "main", "yearly", "quarterly", "milestone")
+GOAL_STATUSES = ("active", "done", "dropped")
 DAY_TYPES = ("study", "work", "deep", "recovery", "silent")
 SOS_HOURS = 24
 ZERO_HOURS = 48
@@ -440,19 +441,64 @@ class Core:
         with self.tx():
             self.emit("profile_set", {"key": key, "value": value}, source=source)
 
-    def set_goal(self, title: str, *, why: str, kind: str = "main", deadline: str | None = None, metric: str | None = None, sphere: str | None = None, goal_id: str | None = None, source: str = "claude") -> str:
-        if not why.strip():
+    def set_goal(
+        self,
+        title: str = "",
+        *,
+        why: str = "",
+        kind: str | None = None,
+        deadline: str | None = None,
+        metric: str | None = None,
+        sphere: str | None = None,
+        goal_id: str | None = None,
+        parent_id: str | None = None,
+        status: str | None = None,
+        source: str = "claude",
+    ) -> str:
+        """Цель или её этап (иерархия 03-DATA-MODEL §2: мечта → главная → … → веха).
+        С goal_id — обновление: непереданные поля остаются прежними, событие новое."""
+        old = self.state.goals.get(goal_id or "", {})
+        if goal_id and not old:
+            raise ArvixError(f"Цели {goal_id} нет")
+        if parent_id and parent_id not in self.state.goals:
+            raise ArvixError(f"Родительской цели {parent_id} нет")
+        if status and status not in GOAL_STATUSES:
+            raise ArvixError(f"status: {', '.join(GOAL_STATUSES)}")
+        payload = {
+            "id": goal_id or new_id(),
+            "title": (title or old.get("title", ""))[:200],
+            "why": (why or old.get("why", ""))[:500],
+            "kind": kind if kind in GOAL_KINDS else old.get("kind", "milestone" if parent_id else "main"),
+            "deadline": deadline or old.get("deadline"),
+            "metric": metric or old.get("metric"),
+            "sphere": sphere or old.get("sphere"),
+            "parent_id": parent_id or old.get("parent_id"),
+            "status": status or old.get("status", "active"),
+        }
+        if not payload["title"]:
+            raise ArvixError("У цели нет названия")
+        if not payload["why"].strip() and not payload["parent_id"]:
             raise ArvixError("У цели обязательно поле «зачем» (03-DATA-MODEL §2)")
-        goal_id = goal_id or new_id()
         with self.tx():
-            self.emit(
-                "goal_set",
-                {"id": goal_id, "title": title[:200], "why": why[:500], "kind": kind if kind in GOAL_KINDS else "main",
-                 "deadline": deadline, "metric": metric, "sphere": sphere, "status": "active"},
-                source=source,
-                entity_id=goal_id,
-            )
-        return goal_id
+            self.emit("goal_set", payload, source=source, entity_id=payload["id"])
+        return payload["id"]
+
+    def goal_tree(self) -> list[tuple[int, dict[str, Any]]]:
+        """Цели деревом: (глубина, цель), этапы по дедлайну."""
+        goals = self.state.goals
+        children: dict[str | None, list[dict[str, Any]]] = {}
+        for goal in goals.values():
+            parent = goal.get("parent_id") if goal.get("parent_id") in goals else None
+            children.setdefault(parent, []).append(goal)
+        out: list[tuple[int, dict[str, Any]]] = []
+
+        def walk(parent: str | None, depth: int) -> None:
+            for goal in sorted(children.get(parent, []), key=lambda g: (g.get("deadline") or "9999", g["title"])):
+                out.append((depth, goal))
+                walk(goal["id"], depth + 1)
+
+        walk(None, 0)
+        return out
 
     def add_trait(self, kind: str, title: str, *, description: str = "", severity: int = 3, counter_strategy: str = "", source: str = "claude") -> str:
         if kind not in TRAIT_KINDS:
