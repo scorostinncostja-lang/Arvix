@@ -1,0 +1,15 @@
+[Unit]
+Description=Arvix — Telegram-бот личного ментора
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart="@PYTHON@" "@APP@/scripts/arvix_telegram.py"
+Environment=PATH=@PATH@
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "arvix": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/arvix_mcp.py"]
+    }
+  }
+}

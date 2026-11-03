@@ -4,6 +4,12 @@
 считает XP/HP, следит за режимом нагрузки (Burnout Guard) и разговаривает через Telegram.
 Подробное видение — в [docs/00-VISION.md](docs/00-VISION.md).
 
+## Arvix Lite — Арвикс в Claude Code и Telegram
+
+Лёгкая версия без Docker и Postgres: плагин Claude Code (стиль, скиллы, MCP, хуки) и
+Telegram-бот на одном журнале событий в SQLite. Установка и устройство —
+[arvix-claude/README.md](arvix-claude/README.md).
+
 ## Концепция L0 / L1 / L2
 
 | Слой | Роль | Правило |
