@@ -17,6 +17,7 @@ from arvix.brain import (
     EXTRACT_SCHEMA,
     LINK_RE,
     RETRO_SCHEMA,
+    TEMPLATES_SCHEMA,
     VOICE_SCHEMA,
     Brain,
     apply_actions,
@@ -31,6 +32,7 @@ from arvix.telegram.api import TelegramAPI, TelegramError
 
 log = logging.getLogger("arvix.telegram")
 AWAIT = "tg_await"
+LAST_TEXT = "tg_last_text"
 HISTORY = 10
 ANALYST_RULES = """<analyst>
 Ты — аналитик Арвикса. Ты не пересказываешь события — их видно и так.
@@ -51,6 +53,54 @@ weekdays 0=пн…6=вс, blocks с start ЧЧ:ММ, duration в минутах,
 Шаблон — только реалистичный: свободное время после учёбы/смен, сон по плану, 1–3 блока в день.
 Ничего не выдумывай сверх ответов. summary — что записано, 1–3 строки, голосом Арвикса.
 </extract>"""
+SCHEDULE_RULES = """<schedule>
+Собери шаблоны дней недели из ответов человека: учёба и работа, свободные окна, подъём и отбой, пики энергии.
+- Бюджет недели — в строке НАГРУЗКА контекста. Сумма блоков за неделю не больше бюджета: начинать с того, что точно потянет.
+- Блоки только в реально свободное время: первый — не раньше чем через 30 мин после учёбы или работы,
+  последний заканчивается минимум за 60 мин до отбоя.
+- 1–3 блока в будний день. Глубокая работа (deep_work) — в часы пика энергии, 45–90 минут.
+- Обязательные дела человека (работа, тренировки, репетиторы) — блоками с их реальным временем.
+- Спорт — сколько человек уже делает (sphere sport), не меньше.
+- Один восстановительный день (recovery): прогулка, спорт, отдых без экрана (tags offscreen), без учёбы.
+- Названия конкретные («Математика ОГЭ: задание 1–5»), если в ответах есть предметы, экзамены и цели.
+- importance 4–5 — только главное (экзамены, главная цель), остальное 2–3.
+- Только факты: не ставь блоки под то, чего ещё нет («скоро устроюсь», «запишусь») — работы или кружка нет, значит, нет и блока.
+- Предметы и экзамены, если их нет в ответах, сначала посмотри в хранилище (Grep/Read: карты предметов в 02_Areas,
+  папка подготовки к экзаменам) — не угадывай.
+- Если есть пожелания человека или прежний вариант — исправь именно то, о чём он просит.
+summary — логика распорядка, 2–4 строки, голосом Арвикса.
+</schedule>"""
+WEEKDAY_NAMES = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+DAY_TYPE_RU = {"study": "учебный", "work": "рабочий", "deep": "глубокий", "recovery": "восстановительный", "silent": "тихий"}
+PENDING = "tg_pending_templates"
+
+
+def weekdays_label(days: list[int]) -> str:
+    days = sorted(set(days))
+    if len(days) > 2 and days == list(range(days[0], days[-1] + 1)):
+        return f"{WEEKDAY_NAMES[days[0]]}–{WEEKDAY_NAMES[days[-1]]}"
+    return ", ".join(WEEKDAY_NAMES[d] for d in days)
+
+
+def render_templates(templates: list[dict[str, Any]]) -> str:
+    """Распорядок текстом; итоговые часы считает код, а не модель."""
+    lines = ["📅 Распорядок недели", ""]
+    week_total = deep_total = 0
+    for template in templates:
+        lines.append(f"{weekdays_label(template['weekdays'])} · {DAY_TYPE_RU.get(template['day_type'], template['day_type'])}")
+        for block in sorted(template["blocks"], key=lambda b: b.get("start") or ""):
+            duration = int(block.get("duration") or 60)
+            hours, minutes = map(int, (block.get("start") or "00:00").split(":")[:2])
+            end = hours * 60 + minutes + duration
+            marks = (", глубокая" if block.get("deep_work") else "") + (f", ★{block['importance']}" if int(block.get("importance") or 3) >= 4 else "")
+            lines.append(f"  {block.get('start')}–{end // 60 % 24:02d}:{end % 60:02d} {block['title']} ({duration} мин{marks})")
+            week_total += duration * len(template["weekdays"])
+            deep_total += duration * len(template["weekdays"]) if block.get("deep_work") else 0
+        lines.append("")
+    lines.append(f"Итого {hm(week_total)} в неделю, из них глубокой {hm(deep_total)}.")
+    return "\n".join(lines)
+
+
 QUICK_START = re.compile(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b")
 QUICK_DUR = re.compile(r"\b(\d{1,3})\s*(м|мин|min|m)\b|\b(\d(?:[.,]\d)?)\s*(ч|h)\b", re.IGNORECASE)
 QUICK_IMP = re.compile(r"(?:!|imp)([1-5])\b", re.IGNORECASE)
@@ -91,7 +141,9 @@ class Bot:
         self.core.message_out(text, key=key)
 
     def await_set(self, kind: str, **data: Any) -> None:
-        self.core.store.kv_set(AWAIT, {"kind": kind, **data})
+        # asked_at: сообщение, отправленное раньше вопроса (очередь после обрыва сети),
+        # ответом на этот вопрос быть не может.
+        self.core.store.kv_set(AWAIT, {"kind": kind, "asked_at": self.core.now().timestamp(), **data})
 
     def await_get(self) -> dict[str, Any] | None:
         return self.core.store.kv_get(AWAIT)
@@ -115,14 +167,21 @@ class Bot:
         elif text.startswith("/"):
             self.on_command(text)
         elif text:
-            self.on_text(text)
+            self.on_text(text, sent_at=msg.get("date"))
 
-    def on_text(self, text: str) -> None:
+    def on_text(self, text: str, sent_at: float | None = None) -> None:
+        previous = self.core.store.kv_get(LAST_TEXT)
+        self.core.store.kv_set(LAST_TEXT, text)
         self.core.message_in(text)
         if safety.detect(text):
             self.safety_protocol(text)
             return
         waiting = self.await_get()
+        if waiting and sent_at and sent_at < waiting.get("asked_at", 0):
+            if text == previous:
+                return  # повтор, отправленный, пока бот был без сети
+            self.converse(text)
+            return
         if waiting and self.on_await(waiting, text):
             return
         self.converse(text)
@@ -153,6 +212,9 @@ class Bot:
             elif kind == "debrief":
                 self.await_clear()
                 self.debrief_answer(text)
+            elif kind == "schedule_edit":
+                self.await_clear()
+                self.propose_schedule(text)
             elif kind == "sleep":
                 self.await_clear()
                 result = self.core.log_sleep(parse_duration(text.split()[0]), source="telegram")
@@ -199,6 +261,8 @@ class Bot:
                 self.on_task_button(task_id, op)
             elif kind == "q":
                 self.on_interview_button(rest)
+            elif kind == "s":
+                self.on_schedule_button(rest)
             elif kind == "f":
                 op, _, minutes = rest.partition(":")
                 minutes_done = int(minutes) if op == "ok" else int(minutes) // 2
@@ -241,6 +305,53 @@ class Bot:
         elif op == "pause":
             self.cmd_pause("")
 
+    def on_schedule_button(self, op: str) -> None:
+        pending = self.core.store.kv_get(PENDING)
+        if op == "save" and pending:
+            for template in pending:
+                self.core.set_template(template["weekdays"], template["day_type"], template["blocks"], source="telegram")
+            self.core.store.kv_del(PENDING)
+            self.core.refresh()
+            today = [t for t in self.core.state.tasks_on(self.core.today()) if t.is_open]
+            self.send(
+                "Распорядок сохранён. Каждое утро из него появятся задачи, за 5 минут до блока — напоминание."
+                + (f"\nСегодня ещё {len(today)}: " + ", ".join(f"{t.start} {t.title}" for t in today) if today else "\nНа сегодня блоков уже не осталось — начнём завтра.")
+            )
+        elif op == "edit":
+            self.await_set("schedule_edit")
+            self.send("Напиши, что поменять: «в среду тренировка в 18:00», «английский утром перед школой», «меньше часов».")
+        elif op == "save":
+            self.send("Предложение устарело — /schedule соберёт новое.")
+
+    def propose_schedule(self, wishes: str = "") -> None:
+        """Один вызов модели: ответы интервью + бюджет → шаблоны дней на подтверждение."""
+        core = self.core
+        st = core.state
+        answers = [f"В: {q['text']}\nО: {st.interview[q['id']]}" for q in interview.QUESTIONS
+                   if q["id"] in st.interview and q["block"] not in ("inner", "money", "people")]
+        if not answers:
+            self.send("Сначала нужны ответы про неделю и распорядок — /onboard.")
+            return
+        prompt = "Ответы человека:\n\n" + "\n\n".join(answers)
+        previous = core.store.kv_get(PENDING)
+        if previous:
+            prompt += "\n\nПрежний вариант распорядка:\n" + render_templates(previous)
+        if wishes:
+            prompt += f"\n\nПожелания человека: {wishes}"
+        system = "\n\n".join([constitution(st.profile, gentle=True, sections=("identity", "honesty")), SCHEDULE_RULES,
+                                "<context>\n" + build_context(core) + "\n</context>"])
+        try:
+            self.api.typing(self.owner)
+        except TelegramError:
+            pass
+        result = self.brain.ask(system=system, prompt=prompt, schema=TEMPLATES_SCHEMA, role="voice", vault_tools=True)
+        if not result or not result.get("templates"):
+            self.send("Не вышло собрать распорядок. " + (self.brain_down_hint() or "Попробуй /schedule ещё раз."))
+            return
+        core.store.kv_set(PENDING, result["templates"])
+        self.send(clip(result.get("summary", ""), 500) + "\n\n" + render_templates(result["templates"]),
+                  [[("✅ Сохранить", "s:save"), ("✏️ Поправить", "s:edit")]])
+
     # --- интервью ----------------------------------------------------------------
 
     def ask_question(self, question: dict[str, Any]) -> None:
@@ -254,7 +365,10 @@ class Bot:
         if not result["block_done"]:
             self.ask_question(result["next"])
             return
-        self.extract_block(interview.BY_ID[qid]["block"])
+        block = interview.BY_ID[qid]["block"]
+        self.extract_block(block)
+        if block == "day" or (block == "core" and not self.core.state.templates and "day_weekday" in self.core.state.interview):
+            self.propose_schedule()
         nxt = result["next"]
         if nxt:
             self.send(f"Блок закрыт. Дальше — «{nxt['block_title']}». Продолжаем?", [[("Дальше", "q:next"), ("Пауза", "q:pause")]])
@@ -270,7 +384,7 @@ class Bot:
         system = "\n\n".join([constitution(st.profile, gentle=True, sections=("identity", "honesty")), EXTRACT_RULES])
         result = self.brain.ask(system=system, prompt="\n\n".join(pairs), schema=EXTRACT_SCHEMA, role="voice")
         if result is None:
-            self.send("Ответы сохранены. Разложу их на цели и черты, когда голова вернётся (или /arvix:onboarding в Claude Code).")
+            self.send("Ответы сохранены. " + self.brain_down_hint() + " Разложу их, когда голова вернётся (или /arvix:onboarding в Claude Code).")
             return
         done, failed = apply_actions(self.core, result.get("actions") or [], source="telegram")
         summary = result.get("summary", "").strip()
@@ -310,7 +424,7 @@ class Bot:
         system = system_prompt(core, message=text, history=self.history(exclude_last=text), extra=extra.strip())
         result = self.brain.ask(system=system, prompt=text, schema=VOICE_SCHEMA, vault_tools=True)
         if result is None:
-            self.send(tpl.FALLBACK)
+            self.send(" ".join(x for x in (tpl.FALLBACK, self.brain_down_hint()) if x))
             return
         reply = (result.get("reply") or "").strip()
         if core.effective_mode() == "red" and gentle_violation(reply):
@@ -337,6 +451,13 @@ class Bot:
             reply += "\n⚠️ Не выполнено: " + "; ".join(failed)
         self.send(reply or "…")
 
+    def brain_down_hint(self) -> str:
+        """Почему голова молчит — человеку нужен следующий шаг, а не «ошибка»."""
+        error = (getattr(self.brain, "last_error", "") or "").lower()
+        if "region" in error or "403" in error or "vpn" in error:
+            return tpl.REGION_HINT
+        return ""
+
     # --- ритуалы (их вызывает планировщик или команда) ------------------------------
 
     def analyst_system(self, task: str) -> str:
@@ -345,6 +466,13 @@ class Bot:
 
     def send_brief(self, prefix: str = "") -> None:
         text = tpl.brief(self.core)
+        try:
+            from arvix import daily_note
+
+            if rel := daily_note.ensure(self.core, self.core.today()):
+                text += f"\n📝 Отчёт дня: {rel}"
+        except ArvixError as exc:
+            log.warning("ежедневный отчёт не создан: %s", exc)
         self.send(f"{prefix}\n\n{text}" if prefix else text, key=f"brief:{self.core.today().isoformat()}")
         day = self.core.state.days.get(self.core.today())
         if not (day and day.sleep_min):
@@ -383,7 +511,15 @@ class Bot:
         if result:
             apply_actions(core, result.get("actions") or [], source="telegram")
         core.complete_debrief(text, conclusion=conclusion, source="telegram")
-        self.send(conclusion or "Разбор записан. Завтра — по плану, отбой вовремя.")
+        note = ""
+        try:
+            from arvix import daily_note
+
+            if rel := daily_note.sync(core, core.today()):
+                note = f"\n\n📝 Разбор вписан в {rel}"
+        except ArvixError as exc:
+            log.warning("ежедневный отчёт не обновлён: %s", exc)
+        self.send((conclusion or "Разбор записан. Завтра — по плану, отбой вовремя.") + note)
 
     def run_retro(self) -> bool:
         """Недельное ретро (L2): аналитик ищет паттерны, директивы без evidence отбрасывает код."""
@@ -435,6 +571,19 @@ class Bot:
             self.cmd_onboard("")
         else:
             self.send_brief()
+
+    def cmd_schedule(self, rest: str) -> None:
+        if rest.strip() == "show" and self.core.state.templates:
+            current = [{"weekdays": [w], **t} for w, t in sorted(self.core.state.templates.items())]
+            self.send(render_templates(current))
+            return
+        self.propose_schedule(rest.strip())
+
+    def cmd_goals(self, rest: str) -> None:
+        icons = {"active": "○", "done": "●", "dropped": "✖"}
+        rows = ["  " * depth + f"{icons.get(g.get('status'), '○')} {g['title']}" + (f" · до {g['deadline']}" if g.get("deadline") else "")
+                for depth, g in self.core.goal_tree() if g.get("status") != "dropped"]
+        self.send("🎯 Цели\n\n" + "\n".join(rows) if rows else "Целей пока нет. Разложить цель на этапы — в Claude Code: «хочу …, разложи».")
 
     def cmd_help(self, rest: str) -> None:
         self.send(tpl.HELP)
@@ -501,7 +650,7 @@ class Bot:
         if not self.core.cfg.vault:
             self.send("Хранилище не настроено.")
             return
-        found = Vault(self.core.cfg.vault, self.core.cfg.arvix_folder).search(rest, 5)
+        found = Vault(self.core.cfg.vault, self.core.cfg.vault_paths).search(rest, 5)
         self.send("\n\n".join(f"📄 {r['path']}" + (f" — «{r['heading']}»" if r["heading"] else "") + f"\n{r['snippet']}" for r in found) or "Ничего не найдено.")
 
     def cmd_spend(self, rest: str) -> None:
@@ -535,7 +684,7 @@ class Bot:
         from arvix.export import export_all
 
         written = export_all(self.core)
-        self.send(f"Экспорт в Obsidian: {len(written)} файлов в {self.core.cfg.arvix_folder}/")
+        self.send("Экспорт в Obsidian:\n" + "\n".join(f"• {p}" for p in written[:12]))
 
     def cmd_debrief(self, rest: str) -> None:
         self.send_debrief(manual=True)

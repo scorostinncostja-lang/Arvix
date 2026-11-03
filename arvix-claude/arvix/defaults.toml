@@ -5,11 +5,23 @@
 timezone = "Europe/Moscow"
 vault = ""            # путь к Obsidian-хранилищу
 home = "~/Arvix"      # папка, где Claude Code запускается в режиме Арвикса
-arvix_folder = "Arvix"  # единственная папка хранилища, куда Арвикс пишет
 
 [telegram]
 token = ""
 owner_id = 0
+
+# Где в хранилище живут файлы Арвикса. Пути — от корня хранилища.
+# Чужие заметки Арвикс только дополняет; перезаписывает лишь свои и нетронутые.
+[vault_paths]
+profile = "05_System/Профиль Арвикса.md"
+goals = "05_System/Цели"
+roadmaps = "03_Resources/Роадмапы"
+notes = "03_Resources/Обучение"     # каркасы конспектов, если нет папки предмета
+weekly = "05_System/Недели"
+inbox = "05_System/Inbox.md"
+system = "05_System/Арвикс"         # журнал, инсайты, бэкапы
+daily = ""                          # пусто — папка ежедневных заметок из настроек Obsidian
+daily_template = ""                 # пусто — шаблон из настроек Obsidian
 
 [schedule]
 brief = "auto"          # auto = время подъёма из профиля + 15 мин

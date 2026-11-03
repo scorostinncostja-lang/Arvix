@@ -90,8 +90,8 @@ TOOLS: dict[str, dict[str, Any]] = {
         }, ["action"]),
     },
     "interview": {
-        "description": "Интервью-знакомство (37 вопросов, 8 блоков, страхи последними): status, next (следующий вопрос, можно block), answer (qid + ответ словами человека), skip.",
-        "inputSchema": _obj({"action": _enum("status", "next", "answer", "skip"), "qid": STR, "answer": STR, "block": STR}, ["action"]),
+        "description": "Интервью-знакомство (52 вопроса, 10 блоков, страхи последними): status, next (следующий вопрос, можно block), answer (qid + ответ словами человека), skip, reset (снять испорченный ответ — вопрос зададут снова).",
+        "inputSchema": _obj({"action": _enum("status", "next", "answer", "skip", "reset"), "qid": STR, "answer": STR, "block": STR}, ["action"]),
     },
     "check_request": {
         "description": "Факты для решения по просьбе изменить план («хочу погулять в 15:00»): выполнение, глубокая работа, долг, режим, конфликты в окне, квоты. Ничего не меняет — вердикт формулируешь ты на этих цифрах.",
@@ -110,10 +110,20 @@ TOOLS: dict[str, dict[str, Any]] = {
         }, ["action"]),
     },
     "notes": {
-        "description": "Obsidian: search (query), read (path), write (path внутри Arvix/, content, append), inbox (text — быстрая заметка), daily (ежедневная заметка человека за date: поля frontmatter).",
+        "description": (
+            "Obsidian — работа прямо в структуре хранилища: overview (карта: папки, все заметки, места для файлов Арвикса), "
+            "paths (куда класть цели, роадмапы, конспекты), search (query), read (path), "
+            "write (path от корня хранилища или kind+name; новую заметку создаёт, чужую только дополняет: append; "
+            "перезапись чужой — force, ТОЛЬКО после явного «да, перезапиши» от человека), "
+            "block (свой блок block=имя внутри любой заметки), inbox (text — быстрая мысль), "
+            "daily (поля ежедневного отчёта за date), daily_sync (создать отчёт дня по шаблону / дописать факты и разбор)."
+        ),
         "inputSchema": _obj({
-            "action": _enum("search", "read", "write", "inbox", "daily"), "query": STR, "path": STR,
-            "content": STR, "append": BOOL, "text": STR, "date": STR, "limit": INT,
+            "action": _enum("overview", "paths", "search", "read", "write", "block", "inbox", "daily", "daily_sync"),
+            "query": STR, "path": STR, "kind": _enum("profile", "goals", "roadmaps", "notes", "weekly", "system"),
+            "name": {**STR, "description": "имя заметки для kind, без .md"}, "content": STR, "append": BOOL,
+            "force": {**BOOL, "description": "перезаписать чужую или изменённую человеком заметку — только по его явному согласию"},
+            "block": STR, "text": STR, "date": STR, "limit": INT,
         }, ["action"]),
     },
     "mode": {
@@ -121,16 +131,14 @@ TOOLS: dict[str, dict[str, Any]] = {
         "inputSchema": _obj({"action": _enum("status", "sos_on", "sos_off", "silent", "safety_flag"), "note": STR, "level": STR}, ["action"]),
     },
     "export": {
-        "description": "Полный экспорт в Obsidian (Arvix/Profile.md, Daily/, Insights.md, _raw/events.md).",
+        "description": "Полный экспорт в Obsidian по местам из notes paths: профиль, выводы, журнал событий, итоги в ежедневных отчётах (только в блоках Арвикса).",
         "inputSchema": _obj({"days": INT}),
     },
 }
 
 
 def _vault(core: Core) -> Vault:
-    if not core.cfg.vault:
-        raise ArvixError("Хранилище Obsidian не настроено: `arvix setup`")
-    return Vault(core.cfg.vault, core.cfg.arvix_folder)
+    return core.vault
 
 
 def t_context(core: Core, a: dict[str, Any]) -> str:
@@ -247,6 +255,9 @@ def t_interview(core: Core, a: dict[str, Any]) -> str:
         if r["next"]:
             out += f"\nСледующий: [{r['next']['id']}] ({r['next']['block_title']}) {r['next']['text']}"
         return out
+    if action == "reset":
+        core.interview_reset(a.get("qid", ""), reason="сброшено в Claude Code")
+        return f"Ответ на [{a.get('qid')}] снят — вопрос будет задан снова."
     if action == "skip":
         q = core.interview_skip(a.get("qid", ""))
         return f"Пропущено. Следующий: [{q['id']}] {q['text']}" if q else "Пропущено. Вопросов не осталось."
@@ -316,6 +327,16 @@ def t_notes(core: Core, a: dict[str, Any]) -> str:
         path = core.capture_note(a.get("text", ""))
         return f"Записано в {path or 'журнал (хранилище не настроено)'}"
     vault = _vault(core)
+    if action == "paths":
+        return "\n".join(f"{k}: {v or '(из настроек Obsidian)'}" for k, v in vault.paths.items())
+    if action == "overview":
+        ov = vault.overview()
+        lines = ["МЕСТА ДЛЯ ФАЙЛОВ АРВИКСА:"] + [f"  {k}: {v or '(из настроек Obsidian)'}" for k, v in ov["paths"].items()]
+        lines += ["", f"ПАПКИ ({len(ov['folders'])}):"] + [f"  {f}/ — {n}" for f, n in sorted(ov["folders"].items())]
+        lines += ["", f"ЗАМЕТКИ ({len(ov['notes'])}):"]
+        lines += [f"  {n['path']} — «{n['title']}», {n['words']} слов, {n['modified']}" + (f" · поля: {', '.join(n['fields'][:8])}" if n["fields"] else "")
+                  for n in ov["notes"]]
+        return "\n".join(lines)
     if action == "search":
         found = vault.search(a.get("query", ""), int(a.get("limit") or 8))
         if not found:
@@ -323,11 +344,25 @@ def t_notes(core: Core, a: dict[str, Any]) -> str:
         return "\n".join(f"📄 {r['path']}" + (f" — «{r['heading']}»" if r["heading"] else "") + f", {r['modified']}\n   {r['snippet']}" for r in found)
     if action == "read":
         return vault.read(a.get("path", ""))
-    if action == "write":
-        return f"Записано: {vault.write(a.get('path', ''), a.get('content', ''), append=bool(a.get('append')))}"
+    if action in ("write", "block"):
+        rel = a.get("path") or (vault.place(a["kind"], a.get("name", "")) if a.get("kind") else "")
+        if not rel:
+            raise ArvixError("Нужен path (от корня хранилища) или kind + name")
+        if action == "block":
+            result = core.write_block(rel, a.get("block") or "arvix", a.get("content", ""))
+            return f"Блок «{a.get('block') or 'arvix'}» обновлён: {result['path']}"
+        result = core.write_note(rel, a.get("content", ""), append=bool(a.get("append")), force=bool(a.get("force")))
+        verb = "Создано" if result["created"] else ("Дописано" if a.get("append") else "Перезаписано")
+        return f"{verb}: {result['path']}" + (f" (бэкап прежней версии: {result['backup']})" if result.get("backup") else "")
     if action == "daily":
         note = vault.daily_note(core.parse_day(a.get("date")))
         return json.dumps(note, ensure_ascii=False, indent=1) if note else "Ежедневной заметки за эту дату нет."
+    if action == "daily_sync":
+        from arvix import daily_note
+
+        d = core.parse_day(a.get("date"))
+        rel = daily_note.sync(core, d, create=d >= core.today())
+        return f"Ежедневный отчёт: {rel}" if rel else "Отчёта за эту дату нет (прошлые дни не создаю)."
     raise ArvixError(f"Неизвестное действие {action}")
 
 
@@ -350,7 +385,7 @@ def t_export(core: Core, a: dict[str, Any]) -> str:
     from arvix.export import export_all
 
     written = export_all(core, int(a.get("days") or 60))
-    return f"Экспортировано файлов: {len(written)} → {core.cfg.arvix_folder}/"
+    return "Экспортировано:\n" + "\n".join(f"  {p}" for p in written)
 
 
 HANDLERS: dict[str, Callable[[Core, dict[str, Any]], str]] = {

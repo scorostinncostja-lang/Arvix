@@ -75,8 +75,9 @@ class Config:
         return Path(self.raw.get("home") or "~/Arvix").expanduser()
 
     @property
-    def arvix_folder(self) -> str:
-        return self.raw.get("arvix_folder") or "Arvix"
+    def vault_paths(self) -> dict[str, str]:
+        """Куда в хранилище класть профиль, цели, роадмапы, конспекты, отчёты."""
+        return dict(self.section("vault_paths"))
 
     @property
     def db_path(self) -> Path:

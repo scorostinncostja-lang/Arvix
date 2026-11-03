@@ -409,14 +409,54 @@ class Core:
         left = int(self.cfg.mech("shields_per_month", 2)) - self.state.shields_used(self.today())
         return {"shields_left": max(0, left)}
 
-    def capture_note(self, text: str, *, source: str = "claude") -> str | None:
-        from arvix.vault import Vault
+    @property
+    def vault(self) -> Any:
+        from arvix.vault import Vault, VaultError
 
+        if not self.cfg.vault:
+            raise ArvixError("Хранилище Obsidian не настроено: `arvix setup`")
+        try:
+            return Vault(self.cfg.vault, self.cfg.vault_paths)
+        except VaultError as exc:
+            raise ArvixError(str(exc)) from exc
+
+    def _note_event(self, result: dict[str, Any], mode: str, source: str) -> dict[str, Any]:
+        with self.tx():
+            self.emit("note_written", {"path": result["path"], "sha": result["sha"], "owned": result["owned"], "mode": mode,
+                                       "created": result.get("created", False), "backup": result.get("backup")}, source=source)
+        return result
+
+    def write_note(self, rel: str, content: str, *, append: bool = False, force: bool = False, source: str = "claude") -> dict[str, Any]:
+        """Запись в хранилище по правилам vault.py: свою нетронутую — можно, чужую — только дописать."""
+        from arvix.vault import VaultError
+
+        try:
+            result = self.vault.write(rel, content, append=append, owned_sha=self.state.notes.get(str(rel).lstrip("/")), force=force)
+        except VaultError as exc:
+            raise ArvixError(str(exc)) from exc
+        return self._note_event(result, "append" if append else ("force" if force else "write"), source)
+
+    def write_block(self, rel: str, name: str, content: str, *, create_with: str = "", source: str = "claude") -> dict[str, Any]:
+        from arvix.vault import VaultError
+
+        try:
+            result = self.vault.write_block(rel, name, content, create_with=create_with)
+        except VaultError as exc:
+            raise ArvixError(str(exc)) from exc
+        if not result["owned"] and self.state.notes.get(result["path"]):
+            result["owned"] = True  # свой файл остаётся своим
+        return self._note_event(result, f"block:{name}", source)
+
+    def update_note(self, rel: str, transform: Any, *, source: str = "claude") -> dict[str, Any]:
+        result = self.vault.update_text(rel, transform, owned_sha=self.state.notes.get(rel))
+        return self._note_event(result, "fields", source) if result["changed"] else result
+
+    def capture_note(self, text: str, *, source: str = "claude") -> str | None:
         if not text.strip():
             raise ArvixError("Пустая заметка")
         path = None
         if self.cfg.vault:
-            path = Vault(self.cfg.vault, self.cfg.arvix_folder).inbox(text, self.now())
+            path = self.vault.inbox(text, self.now())
         with self.tx():
             self.emit("note_captured", {"text": text[:2000], "path": path}, source=source)
         return path
@@ -589,6 +629,13 @@ class Core:
         block_done = next_q is None or next_q["block"] != question["block"]
         return {"saved": qid, "extracted": extracted, "block_done": block_done, "next": next_q}
 
+    def interview_reset(self, qid: str, *, reason: str = "", source: str = "claude") -> None:
+        """Снять ответ, чтобы вопрос задали снова (журнал не правится — новое событие)."""
+        if qid not in interview.BY_ID:
+            raise ArvixError(f"Нет вопроса {qid}")
+        with self.tx():
+            self.emit("interview_reset", {"qid": qid, "reason": reason[:200]}, source=source)
+
     def interview_skip(self, qid: str, *, source: str = "claude") -> dict[str, Any] | None:
         if qid not in interview.BY_ID:
             raise ArvixError(f"Нет вопроса {qid}")
@@ -712,6 +759,53 @@ class Core:
     def sent(self, key: str, d: date | None = None) -> bool:
         day = self.state.days.get(d or self.today())
         return bool(day and key in day.out_keys)
+
+    # --- нагрузка ------------------------------------------------------------------------
+
+    def budget(self) -> dict[str, Any]:
+        """Текущий бюджет недели: из события budget_set, иначе из профиля
+        (часы из интервью) или конфига. Глубокая работа по умолчанию — 35%."""
+        st = self.state
+        if st.budget:
+            week, deep, since = int(st.budget["week_min"]), int(st.budget["deep_min"]), st.budget["since"]
+        else:
+            week = int(st.profile.get("week_budget_min") or self.cfg.mech("week_budget_min", 1560))
+            deep = int(st.profile.get("week_deep_budget_min") or (week * 0.35 if st.profile.get("week_budget_min") else self.cfg.mech("week_deep_budget_min", 480)))
+            since = st.profile.get("season_start") or (st.first_date or self.today()).isoformat()
+        review = date.fromisoformat(since) + timedelta(days=rules.BUDGET_REVIEW_DAYS)
+        return {"week_min": week, "deep_min": deep, "since": since, "next_review": review, "verdict": st.budget.get("verdict"), "reason": st.budget.get("reason")}
+
+    def planned_minutes(self, start: date, end: date) -> int:
+        return sum(t.duration_min for t in self.state.tasks.values() if start <= t.local_date <= end and t.status != "cancelled")
+
+    def load_check(self, d: date | None = None) -> list[str]:
+        """Перегруз недели и дня, глубокая работа без меры, задачи впритык к отбою."""
+        d = d or self.today()
+        budget = self.budget()
+        week_start = self.state.week_start(d)
+        warnings = []
+        week_planned = self.planned_minutes(week_start, week_start + timedelta(days=6))
+        if week_planned > budget["week_min"] * 1.1:
+            warnings.append(f"неделя перегружена: запланировано {week_planned // 60}ч{week_planned % 60:02d}м при бюджете {budget['week_min'] // 60}ч")
+        tasks = self.state.tasks_on(d)
+        day_planned = sum(t.duration_min for t in tasks)
+        day_cap = max(90, int(budget["week_min"] / 5 * 1.5))
+        if self.state.mode == "yellow":
+            day_cap = int(day_cap * 0.7)
+        if day_planned > day_cap:
+            warnings.append(f"день перегружен: {day_planned // 60}ч{day_planned % 60:02d}м при разумном максимуме {day_cap // 60}ч{day_cap % 60:02d}м")
+        deep = sum(t.duration_min for t in tasks if t.deep_work)
+        if deep > 240:
+            warnings.append(f"глубокой работы {deep // 60}ч{deep % 60:02d}м за день — больше 4 ч качество падает")
+        bedtime = self.state.profile.get("bedtime_target")
+        if bedtime:
+            for task in tasks:
+                if task.start and task.is_open:
+                    end = self.at(d, task.start) + timedelta(minutes=task.duration_min)
+                    gap = rules.minutes_after(end.strftime("%H:%M"), bedtime)
+                    if gap is not None and gap < 60:
+                        warnings.append(f"«{task.title}» заканчивается в {end:%H:%M} — меньше часа до отбоя ({bedtime})")
+        return warnings
 
     # --- сводка -----------------------------------------------------------------------
 

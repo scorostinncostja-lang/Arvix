@@ -57,11 +57,11 @@ class McpProtocolTest(ArvixCase):
 
 
 class McpToolsTest(ArvixCase):
-    def call(self, name: str, **args) -> dict:
-        return Server(lambda: self.core).call_tool(name, args)
+    def call(self, tool: str, **args) -> dict:
+        return Server(lambda: self.core).call_tool(tool, args)
 
-    def text(self, name: str, **args) -> str:
-        result = self.call(name, **args)
+    def text(self, tool: str, **args) -> str:
+        result = self.call(tool, **args)
         return result["content"][0]["text"]
 
     def test_no_tool_can_reenable_mentor(self) -> None:
@@ -100,13 +100,33 @@ class McpToolsTest(ArvixCase):
         self.assertEqual(self.core.state.goals[stage]["title"], "3 компонента на React")  # остальные поля сохранились
         self.assertIn("● [" + stage, self.text("profile", action="goals"))
 
-    def test_notes_write_only_inside_arvix_folder(self) -> None:
-        self.assertIn("Arvix/Roadmaps/JS.md", self.text("notes", action="write", path="Roadmaps/JS.md", content="# JS"))
-        escaped = self.call("notes", action="write", path="../outside.md", content="x")
-        self.assertTrue(escaped["isError"])
+    def test_notes_write_into_vault_structure_safely(self) -> None:
+        created = self.text("notes", action="write", kind="roadmaps", name="JS", content="# JS\n- [ ] узел 1")
+        self.assertIn("03_Resources/Роадмапы/JS.md", created)
+        self.assertIn("Перезаписано", self.text("notes", action="write", kind="roadmaps", name="JS", content="# JS v2"))
+        path = self.vault / "03_Resources/Роадмапы/JS.md"
+        path.write_text("# JS v2\n- [x] узел 1 — моя отметка", encoding="utf-8")  # человек поправил
+        self.assertTrue(self.call("notes", action="write", kind="roadmaps", name="JS", content="# JS v3")["isError"])
+        self.assertIn("Дописано", self.text("notes", action="write", kind="roadmaps", name="JS", content="- [ ] узел 2", append=True))
+        self.assertIn("моя отметка", path.read_text(encoding="utf-8"))
+        (self.vault / "Моё.md").write_text("# Мои мысли", encoding="utf-8")
+        self.assertTrue(self.call("notes", action="write", path="Моё.md", content="чужое")["isError"])
+        self.assertIn("бэкап", self.text("notes", action="write", path="Моё.md", content="# Новое", force=True))
+        self.assertTrue(self.call("notes", action="write", path="../outside.md", content="x")["isError"])
+        self.assertTrue(self.call("notes", action="write", path=".obsidian/app.md", content="x")["isError"])
         (self.vault / "Bluetooth.md").write_text("# Беспроводные протоколы\nBluetooth LE и GATT", encoding="utf-8")
         self.assertIn("Bluetooth.md", self.text("notes", action="search", query="bluetooth протоколы"))
+        self.assertIn("«Беспроводные протоколы»", self.text("notes", action="overview"))
         self.assertTrue(self.call("notes", action="read", path="../../etc/passwd")["isError"])
+
+    def test_block_keeps_human_text(self) -> None:
+        (self.vault / "План.md").write_text("# План\nмой текст", encoding="utf-8")
+        self.text("notes", action="block", path="План.md", block="сводка", content="v1")
+        self.text("notes", action="block", path="План.md", block="сводка", content="v2")
+        text = (self.vault / "План.md").read_text(encoding="utf-8")
+        self.assertIn("мой текст", text)
+        self.assertIn("v2", text)
+        self.assertNotIn("v1", text)
 
     def test_directive_needs_evidence(self) -> None:
         self.core.add_task("x", start="11:00")

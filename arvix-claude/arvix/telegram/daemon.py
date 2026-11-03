@@ -20,6 +20,7 @@ from arvix.telegram.scheduler import Scheduler
 
 log = logging.getLogger("arvix.daemon")
 POLL_SECONDS = 20
+MAX_PAUSE = 20  # после обрыва сети бот возвращается не позже чем через 20 с
 
 
 def main() -> None:
@@ -37,10 +38,13 @@ def main() -> None:
     scheduler = Scheduler(bot)
 
     stopping = False
+    waiting = True  # ждём сеть или long poll — прерывать можно сразу
 
     def stop(*_: object) -> None:
         nonlocal stopping
         stopping = True
+        if waiting:
+            raise SystemExit(0)  # иначе getUpdates/sleep держат процесс и systemd убивает его по таймауту
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
@@ -48,14 +52,16 @@ def main() -> None:
     pause = 1
     log.info("Арвикс в Telegram запущен, владелец %s", tg["owner_id"])
     while not stopping:
+        waiting = True
         try:
             updates = api.get_updates(offset, timeout=POLL_SECONDS)
             pause = 1
         except TelegramError as exc:
             log.warning("Telegram недоступен: %s — пауза %s с", exc, pause)
             time.sleep(pause)
-            pause = min(pause * 2, 60)
+            pause = min(pause * 2, MAX_PAUSE)
             updates = []
+        waiting = False
         for update in updates:
             offset = update["update_id"] + 1
             core.store.kv_set("tg_offset", offset)  # до обработки: упавший апдейт не зациклит бота

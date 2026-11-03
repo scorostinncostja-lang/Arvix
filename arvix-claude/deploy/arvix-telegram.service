@@ -10,6 +10,7 @@ Environment=PATH=@PATH@
 Environment=PYTHONUNBUFFERED=1
 Restart=always
 RestartSec=15
+TimeoutStopSec=30
 
 [Install]
 WantedBy=default.target

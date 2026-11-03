@@ -136,7 +136,7 @@ class TaskOpsTest(ArvixCase):
         self.core.interview_answer("main_goal", "Фронтенд-джун к июню 2027")
         result = self.core.interview_answer("main_goal_why", "Чтобы зарабатывать и уйти со смен")
         self.assertTrue(result["block_done"])
-        self.assertEqual(result["next"]["block"], "direction")
+        self.assertEqual(result["next"]["block"], "study")
         goals = list(self.core.state.goals.values())
         self.assertEqual(goals[0]["why"], "Чтобы зарабатывать и уйти со смен")
 

@@ -28,6 +28,7 @@ HELP = """Пиши мне обычным текстом — команды не 
 
 Команды:
 /day /week /status — день, неделя, уровень и HP
+/schedule — собрать или поправить распорядок · /schedule show — текущий · /goals — цели
 /done <id> [что сделано] · /add Физика 18:00 60м !4 [deep] [завтра]
 /sleep 7:30 [00:10] · /spend 1200 еда [!] · /note текст · /find запрос
 /focus 45 — фокус-сессия · /reason заболел — причина дня (щит)
@@ -40,12 +41,13 @@ ONBOARD_INTRO = (
     "Отвечай как есть, коротко можно. /skip — пропустить вопрос, /pause — остановиться, /onboard — продолжить.\n"
     "Начнём с ядра: без него система не запустится."
 )
-ONBOARD_DONE = "Знакомство пройдено. Профиль собран — открой Arvix/Profile.md в Obsidian после /export."
+ONBOARD_DONE = "Знакомство пройдено. Профиль появится в Obsidian (05_System/Профиль Арвикса.md) после /export. Дальше — /schedule: соберу распорядок дня."
 ASK_REPORT = "Одним предложением: что именно сделано?"
 ASK_PHOTO = "Фото-отчёт: пришли фото с подписью. Или одним предложением — что сделано."
 ASK_PARTIAL = "Сколько процентов сделано и что помешало? Например: «60, не хватило времени»."
 ASK_FAIL_REASON = "Что помешало? Одной фразой — это пойдёт в разбор."
 FALLBACK = "Голова сейчас недоступна — лимит подписки или сеть. Сообщение в журнале, отвечу, когда связь вернётся. Учёт и напоминания работают."
+REGION_HINT = "Claude отклонил запрос из этой сети — включи VPN (AmneziaVPN) и напиши ещё раз."
 GENTLE_FALLBACK = "Я рядом. Сегодня без планов и цифр: поесть, немного движения, лечь пораньше. Одна маленькая вещь — любая."
 DEBRIEF_FALLBACK_QUESTIONS = ["Что сегодня сработало — конкретно?", "Что помешало и что меняем завтра?"]
 RETURN_HINT = (
@@ -138,6 +140,15 @@ def brief(core: Any) -> str:
         lines.append("\nСон не записан: ответь числом, например 7:20, или /sleep 7:20 00:30.")
     if st.profile.get("bedtime_target"):
         lines.append(f"Отбой сегодня в {st.profile['bedtime_target']}. Не обсуждается.")
+    if not st.templates:
+        lines.append("\nРаспорядка дня нет — без него нет задач и напоминаний. /schedule — соберу за минуту.")
+    status = core.interview_status()
+    left = status["total"] - status["answered"] - len(st.interview_skipped)
+    if left > 0:
+        lines.append(f"Знакомство: осталось {left} вопросов — /onboard.")
+    if today.weekday() == 0:
+        budget = core.budget()
+        lines.append(f"Нагрузка недели: {hm(budget['week_min'])}, из них глубокой {hm(budget['deep_min'])}." + (f" {budget['reason']}." if budget.get("reason") else ""))
     return "\n".join(lines)
 
 
@@ -190,7 +201,7 @@ def week(core: Any) -> str:
     quotas = core.cfg.mech("quotas") or {}
     lines = [
         f"Неделя с {stats['start']:%d.%m}",
-        f"Продуктивно {hm(stats['productive_min'])} из {hm(int(core.cfg.mech('week_budget_min', 1560)))} · глубокая {hm(stats['deep_min'])} из {hm(int(core.cfg.mech('week_deep_budget_min', 480)))}",
+        f"Продуктивно {hm(stats['productive_min'])} из {hm(core.budget()['week_min'])} · глубокая {hm(stats['deep_min'])} из {hm(core.budget()['deep_min'])}",
         "Квоты: " + " · ".join(f"{QUOTA_RU.get(k, k)} {stats['quotas'].get(k, 0)}/{v}" for k, v in quotas.items()),
     ]
     if stats["expenses"]:

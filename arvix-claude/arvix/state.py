@@ -92,6 +92,8 @@ class State:
     learning: list[dict[str, Any]] = field(default_factory=list)
     safety: list[dict[str, Any]] = field(default_factory=list)
     penalized: set[str] = field(default_factory=set)
+    notes: dict[str, str] = field(default_factory=dict)  # заметки Арвикса: путь → хэш последней записи
+    budget: dict[str, Any] = field(default_factory=dict)
     last_user_at: str | None = None
     last_event_id: int = 0
     first_date: date | None = None
@@ -130,6 +132,10 @@ class State:
 
     def _on_interview_answer(self, ev: Event, p: dict, day: Day) -> None:
         self.interview[p["qid"]] = p["answer"]
+        self.interview_skipped.discard(p["qid"])
+
+    def _on_interview_reset(self, ev: Event, p: dict, day: Day) -> None:
+        self.interview.pop(p["qid"], None)
         self.interview_skipped.discard(p["qid"])
 
     def _on_interview_skipped(self, ev: Event, p: dict, day: Day) -> None:
@@ -287,6 +293,15 @@ class State:
 
     def _on_protocol_zero(self, ev: Event, p: dict, day: Day) -> None:
         self.zero_until = p.get("until") if p.get("on") else None
+
+    def _on_note_written(self, ev: Event, p: dict, day: Day) -> None:
+        if p.get("owned"):
+            self.notes[p["path"]] = p["sha"]
+        else:
+            self.notes.pop(p["path"], None)
+
+    def _on_budget_set(self, ev: Event, p: dict, day: Day) -> None:
+        self.budget = {**p, "since": ev.local_date.isoformat()}
 
     def _on_day_closed(self, ev: Event, p: dict, day: Day) -> None:
         self.day(date.fromisoformat(p["date"])).closed = dict(p)

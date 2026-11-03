@@ -38,6 +38,7 @@ class FakeBrain:
     def __init__(self) -> None:
         self.answers: list[dict | None] = []
         self.calls: list[dict[str, Any]] = []
+        self.last_error = ""
 
     def ask(self, **kwargs: Any) -> dict | None:
         self.calls.append(kwargs)
@@ -144,6 +145,34 @@ class InboxTest(BotCase):
         self.brain.answers += [{"reply": "Дисциплина важнее, выполнение 0%.", "actions": []}, {"reply": "Опять про продуктивность.", "actions": []}]
         self.text("мне тяжело сегодня")
         self.assertEqual(self.api.last, tpl.GENTLE_FALLBACK)
+
+    def test_stale_duplicate_after_outage_is_not_next_answer(self) -> None:
+        self.text("/start")
+        self.text("Дастан")  # ответ на «Как обращаться?» → бот спросил про род
+        asked = self.core.store.kv_get("tg_await")
+        stale = {"update_id": 9, "message": {"from": {"id": OWNER}, "chat": {"id": OWNER}, "text": "Дастан", "date": asked["asked_at"] - 60}}
+        self.bot.handle(stale)
+        self.assertNotIn("address", self.core.state.interview)
+        self.assertEqual(self.core.store.kv_get("tg_await")["qid"], "address")
+
+    def test_schedule_proposal_save_flow(self) -> None:
+        self.core.interview_answer("week", "школа пн-пт 9:00-15:00")
+        self.brain.answers.append({"summary": "Учёба после школы.", "templates": [
+            {"weekdays": [0, 1, 2, 3, 4], "day_type": "study", "blocks": [
+                {"start": "23:30", "duration": 30, "title": "Математика ОГЭ", "sphere": "learning", "importance": 4, "deep_work": True}]},
+        ]})
+        self.text("/schedule")
+        self.assertIn("пн–пт · учебный", self.api.last)
+        self.assertIn("Итого 2ч30м в неделю", self.api.last)
+        self.press("s:save")
+        self.assertEqual(self.core.state.templates[0]["blocks"][0]["title"], "Математика ОГЭ")
+        self.assertIn("Распорядок сохранён", self.api.last)
+        self.assertIsNone(self.core.store.kv_get("tg_pending_templates"))
+
+    def test_region_block_explained(self) -> None:
+        self.brain.last_error = "API Error: Request blocked (HTTP 403) unsupported region, or a VPN"
+        self.text("привет")
+        self.assertIn("VPN", self.api.last)
 
     def test_quick_add_parser(self) -> None:
         fields = parse_quick_task("Физика: задачи 18:00 60м !4 deep завтра")

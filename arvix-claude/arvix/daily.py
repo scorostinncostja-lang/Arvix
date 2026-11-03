@@ -6,12 +6,14 @@ catch_up() идемпотентен: его безопасно звать из �
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
 from arvix import rules
 from arvix.config import parse_hhmm
 
+log = logging.getLogger("arvix.daily")
 MAX_CATCH_UP_DAYS = 14
 
 
@@ -28,9 +30,37 @@ def catch_up(core: Any) -> None:
                 close_day(core, d)
             d += timedelta(days=1)
     finish_protocol_zero(core)
+    review_budget(core)
     if now.time() >= rollover:
         materialize(core, now.date())
     core.recompute_mode()
+
+
+def review_budget(core: Any) -> dict[str, Any] | None:
+    """Раз в 4 недели: поднять, удержать или снизить бюджет недели (02-MECHANICS §5)."""
+    budget = core.budget()
+    today = core.today()
+    if today < budget["next_review"] or not core.state.profile.get("season_start"):
+        return None
+    with core.tx():
+        if core.budget()["next_review"] > today:
+            return None
+        start = today - timedelta(days=rules.BUDGET_REVIEW_DAYS)
+        closed = [d.closed for x, d in core.state.days.items() if start <= x < today and d.closed]
+        with_tasks = [c for c in closed if c.get("total")]
+        sleeps = [c["sleep_min"] for c in closed if c.get("sleep_min")]
+        week, deep, verdict, reason = rules.review_budget(
+            week_min=budget["week_min"], deep_min=budget["deep_min"],
+            completion_avg=sum(c["completion"] or 0 for c in with_tasks) / len(with_tasks) if with_tasks else None,
+            sleep_avg=sum(sleeps) / len(sleeps) if sleeps else None,
+            red_days=sum(1 for c in closed if c.get("mode") == "red"),
+            yellow_days=sum(1 for c in closed if c.get("mode") == "yellow"),
+            days_with_data=len(with_tasks),
+        )
+        payload = {"week_min": week, "deep_min": deep, "verdict": verdict, "reason": reason,
+                   "from_week_min": budget["week_min"], "from_deep_min": budget["deep_min"]}
+        core.emit("budget_set", payload, source="scheduler")
+    return payload
 
 
 def close_day(core: Any, d: date) -> dict[str, Any] | None:
@@ -168,9 +198,17 @@ def close_day(core: Any, d: date) -> dict[str, Any] | None:
             "ignored": ignored,
             "penalty_mult": mult,
             "hp_end": core.state.hp,
+            "mode": core.effective_mode(),
         }
         core.emit("day_closed", payload, source="scheduler")
-        return payload
+    if core.cfg.vault:
+        try:
+            from arvix import daily_note
+
+            daily_note.sync(core, d, create=False)
+        except Exception as exc:  # noqa: BLE001 — отчёт в Obsidian не должен ломать закрытие дня
+            log.warning("ежедневный отчёт за %s не обновлён: %s", d, exc)
+    return payload
 
 
 def finish_protocol_zero(core: Any) -> None:

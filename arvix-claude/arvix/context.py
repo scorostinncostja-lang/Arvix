@@ -120,15 +120,25 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     week = st.week_stats(today)
     quotas = core.cfg.mech("quotas") or {}
     quota_text = " · ".join(f"{QUOTA_RU.get(k, k)} {week['quotas'].get(k, 0)}/{v}" for k, v in quotas.items())
-    budget = int(core.cfg.mech("week_budget_min", 1560))
-    deep_budget = int(core.cfg.mech("week_deep_budget_min", 480))
+    plan = core.budget()
+    budget, deep_budget = plan["week_min"], plan["deep_min"]
     spent = sum(week["expenses"].values())
-    week_line = f"НЕДЕЛЯ: бюджет {hm(week['productive_min'])}/{hm(budget)} · глубокая {hm(week['deep_min'])}/{hm(deep_budget)}"
+    week_line = f"НЕДЕЛЯ: сделано {hm(week['productive_min'])}/{hm(budget)} · глубокая {hm(week['deep_min'])}/{hm(deep_budget)}"
     if quota_text:
         week_line += f" · квоты: {quota_text}"
     if spent:
         week_line += f" · траты {spent:.0f}" + (f" (импульсивные {week['impulse']:.0f})" if week["impulse"] else "")
     lines.append(week_line)
+    planned = core.planned_minutes(st.week_start(today), st.week_start(today) + timedelta(days=6))
+    load = f"НАГРУЗКА: бюджет {hm(budget)}/нед (глубокая {hm(deep_budget)}) · запланировано {hm(planned)} · пересмотр {plan['next_review']:%d.%m}"
+    if plan.get("reason"):
+        load += f" · последний пересмотр: {plan['reason']}"
+    warnings = core.load_check(today)
+    if warnings:
+        load += "\n  ⚠️ " + "\n  ⚠️ ".join(warnings)
+    lines.append(load)
+    if not st.templates:
+        lines.append("РАСПОРЯДОК: шаблонов дней нет — задачи и напоминания не создаются. Предложи собрать распорядок.")
 
     directives = st.active_directives(today)[:5]
     if directives:

@@ -52,7 +52,7 @@ _ACTION_FIELDS = {
             "properties": {
                 "start": {"type": "string"}, "duration": {"type": "integer"}, "title": {"type": "string"},
                 "sphere": {"type": "string"}, "importance": {"type": "integer"}, "difficulty": {"type": "integer"},
-                "deep_work": {"type": "boolean"},
+                "deep_work": {"type": "boolean"}, "tags": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["start", "title"],
         },
@@ -103,6 +103,26 @@ RETRO_SCHEMA = {
     "required": ["message", "directives"],
 }
 
+TEMPLATES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "description": "логика распорядка в 2–4 строках"},
+        "templates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "weekdays": {"type": "array", "items": {"type": "integer"}, "description": "0=пн … 6=вс"},
+                    "day_type": {"type": "string", "enum": ["study", "work", "deep", "recovery", "silent"]},
+                    "blocks": _ACTION_FIELDS["blocks"],
+                },
+                "required": ["weekdays", "day_type", "blocks"],
+            },
+        },
+    },
+    "required": ["summary", "templates"],
+}
+
 EXTRACT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -139,6 +159,7 @@ class Brain:
         self.bin = section.get("claude_bin") or "claude"
         self.timeout = int(section.get("timeout_sec") or 180)
         self.vault_tools = bool(section.get("vault_tools", True))
+        self.last_error = ""
 
     def available(self) -> bool:
         return shutil.which(self.bin) is not None or os.path.isfile(self.bin)
@@ -174,16 +195,20 @@ class Brain:
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout, cwd=cwd, env=env, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
+            self.last_error = str(exc)
             log.warning("claude -p не ответил: %s", exc)
             return None
         try:
             data = json.loads(proc.stdout)
         except ValueError:
-            log.warning("claude -p вернул не JSON (код %s): %s", proc.returncode, (proc.stderr or proc.stdout)[-500:])
+            self.last_error = (proc.stderr or proc.stdout)[-500:]
+            log.warning("claude -p вернул не JSON (код %s): %s", proc.returncode, self.last_error)
             return None
         if data.get("is_error") or not isinstance(data.get("structured_output"), dict):
-            log.warning("claude -p ошибка: %s", str(data.get("result") or data)[:500])
+            self.last_error = str(data.get("result") or data)[:500]
+            log.warning("claude -p ошибка: %s", self.last_error)
             return None
+        self.last_error = ""
         return data["structured_output"]
 
 

@@ -101,7 +101,7 @@ def cmd_find(args: argparse.Namespace) -> None:
     cfg = load_config()
     if not cfg.vault:
         sys.exit("Хранилище не настроено: arvix setup")
-    for r in Vault(cfg.vault, cfg.arvix_folder).search(" ".join(args.query)):
+    for r in Vault(cfg.vault, cfg.vault_paths).search(" ".join(args.query)):
         print(f"📄 {r['path']} {('— ' + r['heading']) if r['heading'] else ''}\n   {r['snippet']}")
 
 
@@ -219,7 +219,7 @@ def init_home(home: Path, vault: str) -> list[str]:
             "# Дом Арвикса\n\n"
             "Здесь Claude работает как Арвикс — личный ментор (стиль Arvix включён в .claude/settings.json).\n\n"
             "- Состояние, задачи, XP/HP, интервью — MCP-инструменты `arvix` (начинай с `context`).\n"
-            f"- Obsidian: `{vault or 'не настроено'}` — читать можно всё, писать только в `Arvix/`.\n"
+            f"- Obsidian: `{vault or 'не настроено'}` — Арвикс работает в его структуре: свои заметки создаёт, чужие только дополняет.\n"
             "- Скиллы: /arvix:onboarding, /arvix:plan, /arvix:goal, /arvix:brief, /arvix:debrief, /arvix:retro, /arvix:learn, /arvix:notes.\n",
             encoding="utf-8",
         )
@@ -394,7 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("amount")
     p.add_argument("category")
     p.add_argument("--impulse", action="store_true")
-    add("note", cmd_note, "заметка в Arvix/Inbox.md").add_argument("text", nargs="+")
+    add("note", cmd_note, "заметка в Inbox хранилища").add_argument("text", nargs="+")
     add("find", cmd_find, "поиск по Obsidian").add_argument("query", nargs="+")
     add("mentor", cmd_mentor, "включить/выключить ментора").add_argument("state", choices=("on", "off"))
     add("sos", cmd_sos, "ручной режим 🟥").add_argument("state", choices=("on", "off"))
