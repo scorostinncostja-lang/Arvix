@@ -127,7 +127,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         }, ["action"]),
     },
     "mode": {
-        "description": "Режимы: status, sos_on / sos_off (ручной 🟥 на 24 ч), silent (тихий день сегодня), safety_flag (признаки настоящей беды — выключает ментора до ручного включения человеком).",
+        "description": "Режимы: status, sos_on / sos_off (ручной 🟥 на 24 ч), silent (тихий день сегодня), safety_flag (признаки настоящей беды, level high|critical — выключает ментора до ручного включения человеком; контакт поддержки или «бывает тяжело» — не сюда, а в profile remember).",
         "inputSchema": _obj({"action": _enum("status", "sos_on", "sos_off", "silent", "safety_flag"), "note": STR, "level": STR}, ["action"]),
     },
     "export": {
@@ -375,7 +375,8 @@ def t_mode(core: Core, a: dict[str, Any]) -> str:
     elif action == "silent":
         core.silent_today()
     elif action == "safety_flag":
-        core.safety_flag(a.get("level") or "high", a.get("note", ""), source="claude")
+        if not core.safety_flag(a.get("level") or "high", a.get("note", ""), source="claude"):
+            return f"Уровень «{a.get('level')}» — не беда: записано фактом о человеке, ментор не выключен."
         return "Ментор выключен до ручного включения человеком. Дальше — только человеческий тон, без задач и цифр."
     s = core.status()
     return f"Режим: {rules.MODE_LABELS[s['effective_mode']]} ({s['mode_trigger'] or 'без триггера'}) · ментор {'вкл' if s['mentor_enabled'] else 'ВЫКЛ'} · HP {s['hp']}"

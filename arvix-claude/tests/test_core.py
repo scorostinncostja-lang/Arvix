@@ -124,6 +124,20 @@ class TaskOpsTest(ArvixCase):
         self.core.set_mentor(True, by="test")
         self.assertTrue(self.core.state.mentor_enabled)
 
+    def test_info_safety_flag_is_a_fact_not_an_alarm(self) -> None:
+        self.assertFalse(self.core.safety_flag("info", "Контакт поддержки: подруга"))
+        self.assertTrue(self.core.state.mentor_enabled)
+        self.assertEqual(self.core.effective_mode(), self.core.state.mode)
+        self.assertIn("Контакт поддержки: подруга", [f["fact"] for f in self.core.state.facts.values()])
+        self.assertTrue(self.core.safety_flag("CRITICAL", "беда"))
+        self.assertFalse(self.core.state.mentor_enabled)
+
+    def test_legacy_info_safety_event_does_not_disable_mentor(self) -> None:
+        with self.core.tx():
+            self.core.emit("safety_flag", {"level": "info", "note": "старый флаг"}, source="l1")
+        self.assertTrue(State.rebuild(self.core.store.read()).mentor_enabled)
+        self.assertTrue(self.core.state.mentor_enabled)
+
     def test_interview_flow_extracts_profile(self) -> None:
         self.assertEqual(self.core.interview_next()["id"], "name")
         self.core.interview_answer("name", "Дастан")
