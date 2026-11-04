@@ -130,6 +130,9 @@ def brief(core: Any) -> str:
     debts = st.debts()
     if debts:
         lines.append("Долг: " + ", ".join(t.title for t in debts[:3]))
+    budget = core.budget()
+    if budget["auto"] and budget["since"] == today.isoformat() and budget.get("change"):
+        lines.append(f"Нагрузка недели: {budget['change']} — {budget['reason']}.")
     week = st.week_stats(today)
     quotas = core.cfg.mech("quotas") or {}
     if today.weekday() >= 2:

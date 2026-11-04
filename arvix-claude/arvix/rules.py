@@ -158,33 +158,6 @@ def penalty_multiplier(*, mode: str, mentor_enabled: bool, hp: int, silent: bool
     return 1.0
 
 
-# Бюджет недели (02-MECHANICS §5): растёт ступенями, только если держишь темп и сон,
-# и снижается при признаках выгорания (П1: безопасность выше дисциплины).
-BUDGET_CAP = (2700, 1080)  # 45 ч / 18 ч глубокой
-BUDGET_FLOOR = (240, 60)  # 4 ч / 1 ч
-BUDGET_REVIEW_DAYS = 28
-
-
-def review_budget(
-    *, week_min: int, deep_min: int, completion_avg: float | None, sleep_avg: float | None,
-    red_days: int, yellow_days: int, days_with_data: int,
-) -> tuple[int, int, str, str]:
-    """(новый бюджет, глубокая, вердикт up|down|hold, причина) по итогам 4 недель."""
-    if red_days >= 3 or yellow_days >= 7:
-        week = max(BUDGET_FLOOR[0], int(week_min * 0.85))
-        deep = max(BUDGET_FLOOR[1], int(deep_min * 0.85))
-        return week, deep, "down", f"признаки перегруза: 🟥 {red_days} дн, 🟨 {yellow_days} дн — нагрузка −15%"
-    if days_with_data < 10 or completion_avg is None:
-        return week_min, deep_min, "hold", f"мало данных ({days_with_data} дн с задачами) — бюджет держится"
-    sleep_ok = sleep_avg is None or sleep_avg >= 420
-    if completion_avg >= 75 and sleep_ok:
-        week = min(BUDGET_CAP[0], max(week_min + 120, int(week_min * 1.15)))
-        deep = min(BUDGET_CAP[1], max(deep_min + 60, int(deep_min * 1.15)))
-        return week, deep, "up", f"выполнение {completion_avg:.0f}% и нормальный сон — нагрузка +15%"
-    reason = f"выполнение {completion_avg:.0f}%" + ("" if sleep_ok else f", сон {sleep_avg / 60:.1f} ч")
-    return week_min, deep_min, "hold", f"{reason} — сначала стабильность, бюджет держится"
-
-
 def sp_for_day(completion: float | None, sleep_min: int | None, sleep_target: int, deep_min: int, deep_target: int) -> float:
     """Очко сезона: выполнение × 0.6 + сон × 0.2 + глубокая работа × 0.2 (0..100)."""
     done = completion or 0.0

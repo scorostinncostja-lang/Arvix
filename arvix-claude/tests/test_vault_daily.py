@@ -4,7 +4,7 @@ import json
 import unittest
 from datetime import timedelta
 
-from arvix import daily_note, rules
+from arvix import daily_note, load
 from arvix.vault import parse_frontmatter
 
 from tests.helpers import ArvixCase, moscow
@@ -73,31 +73,68 @@ class DailyNoteTest(ArvixCase):
 
 class BudgetTest(ArvixCase):
     def test_review_rules(self) -> None:
-        up = rules.review_budget(week_min=600, deep_min=210, completion_avg=82, sleep_avg=450, red_days=0, yellow_days=1, days_with_data=20)
-        self.assertEqual(up[:3], (720, 270, "up"))
-        down = rules.review_budget(week_min=600, deep_min=210, completion_avg=90, sleep_avg=450, red_days=3, yellow_days=0, days_with_data=20)
-        self.assertEqual(down[2], "down")
-        self.assertLess(down[0], 600)
-        hold = rules.review_budget(week_min=600, deep_min=210, completion_avg=60, sleep_avg=450, red_days=0, yellow_days=0, days_with_data=20)
-        self.assertEqual(hold[:3], (600, 210, "hold"))
-        few = rules.review_budget(week_min=600, deep_min=210, completion_avg=95, sleep_avg=450, red_days=0, yellow_days=0, days_with_data=4)
-        self.assertEqual(few[2], "hold")
+        f = dict(load.START_FACTORS)
+        ok = {"deep": {"planned": 300, "done": 290}, "sport": {"planned": 120, "done": 120}}
+        base = {"days_with_data": 6, "red_days": 0, "yellow_days": 0, "sleep_avg": 460, "sleep_target": 450, "hp_drop": 0}
+        first = load.review(f, channels=ok, streaks={}, **base)
+        self.assertEqual(first["verdict"], "hold")  # рост только после двух недель
+        self.assertEqual(first["streaks"]["deep"], 1)
+        second = load.review(first["factors"], channels=ok, streaks=first["streaks"], **base)
+        self.assertEqual(second["verdict"], "up")
+        self.assertAlmostEqual(second["factors"]["deep"], 0.75)
+        weak = load.review(f, channels={"learning": {"planned": 300, "done": 100}}, streaks={}, **base)
+        self.assertLess(weak["factors"]["learning"], f["learning"])
+        burnout = load.review(f, channels=ok, streaks={"deep": 3}, **base | {"red_days": 2, "sleep_avg": 360})
+        self.assertEqual(burnout["verdict"], "down")
+        self.assertAlmostEqual(burnout["factors"]["deep"], 0.55)
+        self.assertAlmostEqual(burnout["factors"]["rest"], 1.2)
+        self.assertEqual(burnout["streaks"]["deep"], 0)
+        few = load.review(f, channels=ok, streaks={}, **base | {"days_with_data": 2})
+        self.assertEqual(few["factors"], f)
+        floor = load.review({**f, "deep": 0.5}, channels=ok, streaks={}, **base | {"red_days": 5})
+        self.assertEqual(floor["factors"]["deep"], 0.5)
 
-    def test_budget_starts_from_interview_and_is_reviewed_after_four_weeks(self) -> None:
+    def test_fixed_blocks_are_never_scaled(self) -> None:
+        factors = {**load.START_FACTORS, "learning": 0.5}
+        self.assertEqual(load.scaled_duration({"title": "Школа", "sphere": "learning", "duration": 400}, factors), 400)
+        self.assertEqual(load.scaled_duration({"title": "Алгебра", "sphere": "learning", "duration": 90}, factors), 45)
+        self.assertEqual(load.scaled_duration({"title": "Что угодно", "fixed": True, "duration": 30}, factors), 30)
+        self.assertEqual(load.scaled_duration({"title": "Мелочь", "duration": 20}, {**factors, "other": 0.5}), load.MIN_BLOCK)
+
+    def test_budget_starts_from_interview_without_templates(self) -> None:
         self.core.interview_answer("study_hours", "10 часов, максимум 12")
         self.assertEqual(self.core.budget()["week_min"], 600)
-        for offset in range(27):
-            day = moscow(2026, 11, 2, 9) + timedelta(days=offset)
-            self.at(day)
-            task = self.core.add_task(f"Учёба {offset}", start="18:00", duration_min=60, importance=2, sphere="work")
-            self.core.complete_task(task.id)
-            self.core.log_sleep("7:45")
-        self.at(moscow(2026, 11, 30, 9))
-        self.core.refresh()
+        self.assertFalse(self.core.budget()["auto"])
+
+    def test_auto_load_scales_templates_and_reviews_weekly(self) -> None:
+        self.at(moscow(2026, 11, 2, 6))
+        blocks = [
+            {"start": "08:30", "duration": 360, "title": "Школа", "sphere": "learning"},
+            {"start": "17:00", "duration": 100, "title": "Математика ОГЭ", "sphere": "learning", "deep_work": True},
+            {"start": "19:30", "duration": 60, "title": "Бег", "sphere": "sport"},
+        ]
+        self.core.set_template([0, 1, 2, 3, 4, 5, 6], "study", blocks)
         budget = self.core.budget()
-        self.assertEqual(budget["verdict"], "up")
-        self.assertEqual(budget["week_min"], 720)
-        self.at(moscow(2026, 12, 1, 9))
+        self.assertTrue(budget["auto"])
+        self.assertEqual(budget["channels"]["deep"], 70 * 7)  # старт 0.7
+        self.assertEqual(budget["channels"]["fixed"], 360 * 7)
+        for offset in range(7):
+            day = moscow(2026, 11, 2, 6) + timedelta(days=offset)
+            self.at(day)
+            self.core.refresh()
+            tasks = {t.title: t for t in self.core.state.tasks_on(day.date())}
+            self.assertEqual(tasks["Математика ОГЭ"].duration_min, 70)
+            self.assertEqual(tasks["Школа"].duration_min, 360)
+            for task in tasks.values():
+                self.core.complete_task(task.id, report="сделал")
+            self.core.log_sleep("7:45")
+        self.at(moscow(2026, 11, 9, 6))
+        self.core.refresh()
+        first = self.core.budget()
+        self.assertEqual(first["verdict"], "hold")
+        self.assertEqual(first["since"], "2026-11-09")
+        self.assertEqual(sum(1 for e in self.core.store.read(0) if e.kind == "budget_set"), 1)
+        self.at(moscow(2026, 11, 10, 6))
         self.core.refresh()
         self.assertEqual(sum(1 for e in self.core.store.read(0) if e.kind == "budget_set"), 1)
 
