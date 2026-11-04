@@ -10,7 +10,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from arvix import rules
+from arvix import load, rules
 from arvix.config import parse_hhmm
 
 log = logging.getLogger("arvix.daily")
@@ -37,28 +37,52 @@ def catch_up(core: Any) -> None:
 
 
 def review_budget(core: Any) -> dict[str, Any] | None:
-    """Раз в 4 недели: поднять, удержать или снизить бюджет недели (02-MECHANICS §5)."""
-    budget = core.budget()
+    """Раз в неделю: автонагрузка по каналам (arvix/load.py). Без шаблонов дней
+    масштабировать нечего — бюджет держится на часах из интервью."""
+    st = core.state
     today = core.today()
-    if today < budget["next_review"] or not core.state.profile.get("season_start"):
+    if not st.templates or today < core.budget()["next_review"]:
         return None
     with core.tx():
-        if core.budget()["next_review"] > today:
+        st = core.state
+        budget = core.budget()
+        if budget["next_review"] > today:
             return None
-        start = today - timedelta(days=rules.BUDGET_REVIEW_DAYS)
-        closed = [d.closed for x, d in core.state.days.items() if start <= x < today and d.closed]
-        with_tasks = [c for c in closed if c.get("total")]
-        sleeps = [c["sleep_min"] for c in closed if c.get("sleep_min")]
-        week, deep, verdict, reason = rules.review_budget(
-            week_min=budget["week_min"], deep_min=budget["deep_min"],
-            completion_avg=sum(c["completion"] or 0 for c in with_tasks) / len(with_tasks) if with_tasks else None,
+        start = today - timedelta(days=load.REVIEW_DAYS)
+        channels = {ch: {"planned": 0, "done": 0} for ch in load.CHANNELS}
+        for task in st.tasks.values():
+            if not start <= task.local_date < today or task.status == "cancelled":
+                continue
+            item = {"title": task.title, "sphere": task.sphere, "deep_work": task.deep_work, "tags": task.tags}
+            if load.is_fixed(item):
+                continue
+            ch = load.channel_of(item)
+            channels[ch]["planned"] += task.duration_min
+            if task.status == "done":
+                channels[ch]["done"] += task.duration_min * task.done_pct // 100
+        closed = [(x, d.closed) for x, d in sorted(st.days.items()) if start <= x < today and d.closed]
+        sleeps = [c["sleep_min"] for _, c in closed if c.get("sleep_min")]
+        before = st.days.get(start - timedelta(days=1))
+        hp_start = (before.closed or {}).get("hp_end") if before else None
+        hp_values = [c["hp_end"] for _, c in closed if c.get("hp_end") is not None]
+        hp_drop = max(0, int(hp_start if hp_start is not None else rules.HP_MAX) - hp_values[-1]) if hp_values else 0
+        old = load.factors_of(st.budget)
+        result = load.review(
+            old, channels=channels, streaks=(st.budget or {}).get("streaks") or {},
+            days_with_data=sum(1 for _, c in closed if c.get("total")),
+            red_days=sum(1 for _, c in closed if c.get("mode") == "red"),
+            yellow_days=sum(1 for _, c in closed if c.get("mode") == "yellow"),
             sleep_avg=sum(sleeps) / len(sleeps) if sleeps else None,
-            red_days=sum(1 for c in closed if c.get("mode") == "red"),
-            yellow_days=sum(1 for c in closed if c.get("mode") == "yellow"),
-            days_with_data=len(with_tasks),
+            sleep_target=int(st.profile.get("sleep_target_min") or core.cfg.mech("sleep_target_min", 450)),
+            hp_drop=hp_drop,
         )
-        payload = {"week_min": week, "deep_min": deep, "verdict": verdict, "reason": reason,
-                   "from_week_min": budget["week_min"], "from_deep_min": budget["deep_min"]}
+        week = load.week_load(st.templates, result["factors"])
+        change = load.describe_change(old, result["factors"], st.templates)
+        payload = {
+            "week_min": week["total"], "deep_min": week["deep"], "factors": result["factors"], "streaks": result["streaks"],
+            "verdict": result["verdict"], "reason": "; ".join(result["reasons"]), "change": change,
+            "from_week_min": budget["week_min"], "from_deep_min": budget["deep_min"],
+        }
         core.emit("budget_set", payload, source="scheduler")
     return payload
 
@@ -238,12 +262,13 @@ def materialize(core: Any, d: date) -> list[str]:
         if template["day_type"] == "silent" or d.weekday() == silent_weekday:
             core.emit("silent_day", {"date": d.isoformat()}, source="scheduler")
         now = core.now()
+        factors = load.factors_of(core.state.budget)
         for block in template["blocks"]:
             if d == now.date() and block["start"] and core.at(d, block["start"]) <= now:
                 continue
             task = core.add_task(
                 block["title"], sphere=block["sphere"], importance=block["importance"], difficulty=block["difficulty"],
-                start=block["start"], duration_min=block["duration"], deep_work=block["deep_work"], day=d.isoformat(),
+                start=block["start"], duration_min=load.scaled_duration(block, factors), deep_work=block["deep_work"], day=d.isoformat(),
                 tags=block.get("tags") or (), task_source="recurring", source="scheduler",
             )
             created.append(task.id)

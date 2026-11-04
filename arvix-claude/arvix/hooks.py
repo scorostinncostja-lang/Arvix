@@ -40,12 +40,29 @@ def prompt_line(core) -> str:
     return line + f" · HP {st.hp} · сегодня {done}/{len(tasks)}"
 
 
+def _remote_configured() -> bool:
+    from arvix.remote import target
+
+    return target() is not None
+
+
 def run(event: str) -> int:
     try:
         data = json.loads(sys.stdin.read() or "{}")
     except ValueError:
         data = {}
-    if not in_arvix_home(data.get("cwd") or os.getcwd()):
+    trusted = "--trusted" in sys.argv  # вызов с ноутбука через SSH: дом уже проверен там
+    if not trusted and not in_arvix_home(data.get("cwd") or os.getcwd()):
+        return 0
+    from arvix.remote import run_remote
+
+    forwarded = run_remote("arvix_hook.py", [event, "--trusted"], json.dumps(data), timeout=8)
+    if forwarded is not None:
+        print(forwarded, end="")
+        return 0
+    if _remote_configured():
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": EVENTS[event], "additionalContext":
+                          "Arvix: сервер недоступен — состояние не загружено. Проверь интернет и `arvix doctor`."}}, ensure_ascii=False))
         return 0
     session = str(data.get("session_id") or "")
     try:

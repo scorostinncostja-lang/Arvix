@@ -12,12 +12,16 @@ from datetime import timedelta
 from typing import Any
 
 from arvix import rules
+from arvix.load import CHANNEL_LABELS
 
 WEEKDAYS = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
 DAY_TYPES_RU = {"study": "Учебный", "work": "Рабочий", "deep": "Глубокий", "recovery": "Восстановительный", "silent": "Тихий"}
 STATUS_ICON = {"planned": "⏳", "active": "▶️", "done": "✅", "failed": "❌", "debt": "🔴", "written_off": "✖️"}
 QUOTA_RU = {"sport": "спорт", "social": "социум", "novelty": "новое", "offscreen": "отдых без экрана"}
 TOP_TOPICS = ("goal", "fear", "weakness", "trigger")
+
+
+LOAD_LABELS = {**CHANNEL_LABELS, "fixed": "обязательное"}
 
 
 def hm(minutes: int | None) -> str:
@@ -131,6 +135,8 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     lines.append(week_line)
     planned = core.planned_minutes(st.week_start(today), st.week_start(today) + timedelta(days=6))
     load = f"НАГРУЗКА: бюджет {hm(budget)}/нед (глубокая {hm(deep_budget)}) · запланировано {hm(planned)} · пересмотр {plan['next_review']:%d.%m}"
+    if plan["auto"]:
+        load += " · авто: " + ", ".join(f"{LOAD_LABELS[ch]} {hm(m)}" for ch, m in plan["channels"].items() if m)
     if plan.get("reason"):
         load += f" · последний пересмотр: {plan['reason']}"
     warnings = core.load_check(today)

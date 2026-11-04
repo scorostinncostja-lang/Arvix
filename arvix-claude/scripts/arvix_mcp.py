@@ -6,7 +6,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from arvix.mcp_server import serve
-
 if __name__ == "__main__":
+    from arvix.remote import exec_remote
+
+    exec_remote("arvix_mcp.py", sys.argv[1:])  # [remote] в конфиге — база на сервере
+    from arvix.mcp_server import serve
+
     serve()

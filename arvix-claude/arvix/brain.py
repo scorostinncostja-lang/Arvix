@@ -53,6 +53,7 @@ _ACTION_FIELDS = {
                 "start": {"type": "string"}, "duration": {"type": "integer"}, "title": {"type": "string"},
                 "sphere": {"type": "string"}, "importance": {"type": "integer"}, "difficulty": {"type": "integer"},
                 "deep_work": {"type": "boolean"}, "tags": {"type": "array", "items": {"type": "string"}},
+                "fixed": {"type": "boolean"},
             },
             "required": ["start", "title"],
         },

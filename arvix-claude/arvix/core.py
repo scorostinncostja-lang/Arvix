@@ -15,7 +15,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from arvix import clock, interview, rules
+from arvix import clock, interview, load, rules
 from arvix.config import Config, load_config
 from arvix.state import State, Task
 from arvix.store import Event, Store
@@ -590,6 +590,7 @@ class Core:
                 "title": str(block["title"])[:200], "sphere": sphere, "importance": importance,
                 "difficulty": rules.clamp(int(block.get("difficulty", 3)), 1, 5),
                 "deep_work": bool(block.get("deep_work")), "tags": list(block.get("tags") or []),
+                **({"fixed": bool(block["fixed"])} if "fixed" in block else {}),
             })
         with self.tx():
             self.emit("template_set", {"weekdays": days, "day_type": day_type, "blocks": clean}, source=source)
@@ -771,17 +772,24 @@ class Core:
     # --- нагрузка ------------------------------------------------------------------------
 
     def budget(self) -> dict[str, Any]:
-        """Текущий бюджет недели: из события budget_set, иначе из профиля
-        (часы из интервью) или конфига. Глубокая работа по умолчанию — 35%."""
+        """Нагрузка недели. С шаблонами дней — автонагрузка: объём каналов задают
+        коэффициенты (arvix/load.py), пересмотр раз в неделю. Без шаблонов —
+        часы из интервью или конфига, глубокая работа по умолчанию 35%."""
         st = self.state
-        if st.budget:
-            week, deep, since = int(st.budget["week_min"]), int(st.budget["deep_min"]), st.budget["since"]
+        factors = load.factors_of(st.budget)
+        since = (st.budget or {}).get("since") or st.profile.get("season_start") or (st.first_date or self.today()).isoformat()
+        if st.templates:
+            week = load.week_load(st.templates, factors)
+            total, deep = week["total"], week["deep"]
+            channels = {ch: week[ch] for ch in (*load.CHANNELS, "fixed")}
         else:
-            week = int(st.profile.get("week_budget_min") or self.cfg.mech("week_budget_min", 1560))
-            deep = int(st.profile.get("week_deep_budget_min") or (week * 0.35 if st.profile.get("week_budget_min") else self.cfg.mech("week_deep_budget_min", 480)))
-            since = st.profile.get("season_start") or (st.first_date or self.today()).isoformat()
-        review = date.fromisoformat(since) + timedelta(days=rules.BUDGET_REVIEW_DAYS)
-        return {"week_min": week, "deep_min": deep, "since": since, "next_review": review, "verdict": st.budget.get("verdict"), "reason": st.budget.get("reason")}
+            total = int(st.profile.get("week_budget_min") or self.cfg.mech("week_budget_min", 1560))
+            deep = int(st.profile.get("week_deep_budget_min") or (total * 0.35 if st.profile.get("week_budget_min") else self.cfg.mech("week_deep_budget_min", 480)))
+            channels = {}
+        review = date.fromisoformat(since) + timedelta(days=load.REVIEW_DAYS)
+        return {"week_min": total, "deep_min": deep, "since": since, "next_review": review, "factors": factors,
+                "channels": channels, "auto": bool(st.templates), "verdict": st.budget.get("verdict"),
+                "reason": st.budget.get("reason"), "change": st.budget.get("change")}
 
     def planned_minutes(self, start: date, end: date) -> int:
         return sum(t.duration_min for t in self.state.tasks.values() if start <= t.local_date <= end and t.status != "cancelled")

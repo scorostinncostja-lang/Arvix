@@ -85,7 +85,7 @@ TOOLS: dict[str, dict[str, Any]] = {
             "weekdays": {"type": "array", "items": INT}, "day_type": _enum("study", "work", "deep", "recovery", "silent"),
             "blocks": {"type": "array", "items": _obj({
                 "start": STR, "duration": INT, "title": STR, "sphere": STR, "importance": INT, "difficulty": INT,
-                "deep_work": BOOL, "tags": {"type": "array", "items": STR},
+                "deep_work": BOOL, "tags": {"type": "array", "items": STR}, "fixed": BOOL,
             }, ["start", "title"])},
         }, ["action"]),
     },

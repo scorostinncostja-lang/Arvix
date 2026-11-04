@@ -8,6 +8,8 @@ Type=simple
 ExecStart="@PYTHON@" "@APP@/scripts/arvix_telegram.py"
 Environment=PATH=@PATH@
 Environment=PYTHONUNBUFFERED=1
+# На сервере: токен подписки из `claude setup-token` (CLAUDE_CODE_OAUTH_TOKEN=…), права 600.
+EnvironmentFile=-%h/.config/arvix/claude.env
 Restart=always
 RestartSec=15
 TimeoutStopSec=30
