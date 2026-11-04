@@ -37,6 +37,9 @@ MODES = ("normal", "pressure", "yellow", "red")
 MODE_LABELS = {"normal": "🟩 НОРМА", "pressure": "🟦 ДАВЛЕНИЕ", "yellow": "🟨 ЖЁЛТЫЙ", "red": "🟥 КРАСНЫЙ"}
 RANKS = ((88, "Элита"), (75, "Платина"), (60, "Золото"), (45, "Серебро"), (0, "Бронза"))
 SEASON_WEEKS = 5
+# Уровни safety-флага, которые выключают ментора (02-MECHANICS §6). Остальные
+# («info», «low») — не беда, а сведения: они пишутся фактом о человеке.
+SAFETY_ALARM_LEVELS = ("high", "critical")
 
 
 def clamp(value: int, low: int, high: int) -> int:

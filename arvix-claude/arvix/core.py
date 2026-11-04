@@ -656,10 +656,18 @@ class Core:
             if not self.state.day(self.today()).silent:
                 self.emit("silent_day", {"date": self.today().isoformat()}, source=source)
 
-    def safety_flag(self, level: str, note: str, *, source: str = "l0") -> None:
-        """Safety-контур (02-MECHANICS §6): ментор выключается до ручного включения."""
+    def safety_flag(self, level: str, note: str, *, source: str = "l0") -> bool:
+        """Safety-контур (02-MECHANICS §6): ментор выключается до ручного включения.
+        Только уровни high/critical; остальное (контакт поддержки, «бывает тяжело») —
+        факт о человеке. Возвращает True, если ментор выключен."""
+        level = (level or "high").strip().lower()[:20]
+        if level not in rules.SAFETY_ALARM_LEVELS:
+            if note.strip():
+                self.remember("safety", note, source=source)
+            return False
         with self.tx():
-            self.emit("safety_flag", {"level": level[:20], "note": note[:300]}, source=source)
+            self.emit("safety_flag", {"level": level, "note": note[:300]}, source=source)
+        return True
 
     def set_mentor(self, enabled: bool, *, by: str) -> None:
         """Включение — только явной командой человека (CLI или /mentor on), никогда

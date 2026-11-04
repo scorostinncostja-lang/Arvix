@@ -282,6 +282,8 @@ class State:
         self.learning.append({**p, "date": ev.local_date.isoformat()})
 
     def _on_safety_flag(self, ev: Event, p: dict, day: Day) -> None:
+        if p.get("level") not in rules.SAFETY_ALARM_LEVELS:
+            return  # старые флаги «info» до разделения уровней — не беда
         self.mentor_enabled = False
         self.safety.append({**p, "date": ev.local_date.isoformat()})
 
