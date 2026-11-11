@@ -6,7 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-LOCAL_COMMANDS = {"setup", "desktop-mcp"}  # меняют конфиг этой машины
+# Команды этой машины: меняют её конфиг и папки или сами решают, когда сходить на сервер.
+LOCAL_COMMANDS = {"setup", "desktop-mcp", "init-home", "doctor", "statusline", "remote", "--version", "-h", "--help"}
 
 if __name__ == "__main__":
     if not (set(sys.argv[1:2]) & LOCAL_COMMANDS):

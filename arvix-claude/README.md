@@ -40,20 +40,29 @@
 
 ```bash
 bash arvix-claude/deploy/install.sh
-arvix setup
+arvix setup                                   # диалог: хранилище, часовой пояс, дом, Telegram
+arvix setup --telegram --yes                  # или только привязать бота позже
 systemctl --user enable --now arvix-telegram
 ```
 
+Без вопросов (скрипты, повторная настройка):
+```bash
+arvix setup --vault "$HOME/Документы/Obsidian Vault" --tz Europe/Moscow --home ~/Arvix --no-telegram --yes
+```
+
 `install.sh` копирует плагин в `~/.local/share/arvix/app` (путь без пробелов — его не сломает
-перенос репозитория), ставит CLI `~/.local/bin/arvix`, подключает плагин к Claude Code
-(маркетплейс `arvix`, scope user) и кладёт systemd-юнит. Повторный запуск — обновление.
+перенос репозитория), проверяет его `claude plugin validate`, ставит CLI `~/.local/bin/arvix`,
+подключает плагин к Claude Code (маркетплейс `arvix`, scope user) и кладёт systemd-юниты
+бота и бэкапа. Повторный запуск — обновление.
 
 `arvix setup` спросит путь к хранилищу Obsidian (подставит открытое), часовой пояс и,
 по желанию, токен бота: создай бота у [@BotFather](https://t.me/BotFather) (`/newbot`),
 вставь токен (ввод скрыт), напиши боту `/start` — так он узнает твой id и будет слушать
-только тебя. Токен лежит в `~/.config/arvix/config.toml` с правами 600.
+только тебя. Токен лежит в `~/.config/arvix/config.toml` с правами 600. В хранилище `setup`
+сам находит папку роадмапов, Inbox и шаблон ежедневного отчёта (`[vault_paths]`).
 
-Проверка: `arvix doctor`. Логи бота: `journalctl --user -u arvix-telegram -f`.
+Проверка: `arvix doctor` (конфиг, база, хранилище, плагин, Telegram API, служба).
+Логи бота: `journalctl --user -u arvix-telegram -f`.
 
 ## Первый запуск
 
@@ -65,12 +74,26 @@ cd ~/Arvix && claude
 инструмент. В Desktop: вкладка Code → новая сессия в папке `~/Arvix`.
 
 Папка `~/Arvix` — «дом Арвикса»: там включён стиль `arvix:Arvix`, разрешены инструменты
-`arvix` и чтение хранилища. Внутри скажи `/arvix:onboarding` — начнётся знакомство:
-52 вопросов в 10 блоках, страхи последними, с паузой и продолжением. Перед вопросами Арвикс
-прочитает всё хранилище, чтобы не спрашивать то, что уже написано.
-Из ответов про неделю он соберёт шаблоны дней — без них задач и напоминаний нет.
+`arvix` и чтение хранилища, внизу окна — строка состояния
+(`🟩 НОРМА · ур.1 · HP 100 · сегодня 2/5 · → 16:00 Алгоритмы · ctx 7%`, в 🟥 — без цифр).
+Пока профиль пуст, Арвикс **сам** представится и начнёт знакомство: сначала прочитает всё
+хранилище, чтобы не спрашивать то, что уже написано, потом 52 вопроса в 10 блоках, страхи
+последними, с паузой и продолжением (`/arvix:onboarding`). Из ответов про неделю он соберёт
+шаблоны дней — без них задач и напоминаний нет.
 
 То же знакомство есть в Telegram (`/start`) и в терминале без ИИ (`arvix interview`).
+
+## Сервер (бот круглосуточно)
+
+```bash
+ssh root@HOST 'PUBKEY="'"$(cat ~/.ssh/id_ed25519.pub)"'" bash -s' < arvix-claude/deploy/server-setup.sh
+bash arvix-claude/deploy/sync-server.sh arvix@HOST --init     # код + конфиг + install.sh на сервере
+ssh -t arvix@HOST bash ~/.local/share/arvix/app/deploy/server-claude-token.sh   # токен подписки для головы
+arvix remote set arvix@HOST                                    # ноутбук ходит за журналом по SSH
+systemctl --user disable --now arvix-telegram                  # бот теперь там
+systemctl --user enable --now arvix-vault-sync.timer arvix-backup.timer   # хранилище ⇄ сервер, копия журнала
+```
+Подробно — GUIDE, раздел 10.
 
 ## Скиллы Claude Code
 
@@ -133,9 +156,11 @@ cd ~/Arvix && claude
 
 ```bash
 cd arvix-claude
-python3 -m unittest discover -s tests -t .   # 67 тестов, без сети и без ИИ
+python3 -m unittest discover -s tests -t .   # 99 тестов, без сети и без ИИ
 python3 scripts/build_assets.py              # пересобрать стиль и файлы для claude.ai
-claude --plugin-dir . plugin details arvix   # инвентарь плагина
+claude plugin validate .                     # манифест, хуки, MCP
+claude plugin details arvix                  # инвентарь и цена в токенах (~1.1k на сессию)
+bash deploy/install.sh                       # выкатить на этот ноутбук
 ```
 Конституция, тон-блоки и примеры голоса — `arvix/constitution/`. Стиль и инструкции для
 claude.ai генерируются из неё, тест проверяет, что они не устарели.

@@ -110,7 +110,24 @@ def hook_context(core: Any) -> str:
     if not gentle:
         parts += [constitution(st.profile, gentle=False, sections=("decision_rule",)), fewshot(gentle=False, only="harsh")]
     parts.append("<context>\n" + build_context(core, gentle=gentle) + "\n</context>")
+    if not gentle:
+        parts.append(first_session_block(core))
     return "\n\n".join(p for p in parts if p)
+
+
+def first_session_block(core: Any) -> str:
+    """Первая встреча: знакомство не начато и распорядка нет — Арвикс сам начинает
+    интервью, а не ждёт команды. Когда есть хоть что-то, блок не выдаётся."""
+    st = core.state
+    status = core.interview_status()
+    if status["answered"] or st.interview_skipped or st.templates:
+        return ""
+    return (
+        "<first_session>\nЭто первая встреча: знакомство не начато, распорядка нет. Не жди команды.\n"
+        "Представься одной строкой и начни знакомство по скиллу onboarding: сначала прочитай хранилище "
+        "(notes action=overview и заметки о человеке), потом блок «Ядро» — по 3–4 вопроса за сообщение.\n"
+        "Что уже написано в заметках, не спрашивай заново — подтверди.\n</first_session>"
+    )
 
 
 STYLE_TOOLS = """<tools_rule>

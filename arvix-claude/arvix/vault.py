@@ -41,6 +41,58 @@ class VaultError(ValueError):
     pass
 
 
+def detect_paths(root: Path) -> dict[str, str]:
+    """Где в этом хранилище уже лежат роадмапы, Inbox, шаблон отчёта — чтобы `arvix setup`
+    подставил реальные места, а не папки по умолчанию. Только то, что нашлось."""
+    root = Path(root).expanduser().resolve()
+    found: dict[str, str] = {}
+    if not root.is_dir():
+        return found
+    dirs: list[Path] = []
+    files: list[Path] = []
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root)
+        if len(rel.parts) > 3 or any(part in SKIP_DIRS for part in rel.parts):
+            continue
+        (dirs if path.is_dir() else files).append(path)
+    for path in dirs:
+        name = path.name.lower()
+        if "roadmaps" not in found and ("роадмап" in name or "roadmap" in name):
+            found["roadmaps"] = str(path.relative_to(root))
+        if "weekly" not in found and ("недел" in name or "weekly" in name):
+            found["weekly"] = str(path.relative_to(root))
+        if "goals" not in found and (name.startswith("цели") or "goals" in name):
+            found["goals"] = str(path.relative_to(root))
+    for path in files:
+        stem = path.stem.lower()
+        if path.suffix == ".md" and "inbox" not in found and stem in ("inbox", "входящие", "00_inbox", "inbox — входящие"):
+            found["inbox"] = str(path.relative_to(root))
+    # Шаблон ежедневного отчёта: настройка Obsidian, а если она указывает в пустоту —
+    # файл в папке шаблонов с подходящим именем.
+    template = ""
+    try:
+        template = json.loads((root / ".obsidian" / "daily-notes.json").read_text(encoding="utf-8")).get("template") or ""
+    except (OSError, ValueError):
+        pass
+    if template and not (root / (template if template.endswith(".md") else f"{template}.md")).is_file():
+        template = ""
+    if not template:
+        folders = []
+        try:
+            folders.append(json.loads((root / ".obsidian" / "templates.json").read_text(encoding="utf-8")).get("folder") or "")
+        except (OSError, ValueError):
+            pass
+        folders += [str(p.relative_to(root)) for p in dirs if p.name.lower() in ("templates", "шаблоны", "template")]
+        for folder in [f for f in folders if f]:
+            for path in sorted((root / folder).glob("*.md")):
+                if any(key in path.stem.lower() for key in ("daily", "отч", "report", "день")):
+                    found["daily_template"] = str(path.relative_to(root))
+                    break
+            if "daily_template" in found:
+                break
+    return found
+
+
 def sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 

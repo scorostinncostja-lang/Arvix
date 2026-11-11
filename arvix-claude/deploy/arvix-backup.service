@@ -1,0 +1,9 @@
+[Unit]
+Description=Arvix — бэкап журнала с сервера на ноутбук
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Хост берётся из [remote] host в ~/.config/arvix/config.toml
+ExecStart=/usr/bin/env bash "@APP@/deploy/arvix-backup.sh"
