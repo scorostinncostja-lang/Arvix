@@ -88,9 +88,10 @@ cd ~/Arvix && claude
 ```bash
 ssh root@HOST 'PUBKEY="'"$(cat ~/.ssh/id_ed25519.pub)"'" bash -s' < arvix-claude/deploy/server-setup.sh
 bash arvix-claude/deploy/sync-server.sh arvix@HOST --init     # код + конфиг + install.sh на сервере
+ssh -t arvix@HOST bash ~/.local/share/arvix/app/deploy/server-claude-token.sh   # токен подписки для головы
 arvix remote set arvix@HOST                                    # ноутбук ходит за журналом по SSH
 systemctl --user disable --now arvix-telegram                  # бот теперь там
-systemctl --user enable --now arvix-backup.timer               # копия журнала раз в сутки
+systemctl --user enable --now arvix-vault-sync.timer arvix-backup.timer   # хранилище ⇄ сервер, копия журнала
 ```
 Подробно — GUIDE, раздел 10.
 

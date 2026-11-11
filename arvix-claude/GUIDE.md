@@ -699,19 +699,24 @@ bash arvix-claude/deploy/sync-server.sh arvix@HOST --init
 с серверными путями: `vault = ~/vault`, `home = ~/Arvix`, `claude_bin = ~/.local/bin/claude`.
 Дальше скрипт запускает там `install.sh`, `init-home` и `doctor`.
 
-Один раз на сервере под `arvix`:
+Один раз, с ноутбука, в интерактивном терминале (нужен браузер для входа в аккаунт):
 ```bash
-claude setup-token          # токен подписки → ~/.config/arvix/claude.env как CLAUDE_CODE_OAUTH_TOKEN=…  (chmod 600)
-systemctl --user enable --now arvix-telegram syncthing
+ssh -t arvix@HOST bash ~/.local/share/arvix/app/deploy/server-claude-token.sh
 ```
-Syncthing: папка хранилища ноутбука ⇄ `/home/arvix/vault` в обе стороны (веб-интерфейс
-Syncthing на сервере — через `ssh -L 8384:localhost:8384 arvix@HOST`).
+Скрипт запускает `claude setup-token`, кладёт токен подписки в `~/.config/arvix/claude.env`
+(права 600, на экран не выводит) и перезапускает бота. Потом на сервере:
+`systemctl --user enable --now arvix-telegram`.
+
+Хранилище: таймер `arvix-vault-sync.timer` на ноутбуке раз в 10 минут гоняет `rsync` в обе
+стороны (новее побеждает, ничего не удаляется) между хранилищем и `/home/arvix/vault`.
+Syncthing — необязательная замена для мгновенной синхронизации.
 
 ### 10.3. Ноутбук — в удалённый режим
 ```bash
-arvix remote set arvix@HOST                      # проверит ssh и запишет [remote] в конфиг
-systemctl --user disable --now arvix-telegram    # два бота с одним токеном мешают друг другу
-systemctl --user enable --now arvix-backup.timer # копия журнала раз в сутки
+arvix remote set arvix@HOST                          # проверит ssh и запишет [remote] в конфиг
+systemctl --user disable --now arvix-telegram        # два бота с одним токеном мешают друг другу
+systemctl --user enable --now arvix-vault-sync.timer # хранилище ⇄ сервер каждые 10 минут
+systemctl --user enable --now arvix-backup.timer     # копия журнала раз в сутки
 ```
 Теперь команда `arvix`, MCP-сервер в Claude Code/Desktop и хук ходят на сервер по SSH;
 строка состояния кэшируется на минуту. `arvix remote show` — где журнал, `arvix remote off` —

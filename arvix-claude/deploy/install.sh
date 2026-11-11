@@ -62,6 +62,8 @@ sed -e "s|@APP@|$APP|g" -e "s|@PYTHON@|$PYTHON|g" -e "s|@PATH@|$BIN:$CLAUDE_DIR:
   "$SRC/deploy/arvix-telegram.service" > "$UNIT_DIR/arvix-telegram.service"
 sed -e "s|@APP@|$APP|g" "$SRC/deploy/arvix-backup.service" > "$UNIT_DIR/arvix-backup.service"
 cp "$SRC/deploy/arvix-backup.timer" "$UNIT_DIR/arvix-backup.timer"
+sed -e "s|@APP@|$APP|g" "$SRC/deploy/arvix-vault-sync.service" > "$UNIT_DIR/arvix-vault-sync.service"
+cp "$SRC/deploy/arvix-vault-sync.timer" "$UNIT_DIR/arvix-vault-sync.timer"
 systemctl --user daemon-reload 2>/dev/null || true
 if systemctl --user is-active --quiet arvix-telegram 2>/dev/null; then
   systemctl --user restart arvix-telegram && echo "бот перезапущен на новой версии"

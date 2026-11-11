@@ -1,0 +1,8 @@
+[Unit]
+Description=Arvix — синхронизация хранилища Obsidian с сервером
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash "@APP@/deploy/vault-sync.sh"
