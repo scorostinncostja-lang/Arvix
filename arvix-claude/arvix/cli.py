@@ -16,10 +16,13 @@ import argparse
 import getpass
 import json
 import os
+import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from arvix import __version__, rules
 from arvix.config import config_file, data_dir, load_config, write_user_config
@@ -30,6 +33,9 @@ from arvix.state import State
 CLI = "cli"
 PLUGIN_STYLE = "arvix:Arvix"
 PLUGIN_TOOLS = "mcp__plugin_arvix_arvix"
+# Строка состояния Claude Code в доме Арвикса: режим · уровень · HP · день · следующий блок.
+STATUS_LINE = {"type": "command", "command": "~/.local/bin/arvix statusline", "refreshInterval": 60}
+YES = ("y", "д", "да", "yes")
 
 
 def _core() -> Core:
@@ -194,15 +200,38 @@ def _ask(prompt: str, default: str = "") -> str:
 def home_settings(vault: str) -> dict[str, Any]:
     allow = [PLUGIN_TOOLS, "Grep", "Glob"]
     if vault:
-        allow.append(f"Read(/{vault}/**)")
-    settings: dict[str, Any] = {"outputStyle": PLUGIN_STYLE, "permissions": {"allow": allow}}
+        allow.append(f"Read(/{vault}/**)")  # «//…» в правилах Claude Code — абсолютный путь
+    settings: dict[str, Any] = {"outputStyle": PLUGIN_STYLE, "statusLine": dict(STATUS_LINE), "permissions": {"allow": allow}}
     if vault:
         settings["permissions"]["additionalDirectories"] = [vault]
     return settings
 
 
+def merge_home_settings(current: dict[str, Any], wanted: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Дополняет настройки дома тем, чего не хватает, не трогая то, что человек поменял сам."""
+    merged = json.loads(json.dumps(current))
+    changed = False
+    for key in ("outputStyle", "statusLine"):
+        if key not in merged:
+            merged[key] = wanted[key]
+            changed = True
+    permissions = merged.setdefault("permissions", {})
+    allow = permissions.setdefault("allow", [])
+    for rule in wanted["permissions"]["allow"]:
+        if rule not in allow:
+            allow.append(rule)
+            changed = True
+    for folder in wanted["permissions"].get("additionalDirectories", []):
+        dirs = permissions.setdefault("additionalDirectories", [])
+        if folder not in dirs:
+            dirs.append(folder)
+            changed = True
+    return merged, changed
+
+
 def init_home(home: Path, vault: str) -> list[str]:
-    """Дом Арвикса: папка, где `claude` запускается в стиле Arvix с доступом к хранилищу."""
+    """Дом Арвикса: папка, где `claude` запускается в стиле Arvix с доступом к хранилищу.
+    Повторный вызов дополняет настройки (например, строкой состояния), не перезаписывая их."""
     created = []
     (home / ".claude").mkdir(parents=True, exist_ok=True)
     marker = home / ".arvix-home"
@@ -210,8 +239,18 @@ def init_home(home: Path, vault: str) -> list[str]:
         marker.write_text("Маркер дома Арвикса: хуки плагина работают только здесь.\n", encoding="utf-8")
         created.append(str(marker))
     settings = home / ".claude" / "settings.json"
-    if not settings.exists():
-        settings.write_text(json.dumps(home_settings(vault), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    wanted = home_settings(vault)
+    if settings.exists():
+        try:
+            current = json.loads(settings.read_text(encoding="utf-8"))
+        except ValueError:
+            current = {}
+        merged, changed = merge_home_settings(current, wanted)
+        if changed:
+            settings.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            created.append(f"{settings} (дополнен)")
+    else:
+        settings.write_text(json.dumps(wanted, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         created.append(str(settings))
     readme = home / "CLAUDE.md"
     if not readme.exists():
@@ -252,20 +291,55 @@ def _pair_telegram(token: str) -> int:
     sys.exit("Не дождался сообщения. Запусти `arvix setup` ещё раз.")
 
 
+def _user_config() -> dict[str, Any]:
+    """Только то, что записано в конфиге пользователя (без defaults.toml)."""
+    try:
+        return tomllib.loads(config_file().read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
 def cmd_setup(args: argparse.Namespace) -> None:
+    """Без флагов — диалог. С флагами и --yes — без вопросов (скрипты, повторная настройка).
+    Токен бота всегда вводится скрыто и только в терминале: в чаты и логи он не попадает."""
     cfg = load_config()
+    ask = not args.yes
+
+    def pick(prompt: str, default: str, given: str | None) -> str:
+        if given is not None:
+            return given
+        return _ask(prompt, default) if ask else default
+
     print(f"Настройка Arvix {__version__}. Конфиг: {config_file()}\n")
-    vault = _ask("Путь к Obsidian-хранилищу", str(cfg.vault or _detect_vault()))
-    if vault and not Path(vault).expanduser().is_dir():
+    vault = pick("Путь к Obsidian-хранилищу", str(cfg.vault or _detect_vault()), args.vault)
+    vault = str(Path(vault).expanduser()) if vault else ""
+    if vault and not Path(vault).is_dir():
         sys.exit(f"Папки нет: {vault}")
-    tz = _ask("Часовой пояс", str(cfg.raw.get("timezone") or _detect_tz()))
-    home = _ask("Дом Арвикса для Claude Code", str(cfg.home))
+    tz = pick("Часовой пояс", str(cfg.raw.get("timezone") or _detect_tz()), args.tz)
+    try:
+        ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        sys.exit(f"Неизвестный часовой пояс: {tz}")
+    home = pick("Дом Арвикса для Claude Code", str(cfg.home), args.home)
     updates: dict[str, Any] = {"vault": vault, "timezone": tz, "home": home}
     claude_bin = cfg.section("brain").get("claude_bin") or "claude"
     from shutil import which
 
     updates["brain"] = {"claude_bin": which(claude_bin) or claude_bin}
-    if _ask("Настроить Telegram-бота сейчас? Y/n", "y").lower() in ("y", "д", "да", "yes"):
+    if vault:
+        from arvix.vault import detect_paths
+
+        user_paths = _user_config().get("vault_paths") or {}
+        detected = {k: v for k, v in detect_paths(Path(vault)).items() if not user_paths.get(k)}
+        if detected:
+            updates["vault_paths"] = detected
+            print("В хранилище нашёл: " + ", ".join(f"{k} → {v}" for k, v in detected.items()))
+    want_telegram = args.telegram
+    if want_telegram is None:
+        want_telegram = ask and _ask("Настроить Telegram-бота сейчас? Y/n", "y").lower() in YES
+    if want_telegram:
+        if not sys.stdin.isatty():
+            sys.exit("Токен бота вводится только в терминале (скрытый ввод): arvix setup --telegram --yes")
         print("Создай бота у @BotFather (/newbot) и вставь токен. Ввод скрыт.")
         token = getpass.getpass("Токен: ").strip()
         if token:
@@ -274,7 +348,13 @@ def cmd_setup(args: argparse.Namespace) -> None:
     print(f"\nКонфиг записан: {path} (права 600)")
     for item in init_home(Path(home).expanduser(), vault):
         print(f"Создано: {item}")
-    print("\nДальше:\n  systemctl --user enable --now arvix-telegram   # бот\n  cd ~/Arvix && claude                            # Арвикс в Claude Code")
+    print(
+        "\nДальше:\n"
+        "  arvix setup --telegram --yes                   # привязать бота, если ещё нет\n"
+        "  systemctl --user enable --now arvix-telegram   # бот\n"
+        f"  cd {home} && claude                            # Арвикс в Claude Code\n"
+        "  arvix doctor                                   # проверка"
+    )
 
 
 def cmd_init_home(args: argparse.Namespace) -> None:
@@ -302,8 +382,18 @@ def cmd_desktop_mcp(args: argparse.Namespace) -> None:
     print(f"MCP-сервер arvix добавлен в {path}. Перезапусти Claude Desktop.")
 
 
+def _service_active(name: str = "arvix-telegram") -> bool | None:
+    """True/False — служба активна или нет; None — systemd недоступен."""
+    try:
+        done = subprocess.run(["systemctl", "--user", "is-active", "--quiet", name], capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return done.returncode == 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> None:
     from arvix.brain import Brain
+    from arvix.remote import run_remote, target
 
     cfg = load_config()
     ok = True
@@ -314,15 +404,103 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         print(("OK  " if passed else "FAIL") + f" {name}" + ("" if passed or not hint else f" — {hint}"))
 
     check(f"конфиг {config_file()}", config_file().exists(), "arvix setup")
-    check(f"база {cfg.db_path}", Core().store is not None)
+    remote = target()
+    if remote:
+        alive = run_remote("arvix_cli.py", ["--version"], "", timeout=15)
+        check(f"сервер {remote[0]} (журнал там)", alive is not None, "ssh не проходит или Арвикс на сервере не установлен: deploy/sync-server.sh")
+    else:
+        check(f"база {cfg.db_path}", Core().store is not None)
     check(f"хранилище {cfg.vault}", bool(cfg.vault and cfg.vault.is_dir()), "arvix setup")
+    template = cfg.vault_paths.get("daily_template")
+    if cfg.vault and template:
+        check(f"шаблон отчёта {template}", (cfg.vault / template).is_file(), "поправь [vault_paths] daily_template в config.toml")
     check(f"дом {cfg.home}", (cfg.home / ".arvix-home").exists(), "arvix init-home")
     check("claude CLI для головы", Brain(cfg).available(), "укажи [brain] claude_bin в config.toml")
+    try:
+        listed = subprocess.run(["claude", "plugin", "list"], capture_output=True, text=True, timeout=40, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        listed = None
+    if listed is None:
+        print("??   плагин arvix — не удалось спросить claude")
+    else:
+        check("плагин arvix в Claude Code", "arvix" in listed, "bash deploy/install.sh")
     tg = cfg.section("telegram")
-    check("Telegram токен и владелец", bool(tg.get("token") and tg.get("owner_id")), "arvix setup")
-    print(f"Данные: {data_dir()}")
+    check("Telegram токен и владелец", bool(tg.get("token") and tg.get("owner_id")), "arvix setup --telegram --yes")
+    if tg.get("token"):
+        from arvix.telegram.api import TelegramAPI, TelegramError
+
+        try:
+            me = TelegramAPI(tg["token"], http_timeout=15).call("getMe")
+            check(f"Telegram API: бот @{me.get('username')}", True)
+        except TelegramError as exc:
+            check("Telegram API", False, f"{exc} — сеть или токен")
+    active = _service_active()
+    if remote:
+        check("бот на этой машине выключен (он на сервере)", active is not True, "systemctl --user disable --now arvix-telegram")
+    elif tg.get("token") and active is not None:
+        check("служба arvix-telegram запущена", active, "systemctl --user enable --now arvix-telegram")
+    print(f"Данные: {data_dir()}" + (f" · режим: удалённый ({remote[0]})" if remote else ""))
     if not ok:
         sys.exit(1)
+
+
+def cmd_statusline(args: argparse.Namespace) -> None:
+    """Строка состояния для Claude Code. На stdin — JSON сессии (может не быть).
+    В удалённом режиме ответ сервера кэшируется на минуту: ssh на каждый ответ — слишком часто."""
+    from arvix.remote import run_remote, target
+    from arvix.statusline import CACHE_TTL, render
+
+    raw = "" if sys.stdin.isatty() else sys.stdin.read()
+    try:
+        session = json.loads(raw or "{}")
+    except ValueError:
+        session = {}
+    if target():
+        cache = data_dir() / "statusline.txt"
+        try:
+            if time.time() - cache.stat().st_mtime < CACHE_TTL:
+                print(cache.read_text(encoding="utf-8").strip())
+                return
+        except OSError:
+            pass
+        line = run_remote("arvix_cli.py", ["statusline"], raw or "{}", timeout=8)
+        if line is None:
+            stale = cache.read_text(encoding="utf-8").strip() if cache.exists() else ""
+            print(f"{stale} · ⚠ сервер недоступен" if stale else "Arvix: сервер недоступен")
+            return
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(line, encoding="utf-8")
+        print(line.strip())
+        return
+    try:
+        print(render(_core(), session))
+    except Exception as exc:  # noqa: BLE001 — строка состояния не должна падать
+        print(f"Arvix: {exc}")
+
+
+def cmd_remote(args: argparse.Namespace) -> None:
+    """Удалённый режим: журнал и бот живут на сервере, ноутбук ходит туда по SSH."""
+    from arvix.remote import DEFAULT_APP, run_remote, target
+
+    if args.action == "show":
+        found = target()
+        print(f"Удалённый режим: {found[0]} ({found[1]})" if found else "Локальный режим: журнал на этой машине.")
+        return
+    if args.action == "off":
+        write_user_config({"remote": {"host": ""}})
+        print("Локальный режим. Бот здесь: systemctl --user enable --now arvix-telegram")
+        return
+    host = (args.host or "").strip()
+    if not host:
+        sys.exit("Формат: arvix remote set user@host")
+    write_user_config({"remote": {"host": host, "app": DEFAULT_APP}})
+    os.environ.pop("ARVIX_LOCAL", None)
+    version = run_remote("arvix_cli.py", ["--version"], "", timeout=15)
+    if version is None:
+        sys.exit(f"Записал [remote] host = {host}, но сервер не ответил. Проверь `ssh {host}` и установку там: deploy/sync-server.sh {host}")
+    print(f"Удалённый режим: {host}, на сервере Arvix {version.strip()}. Команды, MCP-сервер и хук теперь ходят туда.")
+    if _service_active():
+        print("⚠ Бот на этой машине ещё работает — выключи: systemctl --user disable --now arvix-telegram (два бота с одним токеном мешают друг другу).")
 
 
 def cmd_brain_test(args: argparse.Namespace) -> None:
@@ -403,9 +581,19 @@ def build_parser() -> argparse.ArgumentParser:
     add("events", cmd_events, "лента событий").add_argument("--days", type=int, default=3)
     add("rebuild", cmd_rebuild, "проверить инварианты журнала")
     add("interview", cmd_interview, "интервью-знакомство в терминале").add_argument("--block")
-    add("setup", cmd_setup, "первичная настройка")
-    add("init-home", cmd_init_home, "создать дом Арвикса для Claude Code")
+    p = add("setup", cmd_setup, "первичная настройка (без флагов — диалог)")
+    p.add_argument("--vault", help="путь к Obsidian-хранилищу")
+    p.add_argument("--tz", help="часовой пояс, например Europe/Moscow")
+    p.add_argument("--home", help="дом Арвикса для Claude Code")
+    p.add_argument("--telegram", dest="telegram", action="store_true", default=None, help="привязать Telegram-бота (токен — скрытый ввод)")
+    p.add_argument("--no-telegram", dest="telegram", action="store_false", help="пропустить Telegram")
+    p.add_argument("-y", "--yes", action="store_true", help="без вопросов: текущие значения и флаги")
+    add("init-home", cmd_init_home, "создать или дополнить дом Арвикса для Claude Code")
     add("doctor", cmd_doctor, "проверка установки")
+    add("statusline", cmd_statusline, "строка состояния для Claude Code (stdin — JSON сессии)")
+    p = add("remote", cmd_remote, "удалённый режим: журнал на сервере (show / set user@host / off)")
+    p.add_argument("action", choices=("show", "set", "off"))
+    p.add_argument("host", nargs="?")
     add("desktop-mcp", cmd_desktop_mcp, "подключить к чату Claude Desktop")
     add("brain-test", cmd_brain_test, "пробный вызов головы").add_argument("text", nargs="?", default="Как у меня дела сегодня?")
     add("telegram", cmd_telegram, "запустить Telegram-бота")

@@ -42,6 +42,7 @@ class ArvixCase(unittest.TestCase):
         self.core = self.make_core()
 
     def tearDown(self) -> None:
+        self.core.close()
         clock.set_now(None)
         for key, value in self._env.items():
             if value is None:

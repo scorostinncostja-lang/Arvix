@@ -1,7 +1,7 @@
 {
   "name": "arvix",
   "displayName": "Arvix",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Арвикс — личный ментор в Claude Code: план дня, отчёты, XP/HP, Burnout Guard, интервью-знакомство, Obsidian и Telegram-бот на одном журнале событий.",
   "author": {
     "name": "Arvix"

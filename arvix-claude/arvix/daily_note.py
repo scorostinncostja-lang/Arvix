@@ -76,6 +76,7 @@ def _fields(core: Any, d: date) -> dict[str, Any]:
             values["wake"] = (bed + timedelta(minutes=day.sleep_min)).strftime("%H:%M")
     if day and day.deep_min:
         values["focus_min"] = day.deep_min
+        values["focus_minutes"] = day.deep_min  # заполняется только то поле, что есть в шаблоне человека
     sport = [t for t in st.tasks_on(d) if t.sphere == "sport"]
     if sport:
         values["workout"] = "да" if any(t.status == "done" for t in sport) else "нет"

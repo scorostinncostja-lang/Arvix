@@ -71,6 +71,9 @@ class Core:
         self._tx_depth = 0
         self.refresh(catch_up=False)
 
+    def close(self) -> None:
+        self.store.close()
+
     # --- время ------------------------------------------------------------
 
     @property

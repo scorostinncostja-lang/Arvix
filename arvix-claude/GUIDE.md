@@ -59,16 +59,29 @@
 
 ---
 
-## 2. Что уже стоит на ноутбуке
+## 2. Что стоит на ноутбуке
+
+Ставится одной командой `bash arvix-claude/deploy/install.sh` (повторный запуск — обновление):
 
 | Что | Где |
 |---|---|
-| Плагин Claude Code `arvix@arvix` | включён для всех проектов, файлы в `~/.local/share/arvix/app` |
+| Плагин Claude Code `arvix@arvix` | scope user — во всех проектах; читается из `~/.local/share/arvix/app` |
 | Команда `arvix` | `~/.local/bin/arvix` |
-| Конфиг | `~/.config/arvix/config.toml` (хранилище и часовой пояс уже записаны) |
+| Конфиг | `~/.config/arvix/config.toml` — пишет `arvix setup` |
 | Журнал | `~/.local/share/arvix/arvix.db` |
-| Дом Арвикса | `~/Arvix` — папка для Claude Code в режиме Арвикса |
-| Служба бота | `~/.config/systemd/user/arvix-telegram.service` (пока выключена) |
+| Дом Арвикса | `~/Arvix` — стиль Arvix, разрешения, строка состояния |
+| Службы | `arvix-telegram.service` (бот) и `arvix-backup.timer` (копия журнала с сервера) — выключены, пока не включишь |
+| Чат Claude Desktop | MCP-сервер `arvix` в `~/.config/Claude/claude_desktop_config.json` (`arvix desktop-mcp`) |
+
+Настройка без вопросов — хранилище, часовой пояс, дом; Telegram потом:
+
+```bash
+arvix setup --vault "$HOME/Документы/Obsidian Vault" --tz Europe/Moscow --home ~/Arvix --no-telegram --yes
+```
+
+`setup` сам находит в хранилище папку роадмапов, Inbox и шаблон ежедневного отчёта
+и записывает их в `[vault_paths]` (в этом хранилище: `02_Areas/Роадмапы`,
+`00_Inbox/Входящие.md`, `05_System/Templates/Daily Report.md`).
 
 Проверить всё одной командой:
 
@@ -76,7 +89,7 @@
 arvix doctor
 ```
 
-Пока там будет одна строка `FAIL Telegram` — это нормально, бот ещё не подключён.
+Пока там будет строка `FAIL Telegram токен и владелец` — это нормально, бот ещё не подключён.
 
 ---
 
@@ -93,11 +106,11 @@ arvix doctor
 
 ### 3.2. Привязать бота к себе
 ```bash
-arvix setup
+arvix setup --telegram --yes
 ```
-- Путь к хранилищу, часовой пояс и дом уже подставлены — жми Enter.
-- «Настроить Telegram-бота сейчас?» — Enter (да).
-- Вставь токен. Ввод скрыт, это нормально.
+- Хранилище, часовой пояс и дом остаются как есть (без `--yes` команда переспросит их — жми Enter).
+- Вставь токен. Ввод скрыт, это нормально. Токен вводится только в терминале — в чаты
+  и логи он не попадает.
 - Открой своего бота в Telegram и отправь `/start`.
 - В терминале появится «Сообщение от … (id …). Это ты?» — ответь `y`.
 
@@ -151,7 +164,9 @@ cd ~/Arvix && claude
 ```
 1. Claude Code спросит, доверяешь ли ты папке — ответь «да». Без этого он не включит
    разрешения папки и будет спрашивать про каждый инструмент Арвикса.
-2. Напиши `/arvix:onboarding` — начнётся знакомство.
+2. Ничего вводить не нужно: пока профиль пуст, Арвикс представится и **сам начнёт
+   знакомство** — сначала прочитает хранилище, потом блок «Ядро» по 3–4 вопроса.
+   Продолжить в другой раз — `/arvix:onboarding`.
 
 В приложении Claude Desktop: вкладка **Code** → новая сессия → папка `~/Arvix`.
 
@@ -159,6 +174,8 @@ cd ~/Arvix && claude
 - включён стиль ответа **Arvix**: Claude говорит как ментор, а не как ассистент;
 - при старте сессии хук подкладывает текущее состояние: режим, задачи, HP, долг, цели;
 - перед каждым сообщением — строка «сейчас / режим / день»;
+- внизу окна — **строка состояния**: `🟩 НОРМА · ур.1 · HP 100 · сегодня 2/5 · → 16:00 Алгоритмы · ctx 7%`.
+  Обновляется после каждого ответа и раз в минуту; в 🟥 и при выключенном менторе — без цифр;
 - инструменты `arvix` и чтение хранилища разрешены без вопросов.
 
 В других проектах скиллы и инструменты Арвикса тоже доступны (например, можно
@@ -468,7 +485,10 @@ XP = 10 × сложность × важность × подтверждение 
 | `arvix mentor on` · `arvix sos on/off` · `arvix silent` | режимы |
 | `arvix events --days 3` | лента событий |
 | `arvix rebuild` | проверить целостность журнала |
-| `arvix setup` · `arvix doctor` · `arvix init-home` · `arvix desktop-mcp` | настройка |
+| `arvix setup [--vault … --tz … --home … --telegram/--no-telegram --yes]` | настройка; без флагов — диалог |
+| `arvix doctor` · `arvix init-home` · `arvix desktop-mcp` | проверка, дом для Claude Code, чат Claude Desktop |
+| `arvix statusline` | строка состояния (её зовёт Claude Code; проверить: `echo '{}' \| arvix statusline`) |
+| `arvix remote show` · `arvix remote set arvix@host` · `arvix remote off` | удалённый режим: журнал на сервере |
 | `arvix brain-test "текст"` | пробный вызов «головы» (тратит лимит подписки) |
 
 ---
@@ -483,11 +503,19 @@ XP = 10 × сложность × важность × подтверждение 
 timezone = "Europe/Moscow"
 vault = "/home/dastan/Документы/Obsidian Vault"
 home = "/home/dastan/Arvix"
-arvix_folder = "Arvix"            # единственная папка хранилища, куда Арвикс пишет
 
 [telegram]
-token = "…"                       # пишет arvix setup
+token = "…"                       # пишет arvix setup --telegram
 owner_id = 123456789
+
+[vault_paths]                     # где в хранилище файлы Арвикса; setup находит сам, можно поправить
+roadmaps = "02_Areas/Роадмапы"
+inbox = "00_Inbox/Входящие.md"
+daily_template = "05_System/Templates/Daily Report.md"
+# profile, goals, notes, weekly, system — по умолчанию в 05_System/… и 03_Resources/…
+
+[remote]                          # только если бот и журнал живут на сервере (раздел 10)
+host = "arvix@HOST"
 
 [schedule]
 brief = "auto"                    # auto = подъём из профиля + 15 мин, или "07:30"
@@ -594,11 +622,14 @@ bash deploy/install.sh
 
 ### 9.7. Твой ежедневный отчёт в Obsidian
 Арвикс читает твою ежедневную заметку из `08_Daily Report/` (папку берёт из настроек
-Obsidian) и поля frontmatter: `wake`, `sleep`, `focus_min`, `workout`, `relapses`…
+Obsidian) и поля frontmatter: `energy`, `focus_minutes`, `wake`, `sleep`, `workout`…
 Заполнил отчёт — в брифинге и разборе Claude использует эти данные, а не переспрашивает.
-Отчёт дня создаётся **по твоему шаблону** (`05_System/Шаблоны/Шаблон отчёта`) при утреннем
-брифинге: дата, номер дня и недели, задачи чекбоксами. Вечером после разбора Арвикс заполняет
-только **пустые** поля (сон, подъём, фокус, тренировка) и вписывает итоги и разбор в свой блок
+Отчёт дня создаётся **по твоему шаблону** при утреннем брифинге: дата, номер дня и недели,
+задачи чекбоксами. Шаблон берётся из настроек Obsidian (Daily notes → Template); если там
+путь в пустоту, `arvix setup` находит файл в папке шаблонов (у тебя —
+`05_System/Templates/Daily Report.md`) и пишет его в `[vault_paths] daily_template`.
+Вечером после разбора Арвикс заполняет только **пустые** поля, и только те, что есть в твоём
+шаблоне (`focus_minutes`, `sleep`, `wake`, `workout`), и вписывает итоги и разбор в свой блок
 `<!-- arvix:день -->`. Что ты написал сам — не трогается.
 
 ### 9.8. Как Арвикс пишет в хранилище
@@ -608,14 +639,15 @@ Obsidian) и поля frontmatter: `wake`, `sleep`, `focus_min`, `workout`, `rel
 |---|---|
 | профиль | `05_System/Профиль Арвикса.md` |
 | цели | `05_System/Цели/` |
-| роадмапы | папка предмета в `02_Areas/` или `03_Resources/Роадмапы/` |
+| роадмапы | папка предмета в `02_Areas/` или `02_Areas/Роадмапы/` (нашёл `setup`) |
 | каркасы конспектов | `02_Areas/<Предмет>/Конспекты/` или `03_Resources/Обучение/` |
 | ретро недель | `05_System/Недели/` |
-| Inbox | `05_System/Inbox.md` |
+| Inbox | `00_Inbox/Входящие.md` (нашёл `setup`) |
 | журнал событий, выводы, бэкапы | `05_System/Арвикс/` |
 | ежедневные отчёты | `08_Daily Report/` (из настроек Obsidian) |
 
-Места меняются в `[vault_paths]` конфига. Правила записи зашиты в код:
+Места меняются в `[vault_paths]` конфига (`arvix setup` подставляет найденные, но не трогает
+то, что ты записал сам). Правила записи зашиты в код:
 - свои новые заметки создаёт где угодно;
 - твои — только дописывает в конец или обновляет свой блок `<!-- arvix:… -->`;
 - перезаписать твою заметку (или свою, которую ты поправил) — только после твоего явного «да», и сначала сохранит копию в `05_System/Арвикс/_backup/`;
@@ -650,41 +682,55 @@ Obsidian) и поля frontmatter: `wake`, `sleep`, `focus_min`, `workout`, `rel
 - хранилище Obsidian синхронизирует **Syncthing** в обе стороны (ноутбук ⇄ `~/vault` на сервере);
 - голова — `claude -p` на сервере по токену подписки из `claude setup-token` (`~/.config/arvix/claude.env`, права 600).
 
-### 10.1. Установка (уже сделано, повторить на новом сервере)
+### 10.1. Подготовка сервера (один раз, под root)
 ```bash
-# на сервере, под root
-apt install -y rsync sqlite3 syncthing curl
-useradd -m -s /bin/bash arvix && loginctl enable-linger arvix
-# ключ ноутбука → /home/arvix/.ssh/authorized_keys
-# под arvix
-curl -fsSL https://claude.ai/install.sh | bash
-bash src/arvix-claude/deploy/install.sh        # исходники залиты rsync с ноутбука
-claude setup-token                             # токен → ~/.config/arvix/claude.env: CLAUDE_CODE_OAUTH_TOKEN=…
-systemctl --user enable --now syncthing arvix-telegram
+ssh root@HOST 'PUBKEY="'"$(cat ~/.ssh/id_ed25519.pub)"'" bash -s' < arvix-claude/deploy/server-setup.sh
 ```
-Конфиг сервера — копия ноутбучного с путями `vault = "/home/arvix/vault"`, `home`, `claude_bin`.
+Скрипт ставит python3, rsync, sqlite3, syncthing; создаёт пользователя `arvix` с linger
+(его службы живут без входа), кладёт ключ ноутбука в `authorized_keys` и ставит Claude CLI
+под `arvix`. Если сервер переустанавливали, ssh откажет с `REMOTE HOST IDENTIFICATION HAS CHANGED`:
+убери старый отпечаток `ssh-keygen -R HOST` и подключись вручную, подтвердив новый.
 
-### 10.2. Ноутбук
-```toml
-# ~/.config/arvix/config.toml
-[remote]
-host = "arvix@89.22.232.51"
-```
-Бот на ноутбуке выключен (`systemctl --user disable --now arvix-telegram`): два бота с одним токеном мешают друг другу.
-`arvix setup` и `arvix desktop-mcp` работают локально, остальные команды — на сервере. `ARVIX_LOCAL=1 arvix …` — принудительно локально.
-
-### 10.3. Бэкапы
-- ноутбук: таймер `arvix-backup.timer` раз в сутки забирает целостный снимок базы
-  в `~/.local/share/arvix/backups/` (14 копий, `deploy/arvix-backup.sh`);
-- сервер: cron в 04:30 — копия по дню недели в `~/backups/` (7 копий).
-
-### 10.4. Обновление
+### 10.2. Арвикс на сервер (с ноутбука)
 ```bash
-rsync -a --delete --exclude __pycache__ arvix-claude/ arvix@89.22.232.51:src/arvix-claude/
-ssh arvix@89.22.232.51 'bash src/arvix-claude/deploy/install.sh'   # перезапустит бота
-bash arvix-claude/deploy/install.sh                                # ноутбук: плагин и CLI
+bash arvix-claude/deploy/sync-server.sh arvix@HOST --init
 ```
-Логи бота: `ssh arvix@89.22.232.51 journalctl --user -u arvix-telegram -f`.
+`--init` переносит конфиг ноутбука (тот же токен бота, часовой пояс, `[vault_paths]`)
+с серверными путями: `vault = ~/vault`, `home = ~/Arvix`, `claude_bin = ~/.local/bin/claude`.
+Дальше скрипт запускает там `install.sh`, `init-home` и `doctor`.
+
+Один раз на сервере под `arvix`:
+```bash
+claude setup-token          # токен подписки → ~/.config/arvix/claude.env как CLAUDE_CODE_OAUTH_TOKEN=…  (chmod 600)
+systemctl --user enable --now arvix-telegram syncthing
+```
+Syncthing: папка хранилища ноутбука ⇄ `/home/arvix/vault` в обе стороны (веб-интерфейс
+Syncthing на сервере — через `ssh -L 8384:localhost:8384 arvix@HOST`).
+
+### 10.3. Ноутбук — в удалённый режим
+```bash
+arvix remote set arvix@HOST                      # проверит ssh и запишет [remote] в конфиг
+systemctl --user disable --now arvix-telegram    # два бота с одним токеном мешают друг другу
+systemctl --user enable --now arvix-backup.timer # копия журнала раз в сутки
+```
+Теперь команда `arvix`, MCP-сервер в Claude Code/Desktop и хук ходят на сервер по SSH;
+строка состояния кэшируется на минуту. `arvix remote show` — где журнал, `arvix remote off` —
+обратно в локальный режим. `ARVIX_LOCAL=1 arvix …` — принудительно локально.
+`setup`, `init-home`, `doctor`, `desktop-mcp` всегда работают на этой машине.
+
+### 10.4. Бэкапы
+- ноутбук: `arvix-backup.timer` раз в сутки забирает целостный снимок базы
+  (`sqlite3 .backup`) в `~/.local/share/arvix/backups/`, 14 копий; хост берётся из `[remote]`.
+  Вручную: `bash ~/.local/share/arvix/app/deploy/arvix-backup.sh`;
+- сервер: cron в 04:30 — копия по дню недели в `~/backups/` (7 копий):
+  `30 4 * * * sqlite3 ~/.local/share/arvix/arvix.db ".backup ~/backups/arvix-$(date +\%u).db"`.
+
+### 10.5. Обновление
+```bash
+bash arvix-claude/deploy/sync-server.sh arvix@HOST   # сервер: код, install.sh, перезапуск бота
+bash arvix-claude/deploy/install.sh                  # ноутбук: плагин и CLI
+```
+Логи бота: `ssh arvix@HOST journalctl --user -u arvix-telegram -f`.
 
 ---
 
@@ -747,6 +793,8 @@ cp ~/.local/share/arvix/arvix.db ~/arvix-backup-$(date +%F).db
 | Режим «застрял» в 🟥 | возможно, выключен ментор: `/status`, вернуть — `/mentor on`; SOS снимается `/sos off` |
 | Сомнения в цифрах | `arvix rebuild` — проверка, что пересчёт журнала совпадает с текущим состоянием |
 | Обновил код в репозитории | `bash arvix-claude/deploy/install.sh` — скопирует и перезапустит бота |
+| Строка состояния пустая или с ошибкой | `echo '{}' \| arvix statusline` покажет причину; в удалённом режиме «сервер недоступен» — проверь `ssh HOST` |
+| `ssh`: REMOTE HOST IDENTIFICATION HAS CHANGED | сервер переустановлен или подменён: убедись, что это твой сервер, `ssh-keygen -R HOST`, подключись вручную |
 | Общая проверка | `arvix doctor` |
 
 ---
