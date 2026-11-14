@@ -55,6 +55,8 @@ arvix setup --telegram --yes        # только привязать бота: 
 | `[schedule] silent_weekday` | `-1` | тихий день каждую неделю (`6` = воскресенье), `-1` — нет |
 | `[brain] claude_bin · timeout_sec · vault_tools` | `claude` · `180` · `true` | путь к `claude`; таймаут головы; читает ли голова хранилище |
 | `[roles.voice] model` · `[roles.analyst] model` | `sonnet` · `sonnet` | модели голоса и совета — **только здесь** (правило №4) |
+| `[roles.stt] model` | `whisper-large-v3-turbo` | модель распознавания голоса; для OpenAI — их модель |
+| `[stt] engine · api_key · language · max_seconds · timeout_sec · command` | `off` · — · `ru` · `300` · `90` · — | голосовые (§8) |
 | `[mechanics] sleep_target_min` | `450` | норма сна, если распорядок не задан ([02-MECHANICS.md §7.1](02-MECHANICS.md#71-норма-сна--coresleep_target)) |
 | `[mechanics] deep_target_min` | `120` | норма глубокой работы, если в плане дня её нет |
 | `[mechanics] week_budget_min · week_deep_budget_min` | `1560` · `480` | бюджет недели без шаблонов |
@@ -141,4 +143,25 @@ bash arvix-claude/deploy/install.sh                  # ноутбук: плаг�
 Наружу уходит: в Anthropic — сообщения, контекст-пакет и прочитанные головой заметки; в Telegram — переписка с ботом.
 Больше никуда. Журнал, конфиг, токены — только на своих машинах, права 600. Голова на сервере видит всё хранилище,
 защищённых папок пока нет — R5 в [08-ROADMAP.md](08-ROADMAP.md). Не держи в хранилище то, что не готов отправить
-в модель: пароли, документы, чужие личные данные.
+в модель: пароли, документы, чужие личные данные. Голосовые с `groq` или `openai` уходят этому сервису; с `command` —
+никуда.
+
+## 8. Голосовые сообщения
+
+Настраивать на машине, где работает бот (в удалённом режиме — на сервере: `setup` всегда локален).
+
+**Groq — проще всего.** Ключ: console.groq.com → API Keys → Create, бесплатно. Затем:
+```bash
+ssh -t arvix@HOST '~/.local/bin/arvix setup --stt groq --yes && systemctl --user restart arvix-telegram'
+```
+Ключ вводится скрытно и ложится в `config.toml` (права 600).
+
+**Локально, без ключа и без отправки голоса:** нужны git, cmake, g++, ffmpeg.
+```bash
+ssh -t arvix@HOST 'bash ~/.local/share/arvix/app/deploy/stt-local.sh base'
+ssh -t arvix@HOST '~/.local/bin/arvix setup --stt command --yes && systemctl --user restart arvix-telegram'
+```
+`base` быстрее, `small` точнее по-русски и медленнее в 2–3 раза.
+
+Проверка — `arvix doctor` (строка «голосовые»). Сбой распознавания бот объясняет в чате: неверный ключ, лимит,
+недоступный сервис — и просит написать текстом.

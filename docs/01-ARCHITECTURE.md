@@ -189,7 +189,7 @@ daemon: getUpdates ждёт ≤ 20 с → Scheduler.tick() каждый обор
 | Планировщик | Тик в цикле long polling (≤ 20 с) | Нет отдельного процесса и jobstore; дедупликация ключами в журнале |
 | Второй мозг | Obsidian-хранилище на диске, поиск по основам слов | Векторный поиск на сотнях заметок не окупается |
 | Сервер | Любой VPS с systemd; rsync для хранилища | Чтобы бот писал, когда ноутбук закрыт |
-| Тесты | `unittest`, 114 тестов, без сети и без ИИ | `python3 -m unittest discover -s tests -t .` из `arvix-claude/` |
+| Тесты | `unittest`, 137 тестов, без сети и без ИИ | `python3 -m unittest discover -s tests -t .` из `arvix-claude/` |
 
 Чего в стеке нет и не будет: Docker, Postgres, Redis, очереди, TWA, WebSocket, векторная БД, несколько LLM-провайдеров.
 Прототип на этом стеке лежит в `archive/v1-docker/` — [09-DECISIONS.md D1](09-DECISIONS.md).
