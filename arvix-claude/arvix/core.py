@@ -743,7 +743,7 @@ class Core:
         created_by: str = "analyst",
         source: str = "l2",
     ) -> str:
-        """Директива без доказательств отклоняется (03-DATA-MODEL §3, инв. 6)."""
+        """Директива без доказательств отклоняется (03-DATA-MODEL §4, инв. 5)."""
         if kind not in DIRECTIVE_KINDS:
             raise ArvixError(f"kind директивы: {', '.join(DIRECTIVE_KINDS)}")
         ids = sorted({int(e) for e in evidence or []})

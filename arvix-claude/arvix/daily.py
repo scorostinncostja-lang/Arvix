@@ -1,7 +1,7 @@
 """Суточный цикл L0: закрытие дня, материализация шаблона, Протокол Ноль.
 
 catch_up() идемпотентен: его безопасно звать из любого процесса и сколько угодно
-раз — день закрывается ровно одним событием day_closed (02-MECHANICS §3, §7, §8).
+раз — день закрывается ровно одним событием day_closed (02-MECHANICS §3, §8, §9, §11).
 """
 
 from __future__ import annotations
@@ -123,7 +123,7 @@ def close_day(core: Any, d: date) -> dict[str, Any] | None:
             )
             if per_task:
                 damages.append((per_task, f"task_failed:{task.id}", None))
-        # Игнор весь день — один штраф вместо стены за каждую задачу (02-MECHANICS §7).
+        # Игнор весь день — один штраф вместо стены за каждую задачу (02-MECHANICS §8).
         if ignored:
             damages.append((rules.HP_IGNORE_DAY, "ignore_day", None))
 

@@ -142,7 +142,7 @@ def cmd_events(args: argparse.Namespace) -> None:
 
 
 def cmd_rebuild(args: argparse.Namespace) -> None:
-    """Проверка инвариантов 03-DATA-MODEL §3 на живой базе."""
+    """Проверка инвариантов 03-DATA-MODEL §4 на живой базе."""
     core = Core()
     events = core.store.read(0)
     fresh = State.rebuild(events)

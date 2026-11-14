@@ -150,7 +150,7 @@ def guard_mode(
 
 def penalty_multiplier(*, mode: str, mentor_enabled: bool, hp: int, silent: bool, ignore_days: int, protocol_zero: bool) -> float:
     """🟥, выключенный ментор, тихий день, Протокол Ноль и 3+ дня игнора замораживают
-    штрафы; при HP ≤ 30 они действуют вполовину (02-MECHANICS §3, §6, §7)."""
+    штрафы; при HP ≤ 30 они действуют вполовину (02-MECHANICS §3, §6, §8)."""
     if silent or mode == "red" or not mentor_enabled or ignore_days >= 3 or protocol_zero:
         return 0.0
     if hp <= HP_RECOVERY_THRESHOLD:

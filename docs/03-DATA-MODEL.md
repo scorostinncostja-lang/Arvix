@@ -1,225 +1,176 @@
 # 03 · Модель данных
 
-## 1. Принцип: Event Log + проекции
+## 1. Принцип: журнал событий + свёртка
 
-Всё, что происходит, пишется в **append-only** таблицу `events`. Состояние (XP, HP, стрики, статистика) — **производное**, считается из событий.
+Всё, что происходит, пишется в **append-only** таблицу `events`. Состояние (XP, HP, задачи, режим, профиль) —
+производное: `State.rebuild(events)` сворачивает журнал с нуля, `State.apply(event)` — инкрементально.
+Инвариант «rebuild = накопленный apply» проверяется тестом на случайной истории из 220 операций.
 
 Почему так:
-- Формулы XP/HP будут меняться (они точно будут меняться) — с логом ты пересчитываешь историю, а не теряешь её
-- Любой отчёт за любой период строится из одной таблицы
-- Analyst получает сырую ленту, а не чью-то интерпретацию
-- Невозможно «потерять» историю кривым UPDATE
+- формулы XP/HP будут меняться — с журналом история пересчитывается, а не теряется;
+- любой отчёт за любой период строится из одной таблицы;
+- аналитик получает сырую ленту с id событий, а не чью-то интерпретацию;
+- невозможно «потерять» историю кривым UPDATE — его запрещает триггер.
 
 ```sql
+-- arvix-claude/arvix/store.py
 CREATE TABLE events (
-    id          BIGSERIAL PRIMARY KEY,
-    at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    local_date  DATE NOT NULL,              -- дата в Europe/Moscow, для группировок
-    kind        TEXT NOT NULL,
-    entity_id   UUID,                       -- на что ссылается (task, goal, expense...)
-    payload     JSONB NOT NULL DEFAULT '{}',
-    source      TEXT NOT NULL,              -- user | bot | twa | esp32 | scheduler | l2
-    CONSTRAINT  events_kind_check CHECK (kind <> '')
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    at          TEXT NOT NULL,            -- ISO 8601 с часовым поясом
+    local_date  TEXT NOT NULL,            -- дата в часовом поясе человека, для группировок
+    kind        TEXT NOT NULL CHECK (kind <> ''),
+    entity_id   TEXT,                     -- id задачи, цели, факта…
+    payload     TEXT NOT NULL DEFAULT '{}',  -- JSON
+    source      TEXT NOT NULL             -- telegram | claude | cli | user | bot | scheduler | l0 | l1 | l2
 );
-CREATE INDEX ON events (local_date);
-CREATE INDEX ON events (kind, at DESC);
-CREATE INDEX ON events USING GIN (payload);
+CREATE INDEX ix_events_date ON events (local_date);
+CREATE INDEX ix_events_kind ON events (kind, id);
+CREATE TRIGGER events_no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+CREATE TRIGGER events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+
+-- Транспортное состояние, не доменное: offset Telegram, чего бот ждёт, черновик распорядка, кэш хука.
+CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ```
 
-### Каталог событий
+Файл: `~/.local/share/arvix/arvix.db`, режим WAL, `busy_timeout` 15 с. Запись — только через `Core.emit` внутри
+`Core.tx()` (`BEGIN IMMEDIATE`): при ошибке память откатывается вслед за базой полным пересчётом.
 
-| kind | payload | source |
+Источники `telegram`, `claude`, `cli`, `user` означают «человек что-то сделал сам» — это вход протокола игнора
+(`USER_SOURCES`). `scheduler`, `l0`, `bot`, `l1`, `l2` — действия системы.
+
+## 2. Каталог событий
+
+Обработчики — методы `State._on_<kind>`. Событие без обработчика допустимо: оно остаётся в журнале для аналитика.
+
+### Профиль и знакомство
+| kind | payload | источник |
 |---|---|---|
-| `task_created` | task snapshot | user/twa/l2 |
-| `task_started` | task_id, at | user/esp32 |
-| `task_completed` | task_id, quality, proof_kind, xp | user |
-| `task_failed` | task_id, reason | user/scheduler |
-| `task_deferred` | task_id, to | user |
-| `task_debted` | task_id | scheduler |
-| `proof_submitted` | task_id, kind, file_id, exif_ok, phash, verdict | user |
-| `proof_suspicious` | task_id, flags[] | l0 |
-| `sleep_recorded` | duration_min, bedtime, quality, source | user/bridge |
-| `biometrics_recorded` | steps, hr_avg, hr_rest, spo2, stress, source | bridge |
-| `focus_session` | duration_min, device, task_id, interruptions | esp32/twa |
-| `xp_awarded` / `hp_changed` | amount, reason, balance_after | l0 |
-| `shield_used` | reason, damage_prevented | l0 |
-| `mode_changed` | from, to, trigger | l0 |
-| `quota_met` / `quota_missed` | sphere, target, actual | l0 |
-| `expense_logged` | amount, category, impulse | user |
-| `directive_created` | directive snapshot | l2 |
-| `insight` | text, evidence[] | l2 |
-| `debrief_completed` | answers, rating | user |
-| `silent_day_result` | completion, notes | l0 |
-| `message_in` / `message_out` | text, tokens, model, latency_ms | bot |
-| `learning_question` | question, answered_with_hint \| answered_directly | l1 |
-| `safety_flag` | level, note | l0 |
+| `profile_set` | `key, value` — `name`, `address` (m/f), `city`, `timezone`, `bedtime_target`, `wake_target`, `bedtime_actual`, `wake_actual`, `sleep_target_min`, `main_goal`, `main_goal_why`, `support_person`, `week_budget_min`, `season_start`, `program_start`, `currency`, произвольные | интервью (l0), человек, модель |
+| `interview_answer` | `qid, block, question, answer` | человек |
+| `interview_skipped` / `interview_reset` | `qid` (+ `reason`) | человек |
+| `goal_set` | `id, title, why, kind (dream·main·yearly·quarterly·milestone), deadline, metric, sphere, parent_id, status (active·done·dropped)` — повторное событие с тем же `id` обновляет; у цели верхнего уровня `why` обязательно, у этапа (`parent_id`) — нет | человек, модель |
+| `trait_set` | `id, kind (fear·weakness·bad_habit·good_habit·trigger), title, description, severity 1–5, counter_strategy` | модель, человек |
+| `fact_remembered` / `fact_retracted` | `id, topic, fact, confidence 1–5, valid_until` / `id, reason` | модель, человек |
+| `template_set` | `weekdays[], day_type, blocks[{start, duration, title, sphere, importance, difficulty, deep_work, tags, fixed?}]` | человек, модель |
+| `mentor_toggled` | `enabled, by` | **только человек** (CLI, `/mentor`) |
 
-### Проекции
+### День и задачи
+| kind | payload | источник |
+|---|---|---|
+| `day_materialized` | `date, day_type` | scheduler |
+| `task_created` | снимок задачи: `id, title, sphere, importance, difficulty, date, start, duration_min, deep_work, proof, source, tags` | человек, модель, scheduler |
+| `task_started` | `id, at` | человек |
+| `task_completed` | `id, done_pct, xp, report, proof_kind, deep_min` | человек, модель |
+| `task_failed` | `id, reason, debt, hp` | человек, модель, scheduler (`no_report`) |
+| `task_reason` | `id, reason` — причина, присланная позже | человек |
+| `task_deferred` | `id, from, to, date, minutes` | человек, модель |
+| `task_cancelled` | `id, reason` | человек, модель |
+| `debt_written_off` | `id, justification` | человек, модель |
+| `sleep_recorded` | `duration_min, bedtime, date, source` | человек, модель |
+| `focus_session` | `duration_min, task_id` — без задачи идёт в глубокую работу дня | человек |
+| `expense_logged` | `amount, currency, category, impulse, note` | человек, модель |
+| `social_contact` | `who` | человек, модель |
+| `reason_declared` | `reason` — причина плохого дня для щита | человек, модель |
+| `silent_day` | `date` | человек, scheduler |
+| `debrief_completed` | `date, answers, conclusion` | человек, модель |
+| `learning_question` | `question, mode (hint·direct)` | модель |
+| `note_captured` | `text, path` — Inbox | человек, модель |
+| `note_written` | `path, sha, owned, mode, created, backup` — чтобы отличать свои заметки от чужих | l0 |
 
-Материализованные таблицы, обновляются транзакционно вместе с записью события. Полный пересчёт из лога доступен командой `arvix rebuild-projections`.
+### Счёт и режимы (пишет только код)
+| kind | payload | источник |
+|---|---|---|
+| `xp_awarded` | `amount ≥ 0, reason (task:<id>, full_day, sleep_norm, quota:<sphere>, silent_day), date?` | l0, scheduler |
+| `hp_changed` | `amount, reason, date?, once_key?` — отрицательные попадают в `Day.damages` для щита | l0, scheduler |
+| `shield_used` | `date, reason, damage_prevented, target` | scheduler |
+| `mode_changed` | `from, to, trigger` | l0, scheduler |
+| `sos` | `on, until, note` — ручной 🟥 на 24 ч | человек, модель |
+| `protocol_zero` | `on, until` | scheduler |
+| `safety_flag` | `level (high·critical), note` — выключает ментора; `info`/`low` в журнал не пишутся, а становятся фактом | l0, l1, модель |
+| `quota_result` | `sphere, target, actual, met, week` | scheduler |
+| `budget_set` | `week_min, deep_min, factors{}, streaks{}, verdict (up·down·hold), reason, change, from_*` | scheduler |
+| `day_closed` | `date, completion, total, done, deep_min, sleep_min, sp, ignored, penalty_mult, hp_end, mode` | scheduler |
 
-- `state_daily(local_date, completion_pct, deep_minutes, sleep_min, xp, hp_end, sp, mode)`
-- `state_current(xp_total, level, hp, streak_days, season_id, sp_avg, mode, autonomy_score)`
-- `state_weekly(week_start, budget_used_min, deep_min, quotas JSONB, expenses JSONB)`
+### Совет и переписка
+| kind | payload | источник |
+|---|---|---|
+| `directive_created` | `id, kind (focus·warning·schedule_change·insight·quota_push), text, voice_hint, priority 1–5, evidence[id…] ≥ 1, valid_until, created_by` | l2, модель |
+| `insight` | `text, evidence[]` | l2, модель |
+| `message_in` | `text, channel` | telegram |
+| `message_out` | `text ≤ 600, key, channel` — `key` дедуплицирует проактив (`brief:<дата>`, `rem5:<id>:<start>`, `debrief:<дата>`…) | bot |
 
----
-
-## 2. Основные таблицы
-
-```sql
--- Профиль (одна строка)
-CREATE TABLE profile (
-    id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    name TEXT, birth_date DATE, city TEXT, country TEXT,
-    institution TEXT, height_cm INT, weight_kg NUMERIC(5,2),
-    timezone TEXT DEFAULT 'Europe/Moscow',
-    sleep_target_min INT DEFAULT 465,
-    bedtime_target TIME DEFAULT '23:30',
-    wake_target TIME DEFAULT '07:15',
-    mentor_enabled BOOLEAN DEFAULT true,   -- выключается safety-контуром
-    onboarding_stage TEXT DEFAULT 'core',
-    extra JSONB DEFAULT '{}',              -- всё, что Арвикс дособрал в диалоге
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Цели и мечты (иерархия)
-CREATE TABLE goals (
-    id UUID PRIMARY KEY, parent_id UUID REFERENCES goals(id),
-    title TEXT NOT NULL, kind TEXT,         -- dream | main | yearly | quarterly | milestone
-    sphere TEXT, why TEXT,                  -- зачем — обязательное поле
-    metric TEXT, target_value NUMERIC, current_value NUMERIC,
-    deadline DATE, status TEXT DEFAULT 'active',
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Слабости, страхи, привычки — собираются интервью, не формой
-CREATE TABLE traits (
-    id UUID PRIMARY KEY,
-    kind TEXT NOT NULL,                     -- fear | weakness | bad_habit | good_habit | trigger
-    title TEXT NOT NULL, description TEXT,
-    severity SMALLINT,                      -- 1..5
-    counter_strategy TEXT,                  -- что делаем, когда срабатывает
-    status TEXT DEFAULT 'active',
-    last_triggered_at TIMESTAMPTZ
-);
-
--- Шаблоны расписания
-CREATE TABLE day_templates (
-    id UUID PRIMARY KEY, kind TEXT,         -- study | work | deep | recovery | silent
-    weekday SMALLINT,                       -- 0..6, null = не привязан
-    blocks JSONB NOT NULL                   -- [{start, duration, sphere, title, deep_work}]
-);
-
-CREATE TABLE tasks (
-    id UUID PRIMARY KEY,
-    title TEXT NOT NULL, sphere TEXT NOT NULL,
-    importance SMALLINT NOT NULL, difficulty SMALLINT NOT NULL,
-    planned_start TIMESTAMPTZ, planned_duration_min INT,
-    deep_work BOOLEAN DEFAULT false,
-    proof TEXT NOT NULL DEFAULT 'confirm',
-    status TEXT NOT NULL DEFAULT 'planned',
-    actual_start TIMESTAMPTZ, actual_end TIMESTAMPTZ,
-    quality SMALLINT, goal_id UUID REFERENCES goals(id),
-    source TEXT DEFAULT 'user', recurrence JSONB,
-    debt_since DATE,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX ON tasks (planned_start);
-CREATE INDEX ON tasks (status) WHERE status IN ('planned','active','debt');
-
-CREATE TABLE directives (
-    id UUID PRIMARY KEY, kind TEXT NOT NULL,
-    text TEXT NOT NULL, voice_hint TEXT,
-    priority SMALLINT DEFAULT 3,
-    evidence JSONB,                          -- ссылки на события, на которых основана
-    valid_until DATE, created_by TEXT,       -- какая роль совета породила
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE biometrics (
-    local_date DATE PRIMARY KEY,
-    sleep_min INT, deep_sleep_min INT, bedtime TIME, wake_time TIME,
-    sleep_quality SMALLINT, hr_rest INT, hr_avg INT,
-    spo2 SMALLINT, stress_avg SMALLINT, steps INT, active_min INT,
-    source TEXT NOT NULL,                    -- manual | healthconnect | export
-    raw JSONB
-);
-
-CREATE TABLE expenses (
-    id UUID PRIMARY KEY, amount NUMERIC(12,2) NOT NULL,
-    currency TEXT DEFAULT 'RUB', category TEXT NOT NULL,
-    note TEXT, impulse BOOLEAN DEFAULT false,
-    at TIMESTAMPTZ DEFAULT now(), goal_id UUID REFERENCES goals(id)
-);
-
-CREATE TABLE seasons (
-    id SERIAL PRIMARY KEY, started_on DATE, ends_on DATE,
-    start_rank TEXT, final_rank TEXT, sp_avg NUMERIC(5,2)
-);
-
-CREATE TABLE devices (
-    id UUID PRIMARY KEY, kind TEXT,          -- esp32 | android_bridge
-    name TEXT, token UUID NOT NULL UNIQUE,
-    last_seen_at TIMESTAMPTZ, firmware TEXT
-);
-
--- Заметки Obsidian: чанки + вектор
-CREATE TABLE note_chunks (
-    id BIGSERIAL PRIMARY KEY,
-    file_path TEXT NOT NULL, heading_path TEXT,
-    content TEXT NOT NULL, tokens INT,
-    content_hash TEXT NOT NULL,
-    embedding vector(768),
-    tsv tsvector GENERATED ALWAYS AS (to_tsvector('russian', content)) STORED,
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX ON note_chunks USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX ON note_chunks USING GIN (tsv);
-CREATE UNIQUE INDEX ON note_chunks (file_path, content_hash);
-
--- Долговременная память Арвикса о пользователе (факты, не диалоги)
-CREATE TABLE memory_facts (
-    id UUID PRIMARY KEY, topic TEXT NOT NULL,
-    fact TEXT NOT NULL, confidence SMALLINT DEFAULT 3,
-    source_event_id BIGINT, embedding vector(768),
-    valid_until DATE, created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE roadmaps (
-    id UUID PRIMARY KEY, title TEXT, goal_id UUID REFERENCES goals(id),
-    status TEXT DEFAULT 'active',
-    nodes JSONB NOT NULL,   -- [{id, title, sources[], est_hours, deps[], status, checkpoint}]
-    created_at TIMESTAMPTZ DEFAULT now(), reviewed_at TIMESTAMPTZ
-);
-```
-
----
-
-## 3. Инварианты, которые проверяются тестами
-
-1. Пересчёт проекций из `events` даёт те же числа, что накопленное состояние — **всегда**
-2. `hp` ∈ [0, 100], `xp_total` монотонно не убывает
-3. Задача не может перейти `done → planned` (только новое событие с новой задачей)
-4. Сумма `xp_awarded` = `state_current.xp_total`
-5. Ни одно событие не удаляется и не редактируется. Исправление = компенсирующее событие
-6. Каждая директива имеет `evidence` — минимум один `event_id`. Директива без доказательств отклоняется
-7. При `mentor_enabled = false` ни один тон-блок «жёсткий» не попадает в промпт (проверяется юнит-тестом на сборщике контекста)
-
----
-
-## 4. Экспорт
-
-`/export` и еженедельный cron генерируют в Obsidian-репозиторий:
+## 3. Состояние — `State`
 
 ```
-Arvix/
-  Daily/2026-09-11.md          # разбор дня, метрики, события
-  Weekly/2026-W37.md           # ретро
-  Goals/<goal>.md              # цель, прогресс, связанные задачи
-  Roadmaps/<title>.md          # роадмап в виде чеклиста
-  Insights.md                  # накопленные выводы Analyst
-  _raw/events.jsonl            # полный лог
-  _raw/dump.sql.gz             # дамп БД
+profile{}            goals{id→}        traits{id→}       facts{id→}        directives{id→}
+insights[]           templates{weekday→{day_type, blocks}}                 tasks{id→Task}
+days{date→Day}       interview{qid→answer}  interview_skipped{}
+xp_total  hp  mode  mode_trigger  mentor_enabled  sos_until  zero_until
+shields[dates]  expenses[]  learning[]  safety[]  penalized{once_key}  notes{path→sha}  budget{}
+last_user_at  last_event_id  first_date
 ```
 
-Формат — обычный Markdown с YAML frontmatter, читается Obsidian напрямую. Это и бэкап, и второй мозг, и гарантия, что ты не заперт в чужой базе.
+`Day`: `sleep_min, bedtime, deep_min, xp, hp_end, debrief, user_actions, msgs_out, out_keys, silent, reason,
+materialized, day_type, social, expenses, damages[], closed{}`.
+
+Производные величины (методы `State`): `tasks_on(date)`, `debts()`, `completion(date)` — доля выполнения с учётом
+частичного, `level()`, `series(until, n, attr)`, `streak(today)` — дни подряд с ≥ 70 % (дни без задач не рвут),
+`ignore_streak(until)`, `shields_used(date)`, `active_directives(today)`, `week_stats(date)` — продуктивные минуты,
+глубокая работа, квоты, траты, `autonomy(today, days=28)`.
+
+Снаружи `State` не меняется: любое изменение — новое событие через `Core.emit`. Другие процессы подхватывают чужие
+события через `Core.refresh()` (читает `events` с `id > last_event_id`).
+
+## 4. Инварианты, которые проверяются тестами
+
+| # | Инвариант | Тест |
+|---|---|---|
+| 1 | Пересчёт из журнала даёт те же XP, HP, статусы задач и закрытия дней, что накопленное состояние | `test_rebuild_equals_incremental_on_random_history` |
+| 2 | `hp ∈ [0, 100]`; `xp_total` не убывает; сумма `xp_awarded` = `xp_total` | там же, `arvix rebuild` на живой базе |
+| 3 | `done` не возвращается в `planned`; повторное закрытие или провал закрытой задачи отклоняется | `test_done_cannot_go_back` |
+| 4 | События не редактируются и не удаляются — триггеры SQLite | `test_append_only` |
+| 5 | Директива без `evidence` или со ссылкой на несуществующее событие отклоняется | `test_directive_requires_evidence`, `test_directive_needs_evidence` |
+| 6 | При `mentor_enabled = false` и в 🟥 жёсткие тон-блоки, жёсткие примеры и `decision_rule` не попадают в промпт; контекст без метрик | `tests/test_prompt_safety.py` |
+| 7 | Включить ментора может только человек: ни инструмента, ни `profile_set` | `test_mentor_cannot_be_reenabled_via_profile`, `test_no_tool_can_reenable_mentor` |
+| 8 | Один день закрывается ровно одним `day_closed`, сколько бы процессов ни звали `catch_up` | `test_catch_up_is_idempotent` |
+| 9 | Имена моделей отсутствуют в коде | `test_no_model_names_in_code` |
+| 10 | Сгенерированные файлы (стиль, claude.ai) соответствуют конституции | `test_generated_assets_are_fresh` |
+
+`arvix rebuild` прогоняет инварианты 1–2 на живой базе и выходит с кодом 1 при расхождении.
+
+## 5. Obsidian — второе хранилище
+
+Арвикс работает **в структуре хранилища человека**, а не в отдельной папке. Места — `[vault_paths]` конфига
+(`arvix setup` находит их сам: папку роадмапов, Inbox, шаблон ежедневного отчёта):
+
+| Что | По умолчанию | Ключ |
+|---|---|---|
+| профиль (блок `arvix:profile`) | `05_System/Профиль Арвикса.md` | `profile` |
+| цели | `05_System/Цели/` | `goals` |
+| роадмапы | `03_Resources/Роадмапы/` или папка предмета | `roadmaps` |
+| каркасы конспектов | `03_Resources/Обучение/` или `02_Areas/<Предмет>/Конспекты/` | `notes` |
+| ретро недель | `05_System/Недели/` | `weekly` |
+| Inbox | `05_System/Inbox.md` | `inbox` |
+| журнал событий, выводы, бэкапы перезаписей | `05_System/Арвикс/` | `system` |
+| ежедневные заметки и их шаблон | из `.obsidian/daily-notes.json` | `daily`, `daily_template` |
+
+Правила записи — код (`vault.py`), не обещание:
+- новую заметку можно создать в любой папке, кроме служебных (`.obsidian`, `.trash`, `.git`…); путь вне хранилища отклоняется;
+- в чужую заметку — только дописать в конец (`append`) или обновить **свой** помеченный блок `<!-- arvix:имя --> … <!-- /arvix:имя -->`; текст человека вне блока не трогается;
+- перезаписать целиком — только свою заметку, которую человек с тех пор не менял (сверка sha из `note_written`), либо по явному согласию (`force`); перед перезаписью — копия в `05_System/Арвикс/_backup/`;
+- удалять Арвикс не умеет вообще.
+
+Ежедневная заметка (`daily_note.py`): создаётся утром из шаблона человека (дата, номер дня и недели программы,
+задачи чекбоксами); вечером заполняются **только пустые** поля frontmatter, и только те, что есть в шаблоне
+(`sleep`, `wake`, `focus_min`/`focus_minutes`, `workout`), итоги и разбор — в блок `arvix:день`.
+
+## 6. Экспорт ✅ `export.py`
+
+`/export`, `arvix export [--days N]`, MCP `export`:
+- блок `arvix:profile` в файле профиля — поля профиля, дерево целей, черты, память, все ответы интервью по блокам;
+- блок `arvix:insights` в `05_System/Арвикс/Выводы.md` — инсайты и директивы с датами;
+- итоги каждого из последних N дней в их ежедневных заметках (только существующих);
+- `05_System/Арвикс/Журнал событий.md` — полный журнал JSONL, по строке на событие.
+
+Всё, что человек допишет вне блоков, переживает любой повторный экспорт. Удаление плагина журнал не трогает:
+данные лежат отдельно специально.

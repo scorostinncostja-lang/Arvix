@@ -1,91 +1,62 @@
 # Arvix
 
-Личный ИИ-ментор для одного владельца (single-user): планирует день, напоминает о задачах,
-считает XP/HP, следит за режимом нагрузки (Burnout Guard) и разговаривает через Telegram.
-Подробное видение — в [docs/00-VISION.md](docs/00-VISION.md).
+Личный ИИ-ментор одного человека. Знает план и цели, сам напоминает, спрашивает результат, считает XP, HP и режим
+нагрузки кодом, вечером проводит разбор, учит по сократовскому методу — и постепенно становится не нужен.
 
-## Arvix Lite — Арвикс в Claude Code и Telegram
+- **Telegram** — день: брифинг, напоминания с кнопками, отчёты, разбор, ретро. Круглосуточно на сервере.
+- **Claude Code** — планы, цели, роадмапы, учёба, работа с Obsidian: плагин со стилем, скиллами и инструментами.
+- **Obsidian** — профиль, цели, роадмапы, ежедневные отчёты прямо в структуре твоего хранилища.
+- **Голова** — `claude -p` по подписке Claude, без API-ключей. Кончился лимит — учёт и напоминания работают дальше.
 
-Лёгкая версия без Docker и Postgres: плагин Claude Code (стиль, скиллы, MCP, хуки) и
-Telegram-бот на одном журнале событий в SQLite. Установка и устройство —
-[arvix-claude/README.md](arvix-claude/README.md).
+## Быстрый старт
 
-## Концепция L0 / L1 / L2
+```bash
+bash arvix-claude/deploy/install.sh     # плагин Claude Code, CLI arvix, systemd-юниты
+arvix setup                             # хранилище, часовой пояс, дом, Telegram-бот
+systemctl --user enable --now arvix-telegram
+cd ~/Arvix && claude                    # Арвикс в Claude Code сам начнёт знакомство
+```
 
-| Слой | Роль | Правило |
-|------|------|---------|
-| **L0 — Рефлексы** | Чистый детерминированный Python: таймеры, напоминания, расчёт XP/HP, Burnout Guard, квоты | Если задачу решает формула или шаблон — ИИ не вызывается |
-| **L1 — Голос** | Быстрый ответ пользователю (< 1.5 с), максимум 1–2 итерации вызова tools | XP/HP не считает — только вызывает tools из L0 |
-| **L2 — Совет** | Тяжёлая аналитика (Analyst, Planner, Chief) | Только в фоне, никогда не в цепочке ответа; результат пишет в `directives` |
+Проверка — `arvix doctor`. Пошагово, с сервером и всеми командами — [arvix-claude/GUIDE.md](arvix-claude/GUIDE.md).
 
-Состояние хранится как **Event Log + проекции**: любое изменение идёт через `emit()` в
-`core/events/log.py`, прямые `UPDATE` проекций (`state_current`, `state_daily`, `state_weekly`) запрещены.
-Инвариант «`rebuild()` = накопленный `apply()`» проверяется в `tests/test_projections.py`.
+## Три слоя
 
-## Стек
+| Слой | Что делает | Правило |
+|---|---|---|
+| **L0 — рефлексы** | Напоминания, XP, HP, долг, режим Burnout Guard, автонагрузка, закрытие дня — чистый Python | Если задачу решает формула или шаблон — модель не вызывается |
+| **L1 — голос** | Ответ в чате: понять сообщение, ответить, вернуть действия, которые исполнит код | Один вызов на сообщение; числа модель только читает |
+| **L2 — совет** | Вечерний разбор и недельное ретро: паттерны с доказательствами → директивы | Только в фоне или по просьбе, никогда не в цепочке ответа |
 
-Версии — из `pyproject.toml` и `docker-compose.yml`:
-
-- Python 3.12+, FastAPI + uvicorn, aiogram 3.x
-- PostgreSQL 16 (образ `pgvector/pgvector:pg16`), SQLAlchemy 2.0 async + asyncpg, Alembic
-- Redis 7, APScheduler
-- LLM: единый клиент `openai.AsyncOpenAI` для всех провайдеров; модели и параметры — в `core/ai/roles.yaml`
-- Caddy (реверс-прокси, TLS)
-- Тесты и линтер: pytest + pytest-asyncio, ruff
+Состояние — свёртка append-only журнала событий в SQLite: изменить прошлое нельзя даже случайно.
 
 ## Структура
 
 ```
-core/            # пакет приложения
-  ai/            # провайдеры, router, constitution, context, tools
-  api/           # FastAPI: авторизация Telegram initData и т.д.
-  bot/           # aiogram: handlers, keyboards, templates, states
-  db/            # модели SQLAlchemy, сессия, миграции
-  domain/        # бизнес-логика (tasks, ...)
-  events/        # log.py (emit), kinds.py, projections.py
-  scheduler/     # APScheduler-задачи, materialize
-  utils/
-tests/           # pytest
-docs/            # спецификация
-firmware/        # ESP32
+arvix-claude/        продукт: ядро arvix/, плагин Claude Code, Telegram-бот, CLI, deploy/, 114 тестов
+docs/                спецификация — что и почему
+firmware/            ESP32-таймер (заморожен, работает автономно)
+archive/v1-docker/   прототип v1 на Docker/Postgres/Redis — не используется, оставлен для истории
 ```
 
 ## Документация
 
-Спецификация лежит в `docs/`:
+- [docs/README.md](docs/README.md) — индекс спецификации, правила и словарь
+- [docs/00-VISION.md](docs/00-VISION.md) — проблема, принципы, анти-цели, критерии успеха
+- [docs/08-ROADMAP.md](docs/08-ROADMAP.md) — что сделано и что дальше
+- [docs/09-DECISIONS.md](docs/09-DECISIONS.md) — журнал решений и открытые вопросы
+- [arvix-claude/GUIDE.md](arvix-claude/GUIDE.md) — руководство пользователя
 
-- [00-VISION.md](docs/00-VISION.md) — видение и принципы
-- [01-ARCHITECTURE.md](docs/01-ARCHITECTURE.md) — архитектура, три слоя
-- [02-MECHANICS.md](docs/02-MECHANICS.md) — механики (задачи, XP/HP, режимы)
-- [03-DATA-MODEL.md](docs/03-DATA-MODEL.md) — модель данных, Event Log и проекции
-- [04-AI-LAYER.md](docs/04-AI-LAYER.md) — ИИ-слой
-- [05-BOT-TWA.md](docs/05-BOT-TWA.md) — бот и Telegram Web App
-- [06-IOT-BIOMETRICS.md](docs/06-IOT-BIOMETRICS.md) — IoT и биометрия
-- [07-SECOND-BRAIN.md](docs/07-SECOND-BRAIN.md) — второй мозг и обучение
-- [08-ROADMAP.md](docs/08-ROADMAP.md) — фазы реализации
-- [09-PHASE-0-1-PLAN.md](docs/09-PHASE-0-1-PLAN.md) — пошаговый план фаз 0 и 1
-- [10-ESP32-BUILD.md](docs/10-ESP32-BUILD.md) — сборка умного таймера
+Правила для ИИ-ассистента, который правит этот репозиторий, — [CLAUDE.md](CLAUDE.md).
 
-Правила для ИИ-ассистента — в `CLAUDE.md` и `.clinerules/`.
-
-## Запуск
+## Разработка
 
 ```bash
-cp .env.example .env     # заполнить BOT_TOKEN, OWNER_ID, POSTGRES_PASSWORD, ключи провайдеров
-make up                  # docker compose up -d --build
-make migrate             # alembic upgrade head
-make test                # pytest внутри контейнера core
-make lint                # ruff check core внутри контейнера core
+cd arvix-claude
+python3 -m unittest discover -s tests -t .    # без сети и без ИИ
+python3 scripts/build_assets.py               # стиль Claude Code и файлы claude.ai из конституции
+bash deploy/install.sh                        # выкатить на эту машину
 ```
-
-Остальные цели `Makefile`: `make down`, `make logs`, `make revision m="описание"`.
-
-> **Важно:** образ `core` копирует код при сборке (`COPY core`, `COPY tests`), а `docker-compose.yml`
-> не монтирует исходники. После правок кода или тестов выполните `make up`, иначе `make test`
-> и `make lint` отработают на старой копии.
-
-`/health` отвечает 200 — на нём построен healthcheck контейнера `core`.
 
 ## Лицензия
 
-См. [LICENSE](LICENSE).
+[Apache-2.0](LICENSE).

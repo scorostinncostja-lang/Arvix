@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Установка Arvix Lite: копия плагина в стабильный путь, CLI `arvix`, плагин Claude Code,
+# Установка Arvix: копия плагина в стабильный путь, CLI `arvix`, плагин Claude Code,
 # systemd-юнит бота. Повторный запуск = обновление. Данные (~/.local/share/arvix/arvix.db)
 # и конфиг (~/.config/arvix/config.toml) не трогаются.
 #
