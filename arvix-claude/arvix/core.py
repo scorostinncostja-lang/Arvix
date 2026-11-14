@@ -15,7 +15,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from arvix import clock, interview, load, rules
+from arvix import checks, clock, interview, load, rules
 from arvix.config import Config, load_config
 from arvix.state import State, Task
 from arvix.store import Event, Store
@@ -202,6 +202,35 @@ class Core:
         template = self.state.templates.get(d.weekday()) or {}
         return sorted((b for b in template.get("blocks", []) if b.get("start") and load.is_fixed(b)), key=lambda b: b["start"])
 
+    # --- проверки ввода: не верить на слово (02-MECHANICS §13) ---------------------
+
+    def goal_warnings(self, goal_id: str) -> list[str]:
+        goal = self.state.goals.get(goal_id)
+        return checks.goal_issues(goal, self.state.goals, self.today()) if goal else []
+
+    def task_warnings(self, task: Task) -> list[str]:
+        others = [t for t in self.state.tasks_on(task.local_date) if t.id != task.id and t.is_open]
+        now = self.now().strftime("%H:%M") if task.local_date == self.today() else None
+        return checks.task_issues(task, others, self.fixed_blocks(task.local_date), self.state.profile.get("bedtime_target"), now)
+
+    def audit(self, limit: int = 6) -> list[str]:
+        """Несостыковки, которые модель обязана поднять сама, не дожидаясь вопроса:
+        цели без срока и метрики, дубли, лишние цели года, задачи внахлёст, сон по плану меньше 7 ч."""
+        st = self.state
+        items: list[str] = []
+        for goal in st.goals.values():
+            for issue in self.goal_warnings(goal["id"])[:2]:
+                items.append(f"цель «{goal['title']}» [{goal['id']}]: {issue}")
+        for task in st.tasks_on(self.today()):
+            if task.is_open:
+                items += [f"[{task.id}] «{task.title}»: {i}" for i in self.task_warnings(task) if "пересекается" in i or "обязательное" in i]
+        if st.profile.get("bedtime_target") and st.profile.get("wake_target"):
+            items += checks.sleep_target_issues(self.sleep_target())
+        core_done = all(q in st.interview for q in ("main_goal", "main_goal_why"))
+        if core_done and not any(g.get("kind") == "main" and g.get("status", "active") == "active" for g in st.goals.values()):
+            items.append("главной цели нет — без неё план не к чему привязать")
+        return items[:limit]
+
     def penalty_multiplier(self, d: date | None = None, ignore_days: int = 0) -> float:
         d = d or self.today()
         day = self.state.days.get(d)
@@ -315,16 +344,21 @@ class Core:
                 delay = (datetime.fromisoformat(task.actual_start) - self.at(task.local_date, task.start)).total_seconds() / 60
             xp = rules.task_xp(task.difficulty, task.importance, kind, delay, pct)
             deep = task.duration_min * pct // 100 if task.deep_work else 0
-            self.emit(
-                "task_completed",
-                {"id": task.id, "done_pct": pct, "xp": xp, "report": report, "proof_kind": kind, "deep_min": deep},
-                source=source,
-                entity_id=task.id,
+            now = self.now()
+            doubts = checks.report_issues(
+                task.title, now,
+                self.at(task.local_date, task.start) if task.start and task.status != "debt" else None,
+                datetime.fromisoformat(task.actual_start) if task.actual_start else None,
+                task.duration_min, pct,
             )
+            payload = {"id": task.id, "done_pct": pct, "xp": xp, "report": report, "proof_kind": kind, "deep_min": deep}
+            if doubts:
+                payload["doubts"] = doubts  # отчёт записан, но сомнение видно в журнале и разборе
+            self.emit("task_completed", payload, source=source, entity_id=task.id)
             if xp:
                 self.emit("xp_awarded", {"amount": xp, "reason": f"task:{task.id}"}, source=source, entity_id=task.id)
         self.recompute_mode(source="l0")
-        return {"task": task, "xp": xp, "debt_closed": task.debt_since is not None}
+        return {"task": task, "xp": xp, "debt_closed": task.debt_since is not None, "warnings": doubts}
 
     def fail_task(self, ref: Any, *, reason: str = "", source: str = "claude") -> dict[str, Any]:
         with self.tx():
@@ -401,7 +435,7 @@ class Core:
                 source=source,
             )
         mode = self.recompute_mode(source="l0")
-        return {"duration_min": minutes, "date": target, "mode": mode}
+        return {"duration_min": minutes, "date": target, "mode": mode, "warnings": checks.sleep_issues(minutes)}
 
     def log_expense(self, amount: Any, category: str, *, impulse: bool = False, note: str = "", source: str = "claude") -> dict[str, Any]:
         try:

@@ -303,6 +303,33 @@ def _user_config() -> dict[str, Any]:
         return {}
 
 
+LOCAL_STT_COMMAND = (
+    "ffmpeg -loglevel error -y -i {input} -ar 16000 -ac 1 {wav} && "
+    "$HOME/.local/share/arvix/whisper/whisper-cli -m $HOME/.local/share/arvix/whisper/model.bin -l ru -nt -np -f {wav}"
+)
+STT_KEY_HINT = {
+    "groq": "Ключ Groq: console.groq.com → API Keys → Create (бесплатно). Голос уходит в Groq.",
+    "openai": "Ключ OpenAI: platform.openai.com → API keys (платно). Голос уходит в OpenAI.",
+}
+
+
+def _setup_stt(engine: str) -> dict[str, Any]:
+    """Голосовые: ключ API — только скрытым вводом в терминале; локальная команда — без ключа."""
+    if engine in STT_KEY_HINT:
+        if not sys.stdin.isatty():
+            sys.exit(f"Ключ вводится только в терминале (скрытый ввод): arvix setup --stt {engine}")
+        print(STT_KEY_HINT[engine])
+        key = getpass.getpass("Ключ API: ").strip()
+        if not key:
+            sys.exit("Ключ пустой — голосовые не включены.")
+        return {"engine": engine, "api_key": key}
+    if engine == "command":
+        print("Своя команда распознавания: {input} — голосовое .ogg, {wav} — временный .wav, текст — в stdout.")
+        command = _ask("Команда", LOCAL_STT_COMMAND) if sys.stdin.isatty() else LOCAL_STT_COMMAND
+        return {"engine": "command", "command": command}
+    return {"engine": "off"}
+
+
 def cmd_setup(args: argparse.Namespace) -> None:
     """Без флагов — диалог. С флагами и --yes — без вопросов (скрипты, повторная настройка).
     Токен бота всегда вводится скрыто и только в терминале: в чаты и логи он не попадает."""
@@ -348,6 +375,8 @@ def cmd_setup(args: argparse.Namespace) -> None:
         token = getpass.getpass("Токен: ").strip()
         if token:
             updates["telegram"] = {"token": token, "owner_id": _pair_telegram(token)}
+    if args.stt:
+        updates["stt"] = _setup_stt(args.stt)
     path = write_user_config(updates)
     print(f"\nКонфиг записан: {path} (права 600)")
     for item in init_home(Path(home).expanduser(), vault):
@@ -428,6 +457,13 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         print("??   плагин arvix — не удалось спросить claude")
     else:
         check("плагин arvix в Claude Code", "arvix" in listed, "bash deploy/install.sh")
+    from arvix.stt import STT
+
+    stt = STT(cfg)
+    if stt.engine == "off":
+        print("--   голосовые выключены — arvix setup --stt groq (или локально: deploy/stt-local.sh)")
+    else:
+        check(f"голосовые: {stt.engine}", stt.enabled, stt.problem())
     tg = cfg.section("telegram")
     check("Telegram токен и владелец", bool(tg.get("token") and tg.get("owner_id")), "arvix setup --telegram --yes")
     if tg.get("token"):
@@ -592,6 +628,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--telegram", dest="telegram", action="store_true", default=None, help="привязать Telegram-бота (токен — скрытый ввод)")
     p.add_argument("--no-telegram", dest="telegram", action="store_false", help="пропустить Telegram")
     p.add_argument("-y", "--yes", action="store_true", help="без вопросов: текущие значения и флаги")
+    p.add_argument("--stt", choices=("groq", "openai", "command", "off"), help="голосовые в Telegram: движок распознавания")
     add("init-home", cmd_init_home, "создать или дополнить дом Арвикса для Claude Code")
     add("doctor", cmd_doctor, "проверка установки")
     add("statusline", cmd_statusline, "строка состояния для Claude Code (stdin — JSON сессии)")

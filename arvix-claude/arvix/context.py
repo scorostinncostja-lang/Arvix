@@ -192,6 +192,10 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     if facts:
         lines.append("ПАМЯТЬ: " + " · ".join(facts))
 
+    issues = core.audit()
+    if issues:  # код нашёл несостыковку — модель обязана её поднять (constitution/critical.md)
+        lines.append("ПРОВЕРИТЬ:\n" + "\n".join(f"  ⚠️ {i}" for i in issues))
+
     recent = []
     for offset, label in ((1, "вчера"), (2, "позавчера")):
         closed = st.days.get(today - timedelta(days=offset))

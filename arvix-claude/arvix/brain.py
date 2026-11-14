@@ -43,6 +43,10 @@ _ACTION_FIELDS = {
     "text": {"type": "string"}, "kind": {"type": "string"}, "why": {"type": "string"},
     "deadline": {"type": "string"}, "level": {"type": "string"}, "question": {"type": "string"},
     "direct": {"type": "boolean"},
+    "goal_id": {"type": "string", "description": "для set_goal: id существующей цели — исправить её (kind, deadline, metric, status=dropped)"},
+    "parent_id": {"type": "string", "description": "для set_goal: id цели, этапом которой становится эта"},
+    "metric": {"type": "string", "description": "для set_goal: как проверить достижение — число, оценка, результат"},
+    "status": {"type": "string", "enum": ["active", "done", "dropped"]},
     "weekdays": {"type": "array", "items": {"type": "integer"}, "description": "для set_template: 0=пн … 6=вс"},
     "day_type": {"type": "string", "enum": ["study", "work", "deep", "recovery", "silent"]},
     "blocks": {
@@ -235,12 +239,14 @@ def _start_from_deadline(action: dict[str, Any]) -> str | None:
 
 def apply_actions(
     core: Core, actions: list[dict[str, Any]], *, source: str = "telegram", fallback_report: str | None = None,
-) -> tuple[list[str], list[str]]:
-    """Исполняет actions модели через операции L0. Возвращает (сделано, отказы).
-    Отказ L0 (например, блокировка из-за долга) честно дописывается к ответу.
+) -> tuple[list[str], list[str], list[str]]:
+    """Исполняет actions модели через операции L0. Возвращает (сделано, отказы, сомнения).
+    Отказ L0 (например, блокировка из-за долга) честно дописывается к ответу; сомнения —
+    несостыковки, найденные checks.py (цель без срока, задача поверх школы, отчёт раньше времени).
     fallback_report — сообщение человека: если модель забыла report, отчёт — его слова."""
     done: list[str] = []
     failed: list[str] = []
+    warnings: list[str] = []
     for action in actions or []:
         kind = action.get("type")
         try:
@@ -252,10 +258,12 @@ def apply_actions(
                     deep_work=bool(action.get("deep_work")), day=action.get("date"), source=source,
                 )
                 done.append(f"+ задача [{task.id}] {task.title}")
+                warnings += [f"[{task.id}] {task.title}: {w}" for w in core.task_warnings(task)]
             elif kind == "complete_task":
                 report = action.get("report") or fallback_report
                 result = core.complete_task(action["task"], done_pct=action.get("done_pct") or 100, report=report, source=source)
                 done.append(f"✅ {result['task'].title} +{result['xp']} XP")
+                warnings += result["warnings"]
             elif kind == "fail_task":
                 result = core.fail_task(action["task"], reason=action.get("reason", ""), source=source)
                 done.append(f"❌ {result['task'].title} {result['hp']} HP" + (" · в долг" if result["debt"] else ""))
@@ -271,6 +279,7 @@ def apply_actions(
             elif kind == "log_sleep":
                 result = core.log_sleep(action.get("duration") or action.get("minutes"), bedtime=action.get("bedtime"), day=action.get("date"), source=source)
                 done.append(f"сон {result['duration_min'] // 60}ч{result['duration_min'] % 60:02d}м")
+                warnings += result["warnings"]
             elif kind == "log_expense":
                 result = core.log_expense(action["amount"], action.get("category", "прочее"), impulse=bool(action.get("impulse")), note=action.get("text", ""), source=source)
                 done.append(f"трата {result['amount']:.0f}")
@@ -285,7 +294,14 @@ def apply_actions(
             elif kind == "profile_set":
                 core.profile_set(action["key"], action.get("value"), source=source)
             elif kind == "set_goal":
-                core.set_goal(action["title"], why=action.get("why", ""), kind=action.get("kind") or "main", deadline=action.get("deadline"), source=source)
+                gid = core.set_goal(
+                    action.get("title", ""), why=action.get("why", ""), kind=action.get("kind"), deadline=action.get("deadline"),
+                    metric=action.get("metric"), goal_id=action.get("goal_id"), parent_id=action.get("parent_id"),
+                    status=action.get("status"), source=source,
+                )
+                goal = core.state.goals[gid]
+                done.append(f"цель [{gid}] {goal['title']} · {goal['kind']}" + (f" · {goal['status']}" if goal.get("status") != "active" else ""))
+                warnings += [f"цель «{goal['title']}»: {w}" for w in core.goal_warnings(gid)]
             elif kind == "add_trait":
                 core.add_trait(action.get("kind", "weakness"), action["title"], description=action.get("text", ""), source=source)
             elif kind == "declare_reason":
@@ -299,4 +315,4 @@ def apply_actions(
                 done.append(f"шаблон «{action.get('day_type')}» для дней {action.get('weekdays')}")
         except (ArvixError, KeyError, TypeError, ValueError) as exc:
             failed.append(f"{kind}: {exc}")
-    return done, failed
+    return done, failed, warnings

@@ -30,6 +30,9 @@ class FakeAPI:
     def typing(self, *a: Any) -> None:
         pass
 
+    def download(self, file_id: str) -> bytes:
+        return b"OGG:" + file_id.encode()
+
     @property
     def last(self) -> str:
         return self.sent[-1][0]
@@ -49,6 +52,21 @@ class FakeBrain:
         return True
 
 
+class FakeSTT:
+    max_seconds = 300
+
+    def __init__(self, text: str = "", error: str = "") -> None:
+        self.text, self.error, self.enabled, self.seen = text, error, True, []
+
+    def transcribe(self, audio: bytes, filename: str = "voice.ogg") -> str:
+        from arvix.stt import STTError
+
+        self.seen.append(audio)
+        if self.error:
+            raise STTError(self.error)
+        return self.text
+
+
 class BotCase(ArvixCase):
     def setUp(self) -> None:
         super().setUp()
@@ -59,6 +77,9 @@ class BotCase(ArvixCase):
 
     def text(self, text: str, sender: int = OWNER) -> None:
         self.bot.handle({"update_id": 1, "message": {"from": {"id": sender}, "chat": {"id": sender}, "text": text}})
+
+    def voice(self, file_id: str = "v1", duration: int = 5) -> None:
+        self.bot.handle({"update_id": 3, "message": {"from": {"id": OWNER}, "chat": {"id": OWNER}, "voice": {"file_id": file_id, "duration": duration}}})
 
     def press(self, data: str) -> None:
         self.bot.handle({"update_id": 2, "callback_query": {"id": "c", "from": {"id": OWNER}, "data": data, "message": {"chat": {"id": OWNER}, "message_id": 5}}})
@@ -203,6 +224,46 @@ class InboxTest(BotCase):
         self.brain.last_error = "API Error: Request blocked (HTTP 403) unsupported region, or a VPN"
         self.text("привет")
         self.assertIn("VPN", self.api.last)
+
+    def test_voice_is_shown_then_handled_like_text(self) -> None:
+        self.bot.stt = FakeSTT("спал шесть часов, лёг в час")
+        self.brain.answers.append({"reply": "Записал.", "actions": [{"type": "log_sleep", "duration": "6:00", "bedtime": "01:00"}]})
+        self.voice("abc")
+        self.assertEqual(self.bot.stt.seen, [b"OGG:abc"])
+        self.assertTrue(any(t.startswith("🎙 «спал шесть часов") for t, _ in self.api.sent))
+        self.assertEqual(self.brain.calls[-1]["prompt"], "спал шесть часов, лёг в час")
+        self.assertEqual(self.core.state.days[self.core.today()].sleep_min, 360)
+
+    def test_voice_answers_a_waiting_question_without_the_model(self) -> None:
+        task = self.core.add_task("Физика", importance=3, start="12:00")
+        self.press(f"t:{task.id}:yes")
+        self.bot.stt = FakeSTT("решил десять задач из параграфа")
+        self.voice()
+        self.assertEqual(self.core.state.tasks[task.id].report, "решил десять задач из параграфа")
+        self.assertEqual(self.brain.calls, [])
+
+    def test_voice_safety_markers_still_work(self) -> None:
+        self.bot.stt = FakeSTT("я не хочу жить")
+        self.voice()
+        self.assertFalse(self.core.state.mentor_enabled)
+        self.assertEqual(self.brain.calls, [])
+
+    def test_voice_off_too_long_and_failed(self) -> None:
+        self.voice()
+        self.assertEqual(self.api.last, tpl.VOICE_OFF)
+        self.bot.stt = FakeSTT("x")
+        self.voice(duration=900)
+        self.assertIn("длиннее 5 мин", self.api.last)
+        self.bot.stt = FakeSTT(error="лимит распознавания")
+        self.voice()
+        self.assertIn("лимит распознавания", self.api.last)
+        self.assertEqual(self.brain.calls, [])
+
+    def test_reply_shows_doubts_found_by_code(self) -> None:
+        self.brain.answers.append({"reply": "Поставил.", "actions": [{"type": "add_task", "title": "Матан", "start": "09:00", "duration_min": 60}]})
+        self.text("поставь матан на 9 утра")
+        self.assertIn("⚠️ Проверь:", self.api.last)
+        self.assertIn("уже прошло", self.api.last)
 
     def test_quick_add_parser(self) -> None:
         fields = parse_quick_task("Физика: задачи 18:00 60м !4 deep завтра")

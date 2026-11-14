@@ -56,6 +56,10 @@ RETURN_HINT = (
     "<return_protocol>Человек вернулся после {days} дн молчания. Никакого разбора прошлого и никаких цифр за пропуск. "
     "Один вопрос «что случилось» и один маленький шаг на сегодня. Разбор пропущенного — не раньше чем через 3 дня стабильной работы.</return_protocol>"
 )
+VOICE_OFF = (
+    "Голосовые пока не настроены — напиши текстом. Включить: на машине с ботом `arvix setup --stt groq` "
+    "(ключ Groq, бесплатно) или локально без интернета — deploy/stt-local.sh."
+)
 IGNORE_DAY2 = "Второй день тишины. Одно слово — и я пойму, что происходит."
 IGNORE = {
     2: "Три дня. Я не знаю, что происходит, и это хуже, чем провал. Напиши одно слово.",
@@ -87,6 +91,11 @@ def reminder_check(task: Any) -> str:
 
 def completed(title: str, xp: int, debt_closed: bool = False) -> str:
     return f"✅ {title} · +{xp} XP" + (" · долг закрыт" if debt_closed else "")
+
+
+def warn(lines: list[str] | tuple[str, ...] | None) -> str:
+    """Сомнения кода (checks.py) — отдельными строками под ответом: их видно, их нельзя пропустить."""
+    return "".join(f"\n⚠️ Проверь: {line}" for line in lines or ())
 
 
 def failed(title: str, hp: int, debt: bool) -> str:

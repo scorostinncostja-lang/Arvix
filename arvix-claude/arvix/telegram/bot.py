@@ -27,6 +27,7 @@ from arvix.brain import (
 from arvix.context import build_context, end_time, hm, task_line
 from arvix.core import ArvixError, Core, parse_duration
 from arvix.prompt import constitution, system_prompt
+from arvix.stt import STT, STTError
 from arvix.telegram import templates as tpl
 from arvix.telegram.api import TelegramAPI, TelegramError
 
@@ -142,11 +143,12 @@ def parse_quick_task(text: str) -> dict[str, Any]:
 
 
 class Bot:
-    def __init__(self, core: Core, api: TelegramAPI, brain: Brain, owner_id: int):
+    def __init__(self, core: Core, api: TelegramAPI, brain: Brain, owner_id: int, stt: STT | None = None):
         self.core = core
         self.api = api
         self.brain = brain
         self.owner = int(owner_id)
+        self.stt = stt if stt is not None else STT(core.cfg)
 
     # --- отправка и ожидание ответа ------------------------------------------
 
@@ -176,7 +178,9 @@ class Bot:
             return  # single-user: всех остальных молча игнорируем
         self.core.refresh()
         text = (msg.get("text") or msg.get("caption") or "").strip()
-        if msg.get("photo"):
+        if media := msg.get("voice") or msg.get("audio"):
+            self.on_voice(media, sent_at=msg.get("date"))
+        elif msg.get("photo"):
             self.on_photo(text)
         elif text.startswith("/"):
             self.on_command(text)
@@ -200,6 +204,36 @@ class Bot:
             return
         self.converse(text)
 
+    def on_voice(self, media: dict[str, Any], sent_at: float | None = None) -> None:
+        """Голосовое → текст → тот же путь, что у набранного сообщения (safety, ожидаемый ответ, голова).
+        Распознанный текст бот показывает первым: ошибку распознавания человек видит до того,
+        как по ней что-то запишется."""
+        if not self.stt.enabled:
+            self.core.message_in("[голосовое — распознавание не настроено]")
+            self.send(tpl.VOICE_OFF)
+            return
+        if int(media.get("duration") or 0) > self.stt.max_seconds:
+            self.core.message_in("[голосовое — слишком длинное]")
+            self.send(f"Голосовое длиннее {self.stt.max_seconds // 60} мин. Разбей на части или напиши текстом.")
+            return
+        try:
+            self.api.typing(self.owner)
+        except TelegramError:
+            pass
+        try:
+            audio = self.api.download(media["file_id"])
+            text = self.stt.transcribe(audio, filename=media.get("file_name") or "voice.ogg")
+        except (TelegramError, STTError, KeyError) as exc:
+            self.core.message_in("[голосовое — не распознано]")
+            self.send(f"Голосовое не распознал: {exc}. Напиши текстом.")
+            return
+        if not text.strip():
+            self.core.message_in("[голосовое — пусто]")
+            self.send("В голосовом не разобрал слов. Повтори или напиши текстом.")
+            return
+        self.send(f"🎙 «{clip(text, 600)}»")
+        self.on_text(text, sent_at=sent_at)
+
     def safety_protocol(self, text: str) -> None:
         self.core.safety_flag("high", text[:200], source="l0")
         self.await_clear()
@@ -213,12 +247,12 @@ class Bot:
             elif kind == "report":
                 self.await_clear()
                 result = self.core.complete_task(waiting["task"], report=text, source="telegram")
-                self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]))
+                self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
             elif kind == "partial":
                 self.await_clear()
                 pct = int(m.group(1)) if (m := re.search(r"\b(\d{1,2})\b", text)) else 50
                 result = self.core.complete_task(waiting["task"], done_pct=pct, report=text, source="telegram")
-                self.send(tpl.completed(result["task"].title, result["xp"]) + f" · {pct}%")
+                self.send(tpl.completed(result["task"].title, result["xp"]) + f" · {pct}%" + tpl.warn(result["warnings"]))
             elif kind == "fail_reason":
                 self.await_clear()
                 task = self.core.explain_failure(waiting["task"], text, source="telegram")
@@ -232,7 +266,7 @@ class Bot:
             elif kind == "sleep":
                 self.await_clear()
                 result = self.core.log_sleep(parse_duration(text.split()[0]), source="telegram")
-                self.send(f"Сон {hm(result['duration_min'])}. Режим: {rules.MODE_LABELS[result['mode']]}")
+                self.send(f"Сон {hm(result['duration_min'])}. Режим: {rules.MODE_LABELS[result['mode']]}" + tpl.warn(result["warnings"]))
             else:
                 return False
         except ArvixError as exc:
@@ -247,7 +281,7 @@ class Bot:
         if waiting and waiting.get("kind") == "report":
             self.await_clear()
             result = self.core.complete_task(waiting["task"], report=caption or "фото-отчёт", proof_kind="photo", source="telegram")
-            self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]))
+            self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
         else:
             self.send("Фото принимаю как отчёт, когда жду его: кнопка «✅ Да» у задачи или /done <id>.")
 
@@ -297,7 +331,7 @@ class Bot:
         elif op == "yes":
             if task.proof == "confirm":
                 result = core.complete_task(task.id, source="telegram")
-                self.send(tpl.completed(task.title, result["xp"], result["debt_closed"]))
+                self.send(tpl.completed(task.title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
             else:
                 self.await_set("report", task=task.id)
                 self.send(tpl.ASK_PHOTO if task.proof == "photo" else tpl.ASK_REPORT)
@@ -400,12 +434,13 @@ class Bot:
         if result is None:
             self.send("Ответы сохранены. " + self.brain_down_hint() + " Разложу их, когда голова вернётся (или /arvix:onboarding в Claude Code).")
             return
-        done, failed = apply_actions(self.core, result.get("actions") or [], source="telegram")
+        done, failed, warnings = apply_actions(self.core, result.get("actions") or [], source="telegram")
         summary = result.get("summary", "").strip()
         if done:
             summary += "\n" + " · ".join(done)
         if failed:
             summary += "\n⚠️ Не записано: " + "; ".join(failed)
+        summary += tpl.warn(warnings)
         if summary:
             self.send(summary.strip())
 
@@ -459,11 +494,12 @@ class Bot:
                 result, reply = retry, retry["reply"].strip()
             else:
                 reply += "\n\n(Первоисточник не назван — сверь тему с учебником или официальной документацией.)"
-        done, failed = apply_actions(core, result.get("actions") or [], source="telegram", fallback_report=text)
+        done, failed, warnings = apply_actions(core, result.get("actions") or [], source="telegram", fallback_report=text)
         if done:
             reply += "\n\n" + " · ".join(done)
         if failed:
             reply += "\n⚠️ Не выполнено: " + "; ".join(failed)
+        reply += tpl.warn(warnings)
         self.send(reply or "…")
 
     def brain_down_hint(self) -> str:
@@ -641,7 +677,7 @@ class Bot:
             self.send("Формат: /done <id или часть названия> [что сделано]")
             return
         result = self.core.complete_task(ref, report=report or None, source="telegram")
-        self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]))
+        self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
 
     def cmd_add(self, rest: str) -> None:
         fields = parse_quick_task(rest)
@@ -685,7 +721,7 @@ class Bot:
             return
         result = self.core.log_sleep(parts[0], bedtime=parts[1] if len(parts) > 1 else None, source="telegram")
         self.await_clear()
-        self.send(f"Сон {hm(result['duration_min'])}. Режим: {rules.MODE_LABELS[result['mode']]}")
+        self.send(f"Сон {hm(result['duration_min'])}. Режим: {rules.MODE_LABELS[result['mode']]}" + tpl.warn(result["warnings"]))
 
     def cmd_sos(self, rest: str) -> None:
         mode = self.core.sos(rest.strip().lower() != "off", source="telegram")
