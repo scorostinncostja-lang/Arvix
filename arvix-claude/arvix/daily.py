@@ -79,7 +79,7 @@ def review_budget(core: Any) -> dict[str, Any] | None:
         week = load.week_load(st.templates, result["factors"])
         change = load.describe_change(old, result["factors"], st.templates)
         payload = {
-            "week_min": week["total"], "deep_min": week["deep"], "factors": result["factors"], "streaks": result["streaks"],
+            "week_min": week["total"] - week["fixed"], "deep_min": week["deep"], "factors": result["factors"], "streaks": result["streaks"],
             "verdict": result["verdict"], "reason": "; ".join(result["reasons"]), "change": change,
             "from_week_min": budget["week_min"], "from_deep_min": budget["deep_min"],
         }
@@ -212,7 +212,7 @@ def close_day(core: Any, d: date) -> dict[str, Any] | None:
             until = core.now() + timedelta(hours=48)
             core.emit("protocol_zero", {"on": True, "until": until.isoformat()}, source="scheduler")
 
-        deep_target = int(cfg.mech("deep_target_min", 120))
+        deep_target = core.deep_target(d)
         payload = {
             "date": d.isoformat(),
             "completion": completion,
@@ -266,6 +266,8 @@ def materialize(core: Any, d: date) -> list[str]:
         now = core.now()
         factors = load.factors_of(core.state.budget)
         for block in template["blocks"]:
+            if load.is_fixed(block):
+                continue  # школа, дорога, смена — занятое время, а не задача с отчётом и штрафом
             if d == now.date() and block["start"] and core.at(d, block["start"]) <= now:
                 continue
             task = core.add_task(

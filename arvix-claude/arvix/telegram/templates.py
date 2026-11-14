@@ -174,7 +174,7 @@ def midday(core: Any) -> str | None:
 
 def debrief_facts(core: Any) -> str:
     facts = core.day_facts()
-    lines = ["🌙 Разбор", "", f"Сделано: {facts['done']} из {facts['total']}. Глубокая {hm(facts['deep_min'])} из {hm(int(core.cfg.mech('deep_target_min', 120)))}."]
+    lines = ["🌙 Разбор", "", f"Сделано: {facts['done']} из {facts['total']}. Глубокая {hm(facts['deep_min'])} из {hm(core.deep_target(facts['date']))}."]
     if facts["sleep_min"]:
         lines.append(f"Сон {hm(facts['sleep_min'])}.")
     quotas = core.cfg.mech("quotas") or {}

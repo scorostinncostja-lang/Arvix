@@ -11,7 +11,7 @@ import re
 from datetime import timedelta
 from typing import Any
 
-from arvix import interview, rules, safety
+from arvix import interview, load, rules, safety
 from arvix.brain import (
     DEBRIEF_SCHEMA,
     EXTRACT_SCHEMA,
@@ -24,7 +24,7 @@ from arvix.brain import (
     gentle_violation,
     has_source,
 )
-from arvix.context import build_context, hm, task_line
+from arvix.context import build_context, end_time, hm, task_line
 from arvix.core import ArvixError, Core, parse_duration
 from arvix.prompt import constitution, system_prompt
 from arvix.telegram import templates as tpl
@@ -60,8 +60,9 @@ SCHEDULE_RULES = """<schedule>
   последний заканчивается минимум за 60 мин до отбоя.
 - 1–3 блока в будний день. Глубокая работа (deep_work) — в часы пика энергии, 45–90 минут.
 - Обязательные дела человека (школа, работа, дорога, репетиторы, секции) — блоками с их реальным временем и fixed=true:
-  их объём код никогда не меняет. Всё остальное (самостоятельная учёба, глубокая работа, спорт, отдых) — fixed=false:
-  длительность этих блоков код сам подстраивает раз в неделю по фактам (автонагрузка), ставь честную норму.
+  это занятое время. Код не меняет его объём и не делает из него задач с напоминаниями и отчётами.
+  Всё остальное (самостоятельная учёба, глубокая работа, спорт, отдых) — fixed=false: длительность этих блоков
+  код сам подстраивает раз в неделю по фактам (автонагрузка, старт — 70 %), ставь честную норму.
 - Спорт — сколько человек уже делает (sphere sport), не меньше.
 - Один восстановительный день (recovery): прогулка, спорт, отдых без экрана (tags offscreen), без учёбы.
 - Названия конкретные («Математика ОГЭ: задание 1–5»), если в ответах есть предметы, экзамены и цели.
@@ -84,22 +85,33 @@ def weekdays_label(days: list[int]) -> str:
     return ", ".join(WEEKDAY_NAMES[d] for d in days)
 
 
-def render_templates(templates: list[dict[str, Any]]) -> str:
-    """Распорядок текстом; итоговые часы считает код, а не модель."""
+def render_templates(templates: list[dict[str, Any]], factors: dict[str, float] | None = None) -> str:
+    """Распорядок текстом; итоговые часы считает код, а не модель. С factors своё время
+    показано так, как его поставит автонагрузка («90→65 мин»): человек подтверждает то,
+    что реально придёт задачами, а не то, что записала модель."""
     lines = ["📅 Распорядок недели", ""]
-    week_total = deep_total = 0
+    week_total = deep_total = fixed_total = 0
     for template in templates:
+        days = len(template["weekdays"])
         lines.append(f"{weekdays_label(template['weekdays'])} · {DAY_TYPE_RU.get(template['day_type'], template['day_type'])}")
         for block in sorted(template["blocks"], key=lambda b: b.get("start") or ""):
-            duration = int(block.get("duration") or 60)
-            hours, minutes = map(int, (block.get("start") or "00:00").split(":")[:2])
-            end = hours * 60 + minutes + duration
-            marks = (", глубокая" if block.get("deep_work") else "") + (f", ★{block['importance']}" if int(block.get("importance") or 3) >= 4 else "")
-            lines.append(f"  {block.get('start')}–{end // 60 % 24:02d}:{end % 60:02d} {block['title']} ({duration} мин{marks})")
-            week_total += duration * len(template["weekdays"])
-            deep_total += duration * len(template["weekdays"]) if block.get("deep_work") else 0
+            written = int(block.get("duration") or 60)
+            fixed = load.is_fixed(block)
+            duration = load.scaled_duration(block, factors) if factors else written
+            start = block.get("start") or "00:00"
+            marks = (", обязательное" if fixed else "") + (", глубокая" if block.get("deep_work") else "")
+            marks += f", ★{block['importance']}" if int(block.get("importance") or 3) >= 4 else ""
+            size = f"{written}→{duration} мин" if duration != written else f"{duration} мин"
+            lines.append(f"  {start}–{end_time(start, duration)} {block['title']} ({size}{marks})")
+            if fixed:
+                fixed_total += duration * days
+            else:
+                week_total += duration * days
+                deep_total += duration * days if block.get("deep_work") else 0
         lines.append("")
-    lines.append(f"Итого {hm(week_total)} в неделю, из них глубокой {hm(deep_total)}.")
+    lines.append(f"Итого {hm(week_total)} в неделю, из них глубокой {hm(deep_total)}." + (f" Обязательное: {hm(fixed_total)}." if fixed_total else ""))
+    if factors:
+        lines.append("Своё время код ставит с запасом (старт — 70 %) и раз в неделю пересматривает по фактам. Обязательное — занятое время, без напоминаний и отчётов.")
     return "\n".join(lines)
 
 
@@ -351,7 +363,7 @@ class Bot:
             self.send("Не вышло собрать распорядок. " + (self.brain_down_hint() or "Попробуй /schedule ещё раз."))
             return
         core.store.kv_set(PENDING, result["templates"])
-        self.send(clip(result.get("summary", ""), 500) + "\n\n" + render_templates(result["templates"]),
+        self.send(clip(result.get("summary", ""), 500) + "\n\n" + render_templates(result["templates"], load.factors_of(core.state.budget)),
                   [[("✅ Сохранить", "s:save"), ("✏️ Поправить", "s:edit")]])
 
     # --- интервью ----------------------------------------------------------------
@@ -578,7 +590,7 @@ class Bot:
     def cmd_schedule(self, rest: str) -> None:
         if rest.strip() == "show" and self.core.state.templates:
             current = [{"weekdays": [w], **t} for w, t in sorted(self.core.state.templates.items())]
-            self.send(render_templates(current))
+            self.send(render_templates(current, load.factors_of(self.core.state.budget)))
             return
         self.propose_schedule(rest.strip())
 

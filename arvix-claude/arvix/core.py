@@ -188,6 +188,20 @@ class Core:
             return gap
         return int(self.cfg.mech("sleep_target_min", 450))
 
+    def deep_target(self, d: date | None = None) -> int:
+        """Норма глубокой работы на день: столько, сколько её в плане дня (автонагрузка
+        уже подогнала блоки под человека), а без плана — из конфига."""
+        d = d or self.today()
+        planned = sum(t.duration_min for t in self.state.tasks_on(d) if t.deep_work)
+        return planned or int(self.cfg.mech("deep_target_min", 120))
+
+    def fixed_blocks(self, d: date | None = None) -> list[dict[str, Any]]:
+        """Обязательные блоки шаблона на дату (школа, дорога, смена) — занятое время для
+        контекста модели и проверки конфликтов. Задачами они не становятся."""
+        d = d or self.today()
+        template = self.state.templates.get(d.weekday()) or {}
+        return sorted((b for b in template.get("blocks", []) if b.get("start") and load.is_fixed(b)), key=lambda b: b["start"])
+
     def penalty_multiplier(self, d: date | None = None, ignore_days: int = 0) -> float:
         d = d or self.today()
         day = self.state.days.get(d)
@@ -796,7 +810,7 @@ class Core:
         since = (st.budget or {}).get("since") or st.profile.get("season_start") or (st.first_date or self.today()).isoformat()
         if st.templates:
             week = load.week_load(st.templates, factors)
-            total, deep = week["total"], week["deep"]
+            total, deep = week["total"] - week["fixed"], week["deep"]  # бюджет — своё время, без школы и смен
             channels = {ch: week[ch] for ch in (*load.CHANNELS, "fixed")}
         else:
             total = int(st.profile.get("week_budget_min") or self.cfg.mech("week_budget_min", 1560))

@@ -192,7 +192,8 @@ class InboxTest(BotCase):
         ]})
         self.text("/schedule")
         self.assertIn("пн–пт · учебный", self.api.last)
-        self.assertIn("Итого 2ч30м в неделю", self.api.last)
+        self.assertIn("(30→20 мин, глубокая, ★4)", self.api.last)  # показано то, что реально придёт задачей
+        self.assertIn("Итого 1ч40м в неделю", self.api.last)
         self.press("s:save")
         self.assertEqual(self.core.state.templates[0]["blocks"][0]["title"], "Математика ОГЭ")
         self.assertIn("Распорядок сохранён", self.api.last)

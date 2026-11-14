@@ -270,7 +270,7 @@ def t_check_request(core: Core, a: dict[str, Any]) -> str:
     facts = core.day_facts(d)
     lines = [f"ПРОСЬБА: {a.get('description', '')}"]
     pct = f"{facts['completion']:.0f}%" if facts["completion"] is not None else "—"
-    lines.append(f"ВЫПОЛНЕНИЕ {d:%d.%m}: {facts['done']}/{facts['total']} ({pct}) · глубокая {hm(facts['deep_min'])} из {hm(int(core.cfg.mech('deep_target_min', 120)))} · сон {hm(facts['sleep_min'])}")
+    lines.append(f"ВЫПОЛНЕНИЕ {d:%d.%m}: {facts['done']}/{facts['total']} ({pct}) · глубокая {hm(facts['deep_min'])} из {hm(core.deep_target(d))} · сон {hm(facts['sleep_min'])}")
     lines.append(f"РЕЖИМ: {rules.MODE_LABELS[core.effective_mode()]} · HP {st.hp}")
     if facts["debts"]:
         lines.append(f"ДОЛГ: {len(facts['debts'])} — " + ", ".join(t.title for t in facts["debts"]) + (" · необязательные дела заблокированы" if len(facts["debts"]) >= 2 else ""))
@@ -278,7 +278,10 @@ def t_check_request(core: Core, a: dict[str, Any]) -> str:
         start = core.at(d, a["start"])
         end = start + timedelta(minutes=int(a.get("duration_min") or 60))
         clash = [t for t in facts["tasks"] if t.is_open and t.start and core.at(d, t.start) < end and core.at(d, t.start) + timedelta(minutes=t.duration_min) > start]
-        lines.append("КОНФЛИКТЫ: " + ("; ".join(task_line(t) for t in clash) if clash else "нет"))
+        busy = [b for b in core.fixed_blocks(d)
+                if core.at(d, b["start"]) < end and core.at(d, b["start"]) + timedelta(minutes=int(b.get("duration", 60))) > start]
+        found = [task_line(t) for t in clash] + [f"занято: {b['start']} {b['title']} ({b.get('duration', 60)} мин, обязательное)" for b in busy]
+        lines.append("КОНФЛИКТЫ: " + ("; ".join(found) if found else "нет"))
     quotas = core.cfg.mech("quotas") or {}
     week = facts["week"]
     lines.append("КВОТЫ НЕДЕЛИ: " + " · ".join(f"{QUOTA_RU.get(k, k)} {week['quotas'].get(k, 0)}/{v}" for k, v in quotas.items()))

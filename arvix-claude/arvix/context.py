@@ -31,6 +31,13 @@ def hm(minutes: int | None) -> str:
     return f"{hours}ч{mins:02d}м" if hours else f"{mins}м"
 
 
+def end_time(start: str, duration: Any) -> str:
+    """«08:30» + 360 → «14:30» (через полночь — по кругу)."""
+    hours, minutes = map(int, start.split(":")[:2])
+    end = hours * 60 + minutes + int(duration or 0)
+    return f"{end // 60 % 24:02d}:{end % 60:02d}"
+
+
 def autonomy_line(data: dict[str, Any]) -> str:
     """«Автономность: тихие дни 0.9 (3 дн) · вопросы без /answer 4/5» — пусто, пока нет данных."""
     parts = []
@@ -108,7 +115,8 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
             lines.append("СЕГОДНЯ:" + sleep.lstrip(" ·"))
         open_tasks = [t for t in tasks if t.is_open]
         if open_tasks:
-            lines.append(f"ОДНА МАЛЕНЬКАЯ ВЕЩЬ НА ВЫБОР: {open_tasks[0].title}")
+            small = min(open_tasks, key=lambda t: (t.duration_min or 999, t.importance))
+            lines.append(f"ОДНА МАЛЕНЬКАЯ ВЕЩЬ НА ВЫБОР: {small.title}")
         return "\n".join(lines)
 
     status = core.status()
@@ -120,12 +128,14 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     )
     done = sum(1 for t in tasks if t.status == "done")
     completion = st.completion(today)
-    deep_target = int(core.cfg.mech("deep_target_min", 120))
+    deep_target = core.deep_target(today)
     if tasks or sleep:
         pct = f" ({completion:.0f}%)" if completion is not None else ""
         lines.append(f"СЕГОДНЯ: {done}/{len(tasks)} задач{pct} · глубокая {hm(day.deep_min if day else 0)} из {hm(deep_target)}{sleep}")
     if tasks:
         lines.append("ЗАДАЧИ:\n" + "\n".join("  " + task_line(t) for t in tasks))
+    if busy := core.fixed_blocks(today):
+        lines.append("ЗАНЯТО: " + " · ".join(f"{b['start']}–{end_time(b['start'], b.get('duration', 60))} {b['title']}" for b in busy))
     debts = st.debts()
     if debts:
         lines.append("ДОЛГ: " + " · ".join(f"[{t.id}] {t.title} ({(today - t.debt_since).days} дн)" for t in debts if t.debt_since))

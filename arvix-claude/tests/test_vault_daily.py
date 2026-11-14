@@ -118,13 +118,14 @@ class BudgetTest(ArvixCase):
         self.assertTrue(budget["auto"])
         self.assertEqual(budget["channels"]["deep"], 70 * 7)  # старт 0.7
         self.assertEqual(budget["channels"]["fixed"], 360 * 7)
+        self.assertEqual(budget["week_min"], (70 + 40) * 7)  # бюджет — своё время, школа не входит
         for offset in range(7):
             day = moscow(2026, 11, 2, 6) + timedelta(days=offset)
             self.at(day)
             self.core.refresh()
             tasks = {t.title: t for t in self.core.state.tasks_on(day.date())}
             self.assertEqual(tasks["Математика ОГЭ"].duration_min, 70)
-            self.assertEqual(tasks["Школа"].duration_min, 360)
+            self.assertNotIn("Школа", tasks)  # обязательное — занятое время, а не задача с отчётом
             for task in tasks.values():
                 self.core.complete_task(task.id, report="сделал")
             self.core.log_sleep("7:45")
@@ -137,6 +138,35 @@ class BudgetTest(ArvixCase):
         self.at(moscow(2026, 11, 10, 6))
         self.core.refresh()
         self.assertEqual(sum(1 for e in self.core.store.read(0) if e.kind == "budget_set"), 1)
+
+    def test_fixed_blocks_are_busy_time_not_tasks(self) -> None:
+        """Школа — занятое время: ни напоминаний, ни отчёта, ни HP. Модель её видит, конфликты — тоже."""
+        from arvix.context import build_context
+        from arvix.mcp_server import Server
+
+        self.at(moscow(2026, 11, 2, 6))
+        self.core.set_template([0], "study", [
+            {"start": "08:30", "duration": 360, "title": "Школа", "sphere": "learning", "fixed": True},
+            {"start": "16:00", "duration": 60, "title": "Алгебра", "sphere": "learning", "importance": 3, "fixed": False},
+        ])
+        self.core.refresh()
+        self.assertEqual([t.title for t in self.core.state.tasks_on(self.core.today())], ["Алгебра"])
+        self.assertIn("ЗАНЯТО: 08:30–14:30 Школа", build_context(self.core))
+        self.assertEqual(self.core.budget()["week_min"], 40)  # 60 × 0.7 → 40, школа не в бюджете
+        out = Server(lambda: self.core).call_tool("check_request", {"description": "погулять", "start": "10:00", "duration_min": 60})
+        self.assertIn("занято: 08:30 Школа", out["content"][0]["text"])
+
+    def test_fixed_title_detection_has_no_false_positives(self) -> None:
+        for title in ("Школа", "Дорога в школу", "Репетитор по физике", "Обед", "Смена в кафе", "Пары", "Секция бокса", "Работа", "Урок английского"):
+            self.assertTrue(load.is_fixed({"title": title}), title)
+        for title in ("Среда: английский", "Работа над проектом", "Победа в олимпиаде: задачи", "Английский: 30 карточек", "Сонник"):
+            self.assertFalse(load.is_fixed({"title": title}), title)
+        self.assertFalse(load.is_fixed({"title": "Школа", "fixed": False}))  # явный флаг сильнее названия
+
+    def test_deep_target_follows_the_plan(self) -> None:
+        self.assertEqual(self.core.deep_target(), 120)  # плана нет — конфиг
+        self.core.add_task("Математика", start="16:00", duration_min=65, deep_work=True)
+        self.assertEqual(self.core.deep_target(), 65)
 
     def test_load_warnings(self) -> None:
         self.core.profile_set("bedtime_target", "23:00")
