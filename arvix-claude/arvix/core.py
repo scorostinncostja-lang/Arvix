@@ -246,7 +246,8 @@ class Core:
         target = self.parse_day(day)
         with self.tx():
             debts = self.state.debts()
-            if sphere in rules.OPTIONAL_SPHERES and len(debts) >= 2 and task_source == "user":
+            # В 🟥 живые люди — часть восстановления, а не «необязательное»: блок снимается.
+            if sphere in rules.OPTIONAL_SPHERES and len(debts) >= 2 and task_source == "user" and self.effective_mode() != "red":
                 names = ", ".join(t.title for t in debts[:3])
                 raise ArvixError(
                     f"Долг: {len(debts)} задачи ({names}). Пока долг ≥ 2, новые необязательные дела "

@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 from arvix import rules
@@ -53,9 +53,11 @@ def task_line(task: Any) -> str:
     return " ".join(bits) + " · " + " ".join(meta)
 
 
-def _facts(state: Any, message: str, limit: int = 8) -> list[str]:
-    """Топ важных фактов всегда + совпадения по словам сообщения (вместо векторов)."""
-    facts = list(state.facts.values())
+def _facts(state: Any, message: str, today: date | None = None, limit: int = 8) -> list[str]:
+    """Топ важных фактов всегда + совпадения по словам сообщения (вместо векторов).
+    Факт с истёкшим valid_until («сессия до пятницы») в контекст больше не попадает."""
+    alive = today.isoformat() if today else ""
+    facts = [f for f in state.facts.values() if not (alive and f.get("valid_until") and f["valid_until"] < alive)]
     top = [f for f in facts if f.get("topic") in TOP_TOPICS][:3]
     words = {w[:5] for w in re.findall(r"\w{4,}", message.lower())}
     scored = []
@@ -176,7 +178,7 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     traits = sorted(st.traits.values(), key=lambda t: -int(t.get("severity", 3)))[:4]
     if traits:
         lines.append("ЧЕРТЫ: " + " · ".join(f"{t['kind']}: {t['title']}" + (f" → {t['counter_strategy']}" if t.get("counter_strategy") else "") for t in traits))
-    facts = _facts(st, message)
+    facts = _facts(st, message, today)
     if facts:
         lines.append("ПАМЯТЬ: " + " · ".join(facts))
 

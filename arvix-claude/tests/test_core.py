@@ -98,6 +98,27 @@ class TaskOpsTest(ArvixCase):
         self.assertIn("Долг", str(ctx.exception))
         self.core.add_task("Учёба", sphere="learning", start="19:00")  # обязательное — можно
 
+    def test_red_mode_lifts_social_block(self) -> None:
+        """В 🟥 живые люди — часть восстановления: долг их не блокирует."""
+        for title in ("Курсовая", "Экзамен"):
+            self.core.fail_task(self.core.add_task(title, importance=5, start="09:00").id, reason="не успел")
+        with self.assertRaises(ArvixError):
+            self.core.add_task("Кино", sphere="social", start="19:00")
+        self.core.sos(True)
+        self.assertEqual(self.core.add_task("Прогулка с другом", sphere="social", start="19:00").sphere, "social")
+
+    def test_expired_fact_leaves_context(self) -> None:
+        from arvix.context import build_context
+
+        self.core.remember("general", "сессия до пятницы", valid_days=2)
+        self.core.remember("general", "любит тренироваться утром")
+        self.assertIn("сессия до пятницы", build_context(self.core))
+        self.at(self.start + timedelta(days=3))
+        self.core.refresh()
+        text = build_context(self.core)
+        self.assertNotIn("сессия до пятницы", text)
+        self.assertIn("любит тренироваться утром", text)
+
     def test_resolve_by_title_and_prefix(self) -> None:
         task = self.core.add_task("Физика: задачи", start="18:00")
         self.assertEqual(self.core.resolve_task("физика").id, task.id)

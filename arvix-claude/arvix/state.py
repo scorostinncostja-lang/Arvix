@@ -352,10 +352,21 @@ class State:
         return count
 
     def ignore_streak(self, until: date) -> int:
-        """Дней подряд (до until включительно), когда бот писал, а человек молчал."""
+        """Сколько дней (до until включительно) бот писал, а человек молчал.
+
+        Серию рвёт только действие человека. Дни, когда бот ничего не отправлял
+        (ноутбук спал, недельная пауза протокола игнора), её не рвут и не удлиняют:
+        иначе после восьми дней тишины протокол начинался бы заново с «обычного дня»
+        и снова снимал HP."""
+        if self.first_date is None:
+            return 0
         count, d = 0, until
-        while d in self.days and self.days[d].msgs_out and not self.days[d].user_actions:
-            count += 1
+        while d >= self.first_date:
+            day = self.days.get(d)
+            if day and day.user_actions:
+                break
+            if day and day.msgs_out:
+                count += 1
             d -= timedelta(days=1)
         return count
 

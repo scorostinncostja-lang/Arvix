@@ -1,6 +1,7 @@
 """Telegram-бот без сети: подставные API и голова."""
 
 import unittest
+from datetime import timedelta
 from typing import Any
 
 from arvix.telegram import templates as tpl
@@ -266,6 +267,56 @@ class SchedulerTest(BotCase):
         self.at(moscow(2026, 11, 2, 8, 57))
         self.scheduler.tick()
         self.assertEqual(self.api.sent, [])
+
+    def test_red_mode_sends_no_task_reminders(self) -> None:
+        """🟥: план — одна маленькая вещь. «Через 5 мин», «Блок пошёл», «Сделано?» не приходят; отбой — мягко."""
+        self.core.profile_set("bedtime_target", "23:00", source="l0")
+        self.core.add_task("Алгоритмы", importance=4, start="09:00", duration_min=60)
+        self.core.sos(True)
+        for hour, minute in ((8, 56), (9, 1), (10, 2), (22, 31)):
+            self.at(moscow(2026, 11, 2, hour, minute))
+            self.scheduler.tick()
+        texts = [t for t, _ in self.api.sent]
+        self.assertFalse(any("Алгоритмы" in t for t in texts), texts)
+        self.assertTrue(any("Сон сейчас важнее всего" in t for t in texts), texts)
+
+    def test_long_silence_goes_weekly_and_never_restarts(self) -> None:
+        """Дни 1–2 — брифинг, день 3 — «Три дня…», 4–8 — «Я здесь.», дальше раз в неделю.
+        Раньше на 9-й день серия рвалась и протокол начинался заново со штрафами."""
+        self.core.profile_set("wake_target", "07:30", source="l0")
+        by_day = []
+        for offset in range(16):
+            self.at(moscow(2026, 11, 2, 8, 0) + timedelta(days=offset))
+            before = len(self.api.sent)
+            self.scheduler.tick()
+            by_day.append([t for t, _ in self.api.sent[before:]])
+        self.assertTrue(by_day[0][0].startswith("☀️"), by_day[0])
+        self.assertTrue(by_day[1][0].startswith(tpl.IGNORE_DAY2), by_day[1])
+        self.assertEqual(by_day[2], [tpl.IGNORE[2]])
+        for offset in range(3, 8):
+            self.assertEqual(by_day[offset], [tpl.IGNORE_LATER], offset)
+        for offset in range(8, 14):
+            self.assertEqual(by_day[offset], [], offset)
+        self.assertEqual(by_day[14], [tpl.IGNORE_LATER])
+        self.assertEqual(by_day[15], [])
+        self.assertEqual(sum(t == tpl.IGNORE[2] for day in by_day for t in day), 1)
+        self.assertEqual(self.core.state.hp, 80)  # −10 за первые два дня, с третьего штрафы заморожены
+
+    def test_return_after_silence_is_gentle_and_not_greeted_as_absent(self) -> None:
+        self.core.profile_set("wake_target", "07:30", source="l0")
+        for offset in range(5):
+            self.at(moscow(2026, 11, 2, 8, 0) + timedelta(days=offset))
+            self.scheduler.tick()
+        self.at(moscow(2026, 11, 7, 7, 40))
+        self.brain.answers.append({"reply": "Что случилось? И один маленький шаг на сегодня — какой?", "actions": []})
+        self.text("я тут")
+        self.assertIn("return_protocol", self.brain.calls[-1]["system"])
+        self.at(moscow(2026, 11, 7, 8, 0))
+        before = len(self.api.sent)
+        self.scheduler.tick()
+        sent = [t for t, _ in self.api.sent[before:]]
+        self.assertNotIn(tpl.IGNORE_LATER, sent)  # человек уже вернулся — «Я здесь.» не к месту
+        self.assertTrue(sent and sent[0].startswith("☀️"), sent)
 
 
 if __name__ == "__main__":

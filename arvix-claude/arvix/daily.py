@@ -110,12 +110,14 @@ def close_day(core: Any, d: date) -> dict[str, Any] | None:
 
         # 1. Неотчитанные задачи. Если Арвикс ни разу не спросил (бот выключен,
         #    работа только в Claude Code) — без урона и без долга: наказывать за
-        #    вопрос, которого не было, нечестно.
+        #    вопрос, которого не было, нечестно. Пока штрафы заморожены (🟥, ментор
+        #    выключен, тихий день, Протокол Ноль, 3+ дня игнора), долга тоже нет:
+        #    в эти дни бот сам говорит «без плана» и о задачах не напоминает.
         for task in [t for t in tasks if t.is_open]:
             per_task = rules.HP_FAIL[task.importance] if asked and answered else 0
             core.emit(
                 "task_failed",
-                {"id": task.id, "reason": "no_report", "debt": asked and task.importance >= 4, "hp": per_task},
+                {"id": task.id, "reason": "no_report", "debt": asked and task.importance >= 4 and mult > 0, "hp": per_task},
                 source="scheduler",
                 entity_id=task.id,
             )
