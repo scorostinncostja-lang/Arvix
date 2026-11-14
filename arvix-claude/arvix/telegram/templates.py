@@ -9,8 +9,8 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-from arvix import rules
-from arvix.context import DAY_TYPES_RU, QUOTA_RU, hm
+from arvix import interview, rules
+from arvix.context import DAY_TYPES_RU, QUOTA_RU, autonomy_line, hm
 
 WEEKDAYS_FULL = ("Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье")
 
@@ -37,7 +37,9 @@ HELP = """Пиши мне обычным текстом — команды не 
 /silent — тихий день · /sos — режим 🟥 · /mentor on — вернуть ментора · /export"""
 
 ONBOARD_INTRO = (
-    "Чтобы держать твой день, мне нужно тебя знать. 37 вопросов, 8 блоков, страхи — последними.\n"
+    f"Чтобы держать твой день, мне нужно тебя знать. {len(interview.QUESTIONS)} вопросов, "
+    f"{len(interview.BLOCKS)} блоков, страхи — последними. Не за один вечер: полезный минимум — "
+    "«Ядро» и «Распорядок дня», остальное по блоку за вечер.\n"
     "Отвечай как есть, коротко можно. /skip — пропустить вопрос, /pause — остановиться, /onboard — продолжить.\n"
     "Начнём с ядра: без него система не запустится."
 )
@@ -192,6 +194,8 @@ def status(core: Any) -> str:
         f"Уровень {s['level']} · {s['xp_into']}/{s['xp_need']} XP · HP {s['hp']} · стрик {s['streak']} дн",
         f"Сезон S{season['number']}, неделя {season['week']}: {season['rank']} (SP {season['sp_avg']}) · щитов {s['shields_left']}",
     ]
+    if line := autonomy_line(s["autonomy"]):
+        lines.append(line)
     if not s["mentor_enabled"]:
         lines.append("Ментор выключен safety-контуром. Вернуть: /mentor on")
     if s["protocol_zero"]:

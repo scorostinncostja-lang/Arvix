@@ -73,7 +73,7 @@ def review_budget(core: Any) -> dict[str, Any] | None:
             red_days=sum(1 for _, c in closed if c.get("mode") == "red"),
             yellow_days=sum(1 for _, c in closed if c.get("mode") == "yellow"),
             sleep_avg=sum(sleeps) / len(sleeps) if sleeps else None,
-            sleep_target=int(st.profile.get("sleep_target_min") or core.cfg.mech("sleep_target_min", 450)),
+            sleep_target=core.sleep_target(),
             hp_drop=hp_drop,
         )
         week = load.week_load(st.templates, result["factors"])
@@ -191,8 +191,8 @@ def close_day(core: Any, d: date) -> dict[str, Any] | None:
         if refund:
             core.emit("hp_changed", {"amount": refund, "reason": "shield_refund", "date": d.isoformat()}, source="scheduler")
 
-        # 8. Бонусы и регенерация (02-MECHANICS §2, §3).
-        sleep_target = int(st.profile.get("sleep_target_min") or cfg.mech("sleep_target_min", 450))
+        # 8. Бонусы и регенерация (02-MECHANICS §2, §3). Норма сна — из распорядка человека.
+        sleep_target = core.sleep_target()
         sleep_ok = day.sleep_min is not None and day.sleep_min >= sleep_target - 30
         if completion is not None and completion >= 100:
             xp_bonus.append((rules.BONUS_FULL_DAY, "full_day"))

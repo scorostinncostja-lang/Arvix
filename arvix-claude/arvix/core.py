@@ -176,6 +176,18 @@ class Core:
                 self.emit("mode_changed", {"from": self.state.mode, "to": mode, "trigger": trigger}, source=source)
         return mode
 
+    def sleep_target(self) -> int:
+        """Норма сна в минутах: явное поле профиля, иначе расстояние между целевым отбоем
+        и подъёмом из интервью, иначе конфиг. Норма подростка и взрослого различается —
+        её задаёт человек своим распорядком, а не константа."""
+        profile = self.state.profile
+        if profile.get("sleep_target_min"):
+            return int(profile["sleep_target_min"])
+        gap = rules.minutes_after(profile.get("bedtime_target"), profile.get("wake_target"))
+        if gap is not None and 240 <= gap <= 720:
+            return gap
+        return int(self.cfg.mech("sleep_target_min", 450))
+
     def penalty_multiplier(self, d: date | None = None, ignore_days: int = 0) -> float:
         d = d or self.today()
         day = self.state.days.get(d)
@@ -848,4 +860,5 @@ class Core:
             "mentor_enabled": st.mentor_enabled, "streak": st.streak(today), "season": self.season(),
             "completion": st.completion(today), "debts": len(st.debts()), "protocol_zero": self.zero_active(),
             "shields_left": max(0, int(self.cfg.mech("shields_per_month", 2)) - st.shields_used(today)),
+            "autonomy": st.autonomy(today),
         }

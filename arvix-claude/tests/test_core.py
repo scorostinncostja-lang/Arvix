@@ -158,6 +158,42 @@ class TaskOpsTest(ArvixCase):
         for raw, minutes in (("7:30", 450), ("7.5", 450), ("7ч30м", 450), ("450м", 450), ("6", 360)):
             self.assertEqual(self.core.log_sleep(raw)["duration_min"], minutes, raw)
 
+    def test_sleep_target_comes_from_own_schedule(self) -> None:
+        """Норма сна — из распорядка человека (подростку нужно больше взрослого), не константа."""
+        self.assertEqual(self.core.sleep_target(), 450)  # конфиг, пока профиль пуст
+        self.core.interview_answer("sleep", "сейчас 00:30–07:00, хочу 23:00–07:30")
+        self.assertEqual(self.core.sleep_target(), 510)
+        self.core.profile_set("sleep_target_min", 480)
+        self.assertEqual(self.core.sleep_target(), 480)
+        from arvix.context import build_context
+
+        self.assertIn("норма 8ч00м", build_context(self.core))
+
+    def test_autonomy_metric(self) -> None:
+        """00-VISION §5: тихие дни против обычных + учебные вопросы без /answer."""
+        self.assertEqual(self.core.state.autonomy(self.core.today())["silent_ratio"], None)
+        for offset, silent in ((0, False), (1, False), (2, True)):
+            self.at(moscow(2026, 11, 2 + offset, 9))
+            self.core.refresh()
+            if silent:
+                self.core.silent_today()
+            tasks = [self.core.add_task(f"Дело {offset}{i}", importance=2, start="12:00", sphere="work") for i in range(2)]
+            self.core.complete_task(tasks[0].id)
+            if not silent:
+                self.core.complete_task(tasks[1].id)
+        self.core.learning_question("что такое производная", direct=False)
+        self.core.learning_question("реши уравнение", direct=True)
+        self.core.learning_question("почему небо синее", direct=False)
+        self.at(moscow(2026, 11, 6, 9))
+        self.core.refresh()
+        autonomy = self.core.status()["autonomy"]
+        self.assertEqual(autonomy["silent_ratio"], 0.5)  # тихий день 50% против обычных 100%
+        self.assertEqual(autonomy["silent_days"], 1)
+        self.assertEqual((autonomy["hints"], autonomy["questions"], autonomy["hint_share"]), (2, 3, 0.67))
+        from arvix.context import build_context
+
+        self.assertIn("АВТОНОМНОСТЬ: тихие дни 0.50 (1 дн) · вопросы без /answer 2/3", build_context(self.core))
+
 
 if __name__ == "__main__":
     unittest.main()

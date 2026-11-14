@@ -133,14 +133,25 @@ EXTRACT_SCHEMA = {
     "required": ["summary", "actions"],
 }
 
-# Валидаторы ответа (04-AI-LAYER §9) — дешёвые проверки кодом, без модели.
+# Валидаторы ответа (04-AI-LAYER) — дешёвые проверки кодом, без модели.
 GENTLE_STOP = ("дисциплин", "продуктивн", "провал", "слил", "штраф", "лень", "саботаж", " xp", " hp", "выполнени", "долг")
 LINK_RE = re.compile(r"https?://\S+")
+# Обучающий ответ обязан назвать первоисточник. Требовать именно URL нельзя: валидатор,
+# который принимает только ссылку, учит модель выдумывать адреса. Учебник с параграфом,
+# документация или спецификация по названию — тоже источник.
+SOURCE_RE = re.compile(
+    r"https?://\S+|первоисточник|источник|учебник|параграф|§\s*\d|глава\s*\d|документац|спецификац|справочник",
+    re.IGNORECASE,
+)
 
 
 def gentle_violation(text: str) -> bool:
     low = f" {text.lower()}"
     return any(word in low for word in GENTLE_STOP)
+
+
+def has_source(text: str) -> bool:
+    return bool(SOURCE_RE.search(text or ""))
 
 
 def clip(text: str, limit: int = 700) -> str:

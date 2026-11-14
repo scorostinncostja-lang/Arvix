@@ -94,7 +94,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "inputSchema": _obj({"action": _enum("status", "next", "answer", "skip", "reset"), "qid": STR, "answer": STR, "block": STR}, ["action"]),
     },
     "check_request": {
-        "description": "Факты для решения по просьбе изменить план («хочу погулять в 15:00»): выполнение, глубокая работа, долг, режим, конфликты в окне, квоты. Ничего не меняет — вердикт формулируешь ты на этих цифрах.",
+        "description": "Факты для просьбы изменить план («хочу погулять в 15:00»): выполнение, глубокая работа, долг, режим, конфликты в окне, квоты. Ничего не меняет — ты называешь цену и вариант, решение принимает человек.",
         "inputSchema": _obj({"description": STR, "date": STR, "start": STR, "duration_min": INT}, ["description"]),
     },
     "debrief": {
@@ -282,7 +282,7 @@ def t_check_request(core: Core, a: dict[str, Any]) -> str:
     quotas = core.cfg.mech("quotas") or {}
     week = facts["week"]
     lines.append("КВОТЫ НЕДЕЛИ: " + " · ".join(f"{QUOTA_RU.get(k, k)} {week['quotas'].get(k, 0)}/{v}" for k, v in quotas.items()))
-    lines.append("Вердикт формулируешь ты — на этих цифрах (decision_rule). Согласился — меняй план инструментом task.")
+    lines.append("Цену и один вариант формулируешь ты на этих цифрах (decision_rule); решение — за человеком. Его выбор запиши инструментом task.")
     return "\n".join(lines)
 
 

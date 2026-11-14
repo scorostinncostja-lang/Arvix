@@ -15,7 +15,6 @@ from arvix import interview, rules, safety
 from arvix.brain import (
     DEBRIEF_SCHEMA,
     EXTRACT_SCHEMA,
-    LINK_RE,
     RETRO_SCHEMA,
     TEMPLATES_SCHEMA,
     VOICE_SCHEMA,
@@ -23,6 +22,7 @@ from arvix.brain import (
     apply_actions,
     clip,
     gentle_violation,
+    has_source,
 )
 from arvix.context import build_context, hm, task_line
 from arvix.core import ArvixError, Core, parse_duration
@@ -437,15 +437,16 @@ class Bot:
             ok = retry is not None and not gentle_violation(retry.get("reply", ""))
             result = retry if ok else {"actions": []}
             reply = retry["reply"].strip() if ok else tpl.GENTLE_FALLBACK
-        if result.get("learning") and not LINK_RE.search(reply):
+        if result.get("learning") and not has_source(reply):
             retry = self.brain.ask(
-                system=system + "\n\n<validator>Ответ обучающий, но без ссылки на первоисточник. Добавь 1–3 реальные ссылки, официальная документация первой. Не выдумывай URL.</validator>",
+                system=system + "\n\n<validator>Ответ обучающий, но первоисточник не назван. Назови его: учебник и параграф, "
+                "официальная документация или спецификация. Ссылку давай только настоящую; не уверен — без ссылки. Не выдумывай URL.</validator>",
                 prompt=text, schema=VOICE_SCHEMA, vault_tools=True,
             )
-            if retry and LINK_RE.search(retry.get("reply", "")):
+            if retry and has_source(retry.get("reply", "")):
                 result, reply = retry, retry["reply"].strip()
             else:
-                reply += "\n\n(Ссылку на первоисточник приложить не вышло — проверь по официальной документации.)"
+                reply += "\n\n(Первоисточник не назван — сверь тему с учебником или официальной документацией.)"
         done, failed = apply_actions(core, result.get("actions") or [], source="telegram", fallback_report=text)
         if done:
             reply += "\n\n" + " · ".join(done)
@@ -692,9 +693,18 @@ class Bot:
         self.send_debrief(manual=True)
 
     def cmd_mentor(self, rest: str) -> None:
-        enabled = rest.strip().lower() in ("on", "вкл", "1")
-        self.core.set_mentor(enabled, by="telegram")
-        self.send("Режим ментора включён." if enabled else "Режим ментора выключен.")
+        """Выключение — только явным «off»: пустой или опечатанный аргумент показывает
+        состояние, а не отключает ментора молча."""
+        arg = rest.strip().lower()
+        if arg in ("on", "вкл", "1"):
+            self.core.set_mentor(True, by="telegram")
+            self.send("Режим ментора включён.")
+        elif arg in ("off", "выкл", "0"):
+            self.core.set_mentor(False, by="telegram")
+            self.send("Режим ментора выключен.")
+        else:
+            state = "включён" if self.core.state.mentor_enabled else "выключен"
+            self.send(f"Режим ментора {state}. Команды: /mentor on · /mentor off")
 
     def cmd_reason(self, rest: str) -> None:
         result = self.core.declare_reason(rest, source="telegram")

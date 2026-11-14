@@ -31,6 +31,16 @@ def hm(minutes: int | None) -> str:
     return f"{hours}ч{mins:02d}м" if hours else f"{mins}м"
 
 
+def autonomy_line(data: dict[str, Any]) -> str:
+    """«Автономность: тихие дни 0.9 (3 дн) · вопросы без /answer 4/5» — пусто, пока нет данных."""
+    parts = []
+    if data.get("silent_ratio") is not None:
+        parts.append(f"тихие дни {data['silent_ratio']:.2f} ({data['silent_days']} дн)")
+    if data.get("hint_share") is not None:
+        parts.append(f"вопросы без /answer {data['hints']}/{data['questions']}")
+    return "Автономность: " + " · ".join(parts) if parts else ""
+
+
 def task_line(task: Any) -> str:
     bits = [f"[{task.id}]", task.start or "--:--", STATUS_ICON.get(task.status, "?"), task.title]
     meta = [f"{task.duration_min}м", f"imp{task.importance}", f"diff{task.difficulty}"]
@@ -85,7 +95,7 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     profile = st.profile
     who = [profile.get("name")]
     if profile.get("bedtime_target") and profile.get("wake_target"):
-        who.append(f"сон по плану {profile['bedtime_target']}–{profile['wake_target']}")
+        who.append(f"сон по плану {profile['bedtime_target']}–{profile['wake_target']} (норма {hm(core.sleep_target())})")
     if any(who):
         lines.append("ЧЕЛОВЕК: " + " · ".join(x for x in who if x))
 
@@ -145,6 +155,9 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     lines.append(load)
     if not st.templates:
         lines.append("РАСПОРЯДОК: шаблонов дней нет — задачи и напоминания не создаются. Предложи собрать распорядок.")
+
+    if autonomy := autonomy_line(status["autonomy"]):
+        lines.append("АВТОНОМНОСТЬ:" + autonomy.split(":", 1)[1])
 
     directives = st.active_directives(today)[:5]
     if directives:

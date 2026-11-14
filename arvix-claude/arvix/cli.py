@@ -52,6 +52,10 @@ def cmd_status(args: argparse.Namespace) -> None:
     print(f"Уровень {s['level']} ({s['xp_into']}/{s['xp_need']} XP, всего {s['xp_total']}) · HP {s['hp']} · стрик {s['streak']} дн")
     print(f"Сезон S{season['number']} нед.{season['week']} · {season['rank']} (SP {season['sp_avg']}) · щитов {s['shields_left']}")
     print(f"Ментор: {'включён' if s['mentor_enabled'] else 'ВЫКЛЮЧЕН (safety-контур) — `arvix mentor on`'} · долг: {s['debts']}")
+    from arvix.context import autonomy_line
+
+    if line := autonomy_line(s["autonomy"]):
+        print(line)
 
 
 def cmd_context(args: argparse.Namespace) -> None:

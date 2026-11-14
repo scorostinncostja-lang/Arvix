@@ -117,6 +117,34 @@ class InboxTest(BotCase):
         self.text("как дела?")
         self.assertEqual(self.api.last, tpl.FALLBACK)
 
+    def test_mentor_command_needs_explicit_off(self) -> None:
+        """«/mentor» без аргумента или с опечаткой показывает состояние, а не выключает ментора."""
+        for arg in ("", " вкл?", " of"):
+            self.text(f"/mentor{arg}")
+            self.assertTrue(self.core.state.mentor_enabled, arg)
+            self.assertIn("включён", self.api.last)
+        self.text("/mentor off")
+        self.assertFalse(self.core.state.mentor_enabled)
+        self.text("/mentor on")
+        self.assertTrue(self.core.state.mentor_enabled)
+
+    def test_onboarding_intro_counts_real_questions(self) -> None:
+        from arvix import interview
+
+        self.assertIn(f"{len(interview.QUESTIONS)} вопросов, {len(interview.BLOCKS)} блоков", tpl.ONBOARD_INTRO)
+
+    def test_learning_answer_needs_a_named_source_not_a_url(self) -> None:
+        """Учебник с параграфом — источник; требовать URL значит учить модель их выдумывать."""
+        self.brain.answers.append({"reply": "Сначала сам: что такое равнодействующая? Источник: Перышкин, 9 класс, §12. 20 минут.", "actions": [], "learning": True})
+        self.text("как складывать силы?")
+        self.assertEqual(len(self.brain.calls), 1)  # источник назван — без повторного вызова
+        self.assertNotIn("Первоисточник не назван", self.api.last)
+        self.brain.answers += [{"reply": "Подумай сам, 20 минут.", "actions": [], "learning": True}, {"reply": "Всё ещё без всего.", "actions": [], "learning": True}]
+        self.text("а что такое импульс?")
+        self.assertEqual(len(self.brain.calls), 3)
+        self.assertIn("первоисточник не назван", self.brain.calls[-1]["system"].lower())
+        self.assertIn("Первоисточник не назван", self.api.last)
+
     def test_actions_are_applied_and_reported_honestly(self) -> None:
         task = self.core.add_task("Английский", importance=2, start="12:00", sphere="work")
         self.brain.answers.append({"reply": "Принято.", "actions": [
