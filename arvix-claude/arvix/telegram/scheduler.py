@@ -1,4 +1,4 @@
-"""Проактив L0 (02-MECHANICS §7, §10): брифинг, напоминания T−5 / T+0 / T+конец,
+"""Проактив L0 (02-MECHANICS §8, §12): брифинг, напоминания T−5 / T+0 / T+конец,
 чек-ин в 15:00, разбор, отбой, ретро, фокус-таймер и протокол игнора.
 
 Решение «когда и что писать» — код. Модель зовётся только для разбора и ретро.
@@ -46,17 +46,23 @@ class Scheduler:
         day = core.state.day(today)
         silent_days = core.state.ignore_streak(today - timedelta(days=1))
         quiet = day.silent or not core.state.mentor_enabled
+        red = core.effective_mode() == "red"
+        back = bool(day.user_actions)  # человек уже что-то написал или нажал сегодня
 
         self.focus(now)
-        if silent_days >= 2:
+        if silent_days >= 2 and not back:
             self.ignore_protocol(now, silent_days)
             return
+        # Обычный день — или вернулся после одного дня тишины. После долгого молчания день
+        # возвращения идёт без стены напоминаний: брифинг, отбой и разбор (02-MECHANICS §8).
+        full = silent_days == 0 or (back and silent_days == 1)
         if not quiet:
-            if silent_days == 0:  # на второй день молчания — только утро и вечер
+            if full and not red:  # в 🟥 план — одна маленькая вещь: напоминаний о задачах нет
                 self.reminders(now)
                 self.midday(now)
-                self.bedtime(now)
-            self.brief(now, prefix=tpl.IGNORE_DAY2 if silent_days == 1 else "")
+            if full or back:
+                self.bedtime(now, gentle=red)
+            self.brief(now, prefix=tpl.IGNORE_DAY2 if silent_days == 1 and not back else "")
             self.retro(now)
         self.debrief(now)
 
@@ -101,7 +107,7 @@ class Scheduler:
         if when <= now < until and not self.core.sent(f"debrief:{now.date().isoformat()}"):
             self.bot.send_debrief()
 
-    def bedtime(self, now: datetime) -> None:
+    def bedtime(self, now: datetime, gentle: bool = False) -> None:
         target = self.core.state.profile.get("bedtime_target")
         if not target:
             return
@@ -110,8 +116,9 @@ class Scheduler:
         if bed.hour < 12:  # отбой после полуночи — это ночь следующей даты
             bed += timedelta(days=1)
         key = f"bed:{now.date().isoformat()}"
+        tail = "Сон сейчас важнее всего." if gentle else "Экран убрать, задачи закрыть."
         if self._once(key, bed - timedelta(minutes=warn), now, timedelta(minutes=warn)):
-            self.bot.send(f"🌙 Через {warn} минут отбой ({target}). Экран убрать, задачи закрыть.", key=key)
+            self.bot.send(f"🌙 Через {warn} минут отбой ({target}). {tail}", key=key)
 
     def retro(self, now: datetime) -> None:
         core = self.core
@@ -140,10 +147,14 @@ class Scheduler:
             )
 
     def ignore_protocol(self, now: datetime, silent_days: int) -> None:
-        """02-MECHANICS §7: день 3 — одно сообщение и заморозка штрафов, дни 4–7 —
-        «я здесь» раз в день, дальше — тишина до возвращения."""
+        """02-MECHANICS §8: день 3 — одно сообщение и заморозка штрафов, дни 4–8 —
+        «Я здесь.» раз в день, дальше — раз в неделю, пока человек не вернётся.
+        Дни без сообщений бота серию не рвут (State.ignore_streak), поэтому цикл
+        «брифинг → три дня → …» после долгого молчания не начинается заново."""
         if silent_days > 7:
-            return
+            last = max((d for d, day in self.core.state.days.items() if day.msgs_out), default=None)
+            if last is not None and (now.date() - last).days < 7:
+                return
         key = f"ignore:{now.date().isoformat()}"
         if self._once(key, self.brief_time(), now, timedelta(hours=12)):
             self.bot.send(tpl.IGNORE.get(silent_days, tpl.IGNORE_LATER), key=key)

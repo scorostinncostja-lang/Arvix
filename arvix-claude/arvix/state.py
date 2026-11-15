@@ -352,15 +352,51 @@ class State:
         return count
 
     def ignore_streak(self, until: date) -> int:
-        """Дней подряд (до until включительно), когда бот писал, а человек молчал."""
+        """Сколько дней (до until включительно) бот писал, а человек молчал.
+
+        Серию рвёт только действие человека. Дни, когда бот ничего не отправлял
+        (ноутбук спал, недельная пауза протокола игнора), её не рвут и не удлиняют:
+        иначе после восьми дней тишины протокол начинался бы заново с «обычного дня»
+        и снова снимал HP."""
+        if self.first_date is None:
+            return 0
         count, d = 0, until
-        while d in self.days and self.days[d].msgs_out and not self.days[d].user_actions:
-            count += 1
+        while d >= self.first_date:
+            day = self.days.get(d)
+            if day and day.user_actions:
+                break
+            if day and day.msgs_out:
+                count += 1
             d -= timedelta(days=1)
         return count
 
     def shields_used(self, d: date) -> int:
         return sum(1 for s in self.shields if (s.year, s.month) == (d.year, d.month))
+
+    def autonomy(self, today: date, days: int = 28) -> dict[str, Any]:
+        """Автономность (00-VISION §5): насколько человек держит день без бота.
+
+        silent_ratio — выполнение в тихие дни к выполнению в обычные (≤ 1.0);
+        hint_share — доля учебных вопросов, разобранных без готового ответа (/answer).
+        Считается по закрытым дням и вопросам за последние `days` дней; нет данных — None.
+        """
+        since = today - timedelta(days=days)
+        silent: list[float] = []
+        normal: list[float] = []
+        for d, day in self.days.items():
+            closed = day.closed
+            if not (since <= d < today) or not closed or not closed.get("total") or closed.get("completion") is None:
+                continue
+            (silent if day.silent else normal).append(float(closed["completion"]))
+        ratio = None
+        if silent and normal and sum(normal):
+            ratio = round(min(1.0, (sum(silent) / len(silent)) / (sum(normal) / len(normal))), 2)
+        questions = [q for q in self.learning if q.get("date", "") >= since.isoformat()]
+        hints = sum(1 for q in questions if q.get("mode") == "hint")
+        return {
+            "silent_ratio": ratio, "silent_days": len(silent),
+            "hint_share": round(hints / len(questions), 2) if questions else None, "hints": hints, "questions": len(questions),
+        }
 
     def active_directives(self, today: date) -> list[dict[str, Any]]:
         alive = [x for x in self.directives.values() if not x.get("valid_until") or x["valid_until"] >= today.isoformat()]

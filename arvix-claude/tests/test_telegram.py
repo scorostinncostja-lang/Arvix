@@ -1,6 +1,7 @@
 """Telegram-бот без сети: подставные API и голова."""
 
 import unittest
+from datetime import timedelta
 from typing import Any
 
 from arvix.telegram import templates as tpl
@@ -29,6 +30,9 @@ class FakeAPI:
     def typing(self, *a: Any) -> None:
         pass
 
+    def download(self, file_id: str) -> bytes:
+        return b"OGG:" + file_id.encode()
+
     @property
     def last(self) -> str:
         return self.sent[-1][0]
@@ -48,6 +52,21 @@ class FakeBrain:
         return True
 
 
+class FakeSTT:
+    max_seconds = 300
+
+    def __init__(self, text: str = "", error: str = "") -> None:
+        self.text, self.error, self.enabled, self.seen = text, error, True, []
+
+    def transcribe(self, audio: bytes, filename: str = "voice.ogg") -> str:
+        from arvix.stt import STTError
+
+        self.seen.append(audio)
+        if self.error:
+            raise STTError(self.error)
+        return self.text
+
+
 class BotCase(ArvixCase):
     def setUp(self) -> None:
         super().setUp()
@@ -58,6 +77,9 @@ class BotCase(ArvixCase):
 
     def text(self, text: str, sender: int = OWNER) -> None:
         self.bot.handle({"update_id": 1, "message": {"from": {"id": sender}, "chat": {"id": sender}, "text": text}})
+
+    def voice(self, file_id: str = "v1", duration: int = 5) -> None:
+        self.bot.handle({"update_id": 3, "message": {"from": {"id": OWNER}, "chat": {"id": OWNER}, "voice": {"file_id": file_id, "duration": duration}}})
 
     def press(self, data: str) -> None:
         self.bot.handle({"update_id": 2, "callback_query": {"id": "c", "from": {"id": OWNER}, "data": data, "message": {"chat": {"id": OWNER}, "message_id": 5}}})
@@ -117,6 +139,34 @@ class InboxTest(BotCase):
         self.text("как дела?")
         self.assertEqual(self.api.last, tpl.FALLBACK)
 
+    def test_mentor_command_needs_explicit_off(self) -> None:
+        """«/mentor» без аргумента или с опечаткой показывает состояние, а не выключает ментора."""
+        for arg in ("", " вкл?", " of"):
+            self.text(f"/mentor{arg}")
+            self.assertTrue(self.core.state.mentor_enabled, arg)
+            self.assertIn("включён", self.api.last)
+        self.text("/mentor off")
+        self.assertFalse(self.core.state.mentor_enabled)
+        self.text("/mentor on")
+        self.assertTrue(self.core.state.mentor_enabled)
+
+    def test_onboarding_intro_counts_real_questions(self) -> None:
+        from arvix import interview
+
+        self.assertIn(f"{len(interview.QUESTIONS)} вопросов, {len(interview.BLOCKS)} блоков", tpl.ONBOARD_INTRO)
+
+    def test_learning_answer_needs_a_named_source_not_a_url(self) -> None:
+        """Учебник с параграфом — источник; требовать URL значит учить модель их выдумывать."""
+        self.brain.answers.append({"reply": "Сначала сам: что такое равнодействующая? Источник: Перышкин, 9 класс, §12. 20 минут.", "actions": [], "learning": True})
+        self.text("как складывать силы?")
+        self.assertEqual(len(self.brain.calls), 1)  # источник назван — без повторного вызова
+        self.assertNotIn("Первоисточник не назван", self.api.last)
+        self.brain.answers += [{"reply": "Подумай сам, 20 минут.", "actions": [], "learning": True}, {"reply": "Всё ещё без всего.", "actions": [], "learning": True}]
+        self.text("а что такое импульс?")
+        self.assertEqual(len(self.brain.calls), 3)
+        self.assertIn("первоисточник не назван", self.brain.calls[-1]["system"].lower())
+        self.assertIn("Первоисточник не назван", self.api.last)
+
     def test_actions_are_applied_and_reported_honestly(self) -> None:
         task = self.core.add_task("Английский", importance=2, start="12:00", sphere="work")
         self.brain.answers.append({"reply": "Принято.", "actions": [
@@ -163,7 +213,8 @@ class InboxTest(BotCase):
         ]})
         self.text("/schedule")
         self.assertIn("пн–пт · учебный", self.api.last)
-        self.assertIn("Итого 2ч30м в неделю", self.api.last)
+        self.assertIn("(30→20 мин, глубокая, ★4)", self.api.last)  # показано то, что реально придёт задачей
+        self.assertIn("Итого 1ч40м в неделю", self.api.last)
         self.press("s:save")
         self.assertEqual(self.core.state.templates[0]["blocks"][0]["title"], "Математика ОГЭ")
         self.assertIn("Распорядок сохранён", self.api.last)
@@ -173,6 +224,46 @@ class InboxTest(BotCase):
         self.brain.last_error = "API Error: Request blocked (HTTP 403) unsupported region, or a VPN"
         self.text("привет")
         self.assertIn("VPN", self.api.last)
+
+    def test_voice_is_shown_then_handled_like_text(self) -> None:
+        self.bot.stt = FakeSTT("спал шесть часов, лёг в час")
+        self.brain.answers.append({"reply": "Записал.", "actions": [{"type": "log_sleep", "duration": "6:00", "bedtime": "01:00"}]})
+        self.voice("abc")
+        self.assertEqual(self.bot.stt.seen, [b"OGG:abc"])
+        self.assertTrue(any(t.startswith("🎙 «спал шесть часов") for t, _ in self.api.sent))
+        self.assertEqual(self.brain.calls[-1]["prompt"], "спал шесть часов, лёг в час")
+        self.assertEqual(self.core.state.days[self.core.today()].sleep_min, 360)
+
+    def test_voice_answers_a_waiting_question_without_the_model(self) -> None:
+        task = self.core.add_task("Физика", importance=3, start="12:00")
+        self.press(f"t:{task.id}:yes")
+        self.bot.stt = FakeSTT("решил десять задач из параграфа")
+        self.voice()
+        self.assertEqual(self.core.state.tasks[task.id].report, "решил десять задач из параграфа")
+        self.assertEqual(self.brain.calls, [])
+
+    def test_voice_safety_markers_still_work(self) -> None:
+        self.bot.stt = FakeSTT("я не хочу жить")
+        self.voice()
+        self.assertFalse(self.core.state.mentor_enabled)
+        self.assertEqual(self.brain.calls, [])
+
+    def test_voice_off_too_long_and_failed(self) -> None:
+        self.voice()
+        self.assertEqual(self.api.last, tpl.VOICE_OFF)
+        self.bot.stt = FakeSTT("x")
+        self.voice(duration=900)
+        self.assertIn("длиннее 5 мин", self.api.last)
+        self.bot.stt = FakeSTT(error="лимит распознавания")
+        self.voice()
+        self.assertIn("лимит распознавания", self.api.last)
+        self.assertEqual(self.brain.calls, [])
+
+    def test_reply_shows_doubts_found_by_code(self) -> None:
+        self.brain.answers.append({"reply": "Поставил.", "actions": [{"type": "add_task", "title": "Матан", "start": "09:00", "duration_min": 60}]})
+        self.text("поставь матан на 9 утра")
+        self.assertIn("⚠️ Проверь:", self.api.last)
+        self.assertIn("уже прошло", self.api.last)
 
     def test_quick_add_parser(self) -> None:
         fields = parse_quick_task("Физика: задачи 18:00 60м !4 deep завтра")
@@ -238,6 +329,56 @@ class SchedulerTest(BotCase):
         self.at(moscow(2026, 11, 2, 8, 57))
         self.scheduler.tick()
         self.assertEqual(self.api.sent, [])
+
+    def test_red_mode_sends_no_task_reminders(self) -> None:
+        """🟥: план — одна маленькая вещь. «Через 5 мин», «Блок пошёл», «Сделано?» не приходят; отбой — мягко."""
+        self.core.profile_set("bedtime_target", "23:00", source="l0")
+        self.core.add_task("Алгоритмы", importance=4, start="09:00", duration_min=60)
+        self.core.sos(True)
+        for hour, minute in ((8, 56), (9, 1), (10, 2), (22, 31)):
+            self.at(moscow(2026, 11, 2, hour, minute))
+            self.scheduler.tick()
+        texts = [t for t, _ in self.api.sent]
+        self.assertFalse(any("Алгоритмы" in t for t in texts), texts)
+        self.assertTrue(any("Сон сейчас важнее всего" in t for t in texts), texts)
+
+    def test_long_silence_goes_weekly_and_never_restarts(self) -> None:
+        """Дни 1–2 — брифинг, день 3 — «Три дня…», 4–8 — «Я здесь.», дальше раз в неделю.
+        Раньше на 9-й день серия рвалась и протокол начинался заново со штрафами."""
+        self.core.profile_set("wake_target", "07:30", source="l0")
+        by_day = []
+        for offset in range(16):
+            self.at(moscow(2026, 11, 2, 8, 0) + timedelta(days=offset))
+            before = len(self.api.sent)
+            self.scheduler.tick()
+            by_day.append([t for t, _ in self.api.sent[before:]])
+        self.assertTrue(by_day[0][0].startswith("☀️"), by_day[0])
+        self.assertTrue(by_day[1][0].startswith(tpl.IGNORE_DAY2), by_day[1])
+        self.assertEqual(by_day[2], [tpl.IGNORE[2]])
+        for offset in range(3, 8):
+            self.assertEqual(by_day[offset], [tpl.IGNORE_LATER], offset)
+        for offset in range(8, 14):
+            self.assertEqual(by_day[offset], [], offset)
+        self.assertEqual(by_day[14], [tpl.IGNORE_LATER])
+        self.assertEqual(by_day[15], [])
+        self.assertEqual(sum(t == tpl.IGNORE[2] for day in by_day for t in day), 1)
+        self.assertEqual(self.core.state.hp, 80)  # −10 за первые два дня, с третьего штрафы заморожены
+
+    def test_return_after_silence_is_gentle_and_not_greeted_as_absent(self) -> None:
+        self.core.profile_set("wake_target", "07:30", source="l0")
+        for offset in range(5):
+            self.at(moscow(2026, 11, 2, 8, 0) + timedelta(days=offset))
+            self.scheduler.tick()
+        self.at(moscow(2026, 11, 7, 7, 40))
+        self.brain.answers.append({"reply": "Что случилось? И один маленький шаг на сегодня — какой?", "actions": []})
+        self.text("я тут")
+        self.assertIn("return_protocol", self.brain.calls[-1]["system"])
+        self.at(moscow(2026, 11, 7, 8, 0))
+        before = len(self.api.sent)
+        self.scheduler.tick()
+        sent = [t for t, _ in self.api.sent[before:]]
+        self.assertNotIn(tpl.IGNORE_LATER, sent)  # человек уже вернулся — «Я здесь.» не к месту
+        self.assertTrue(sent and sent[0].startswith("☀️"), sent)
 
 
 if __name__ == "__main__":

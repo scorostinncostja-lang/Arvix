@@ -1,4 +1,4 @@
-"""Шаблоны сообщений L0 — чистые строки, без модели (01-ARCHITECTURE §4.2, 05-BOT-TWA §3).
+"""Шаблоны сообщений L0 — чистые строки, без модели (01-ARCHITECTURE §3.2, 05-INTERFACES §2.4).
 
 Формулировки без глаголов прошедшего времени с родом («сделано?», а не
 «выполнил?»): род человека бот узнаёт только в интервью.
@@ -9,8 +9,8 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-from arvix import rules
-from arvix.context import DAY_TYPES_RU, QUOTA_RU, hm
+from arvix import interview, rules
+from arvix.context import DAY_TYPES_RU, QUOTA_RU, autonomy_line, hm
 
 WEEKDAYS_FULL = ("Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье")
 
@@ -23,6 +23,8 @@ HELP = """Пиши мне обычным текстом — команды не 
 • «Что у меня осталось на сегодня?» · «Как я иду к цели?»
 • «Запиши мысль: …» — в Obsidian Inbox
 • учебный вопрос — дам направление и источники, не готовый ответ
+• голосовое — распознаю, покажу текст и сделаю то же, что с набранным
+• цель или план, которые не сходятся с твоими часами и целями, — скажу и поправлю
 
 Планы на неделю, цели, роадмапы, каркасы заметок — в Claude Code: cd ~/Arvix && claude
 
@@ -37,7 +39,9 @@ HELP = """Пиши мне обычным текстом — команды не 
 /silent — тихий день · /sos — режим 🟥 · /mentor on — вернуть ментора · /export"""
 
 ONBOARD_INTRO = (
-    "Чтобы держать твой день, мне нужно тебя знать. 37 вопросов, 8 блоков, страхи — последними.\n"
+    f"Чтобы держать твой день, мне нужно тебя знать. {len(interview.QUESTIONS)} вопросов, "
+    f"{len(interview.BLOCKS)} блоков, страхи — последними. Не за один вечер: полезный минимум — "
+    "«Ядро» и «Распорядок дня», остальное по блоку за вечер.\n"
     "Отвечай как есть, коротко можно. /skip — пропустить вопрос, /pause — остановиться, /onboard — продолжить.\n"
     "Начнём с ядра: без него система не запустится."
 )
@@ -53,6 +57,10 @@ DEBRIEF_FALLBACK_QUESTIONS = ["Что сегодня сработало — ко
 RETURN_HINT = (
     "<return_protocol>Человек вернулся после {days} дн молчания. Никакого разбора прошлого и никаких цифр за пропуск. "
     "Один вопрос «что случилось» и один маленький шаг на сегодня. Разбор пропущенного — не раньше чем через 3 дня стабильной работы.</return_protocol>"
+)
+VOICE_OFF = (
+    "Голосовые пока не настроены — напиши текстом. Включить: на машине с ботом `arvix setup --stt groq` "
+    "(ключ Groq, бесплатно) или локально без интернета — deploy/stt-local.sh."
 )
 IGNORE_DAY2 = "Второй день тишины. Одно слово — и я пойму, что происходит."
 IGNORE = {
@@ -85,6 +93,11 @@ def reminder_check(task: Any) -> str:
 
 def completed(title: str, xp: int, debt_closed: bool = False) -> str:
     return f"✅ {title} · +{xp} XP" + (" · долг закрыт" if debt_closed else "")
+
+
+def warn(lines: list[str] | tuple[str, ...] | None) -> str:
+    """Сомнения кода (checks.py) — отдельными строками под ответом: их видно, их нельзя пропустить."""
+    return "".join(f"\n⚠️ Проверь: {line}" for line in lines or ())
 
 
 def failed(title: str, hp: int, debt: bool) -> str:
@@ -172,7 +185,7 @@ def midday(core: Any) -> str | None:
 
 def debrief_facts(core: Any) -> str:
     facts = core.day_facts()
-    lines = ["🌙 Разбор", "", f"Сделано: {facts['done']} из {facts['total']}. Глубокая {hm(facts['deep_min'])} из {hm(int(core.cfg.mech('deep_target_min', 120)))}."]
+    lines = ["🌙 Разбор", "", f"Сделано: {facts['done']} из {facts['total']}. Глубокая {hm(facts['deep_min'])} из {hm(core.deep_target(facts['date']))}."]
     if facts["sleep_min"]:
         lines.append(f"Сон {hm(facts['sleep_min'])}.")
     quotas = core.cfg.mech("quotas") or {}
@@ -192,6 +205,8 @@ def status(core: Any) -> str:
         f"Уровень {s['level']} · {s['xp_into']}/{s['xp_need']} XP · HP {s['hp']} · стрик {s['streak']} дн",
         f"Сезон S{season['number']}, неделя {season['week']}: {season['rank']} (SP {season['sp_avg']}) · щитов {s['shields_left']}",
     ]
+    if line := autonomy_line(s["autonomy"]):
+        lines.append(line)
     if not s["mentor_enabled"]:
         lines.append("Ментор выключен safety-контуром. Вернуть: /mentor on")
     if s["protocol_zero"]:

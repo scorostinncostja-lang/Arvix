@@ -14,6 +14,7 @@ import time
 from arvix.brain import Brain
 from arvix.config import load_config
 from arvix.core import Core
+from arvix.stt import STT
 from arvix.telegram.api import TelegramAPI, TelegramError
 from arvix.telegram.bot import Bot
 from arvix.telegram.scheduler import Scheduler
@@ -34,7 +35,10 @@ def main() -> None:
     brain = Brain(cfg)
     if not brain.available():
         log.warning("claude CLI не найден (%s): бот будет отвечать только шаблонами L0", brain.bin)
-    bot = Bot(core, api, brain, int(tg["owner_id"]))
+    stt = STT(cfg)
+    if stt.engine != "off" and not stt.enabled:
+        log.warning("голосовые не работают: %s", stt.problem())
+    bot = Bot(core, api, brain, int(tg["owner_id"]), stt=stt)
     scheduler = Scheduler(bot)
 
     stopping = False

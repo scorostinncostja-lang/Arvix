@@ -13,7 +13,7 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
-# Node / TWA (появится в фазе 0, шаг 0.7)
+# Node / TWA прототипа v1 — локальные артефакты (archive/v1-docker)
 node_modules/
 twa/dist/
 

@@ -1,4 +1,4 @@
-"""Журнал событий и операции L0: инварианты 03-DATA-MODEL §3."""
+"""Журнал событий и операции L0: инварианты 03-DATA-MODEL §4."""
 
 import random
 import sqlite3
@@ -98,6 +98,27 @@ class TaskOpsTest(ArvixCase):
         self.assertIn("Долг", str(ctx.exception))
         self.core.add_task("Учёба", sphere="learning", start="19:00")  # обязательное — можно
 
+    def test_red_mode_lifts_social_block(self) -> None:
+        """В 🟥 живые люди — часть восстановления: долг их не блокирует."""
+        for title in ("Курсовая", "Экзамен"):
+            self.core.fail_task(self.core.add_task(title, importance=5, start="09:00").id, reason="не успел")
+        with self.assertRaises(ArvixError):
+            self.core.add_task("Кино", sphere="social", start="19:00")
+        self.core.sos(True)
+        self.assertEqual(self.core.add_task("Прогулка с другом", sphere="social", start="19:00").sphere, "social")
+
+    def test_expired_fact_leaves_context(self) -> None:
+        from arvix.context import build_context
+
+        self.core.remember("general", "сессия до пятницы", valid_days=2)
+        self.core.remember("general", "любит тренироваться утром")
+        self.assertIn("сессия до пятницы", build_context(self.core))
+        self.at(self.start + timedelta(days=3))
+        self.core.refresh()
+        text = build_context(self.core)
+        self.assertNotIn("сессия до пятницы", text)
+        self.assertIn("любит тренироваться утром", text)
+
     def test_resolve_by_title_and_prefix(self) -> None:
         task = self.core.add_task("Физика: задачи", start="18:00")
         self.assertEqual(self.core.resolve_task("физика").id, task.id)
@@ -157,6 +178,42 @@ class TaskOpsTest(ArvixCase):
     def test_sleep_parsing(self) -> None:
         for raw, minutes in (("7:30", 450), ("7.5", 450), ("7ч30м", 450), ("450м", 450), ("6", 360)):
             self.assertEqual(self.core.log_sleep(raw)["duration_min"], minutes, raw)
+
+    def test_sleep_target_comes_from_own_schedule(self) -> None:
+        """Норма сна — из распорядка человека (подростку нужно больше взрослого), не константа."""
+        self.assertEqual(self.core.sleep_target(), 450)  # конфиг, пока профиль пуст
+        self.core.interview_answer("sleep", "сейчас 00:30–07:00, хочу 23:00–07:30")
+        self.assertEqual(self.core.sleep_target(), 510)
+        self.core.profile_set("sleep_target_min", 480)
+        self.assertEqual(self.core.sleep_target(), 480)
+        from arvix.context import build_context
+
+        self.assertIn("норма 8ч00м", build_context(self.core))
+
+    def test_autonomy_metric(self) -> None:
+        """00-VISION §5: тихие дни против обычных + учебные вопросы без /answer."""
+        self.assertEqual(self.core.state.autonomy(self.core.today())["silent_ratio"], None)
+        for offset, silent in ((0, False), (1, False), (2, True)):
+            self.at(moscow(2026, 11, 2 + offset, 9))
+            self.core.refresh()
+            if silent:
+                self.core.silent_today()
+            tasks = [self.core.add_task(f"Дело {offset}{i}", importance=2, start="12:00", sphere="work") for i in range(2)]
+            self.core.complete_task(tasks[0].id)
+            if not silent:
+                self.core.complete_task(tasks[1].id)
+        self.core.learning_question("что такое производная", direct=False)
+        self.core.learning_question("реши уравнение", direct=True)
+        self.core.learning_question("почему небо синее", direct=False)
+        self.at(moscow(2026, 11, 6, 9))
+        self.core.refresh()
+        autonomy = self.core.status()["autonomy"]
+        self.assertEqual(autonomy["silent_ratio"], 0.5)  # тихий день 50% против обычных 100%
+        self.assertEqual(autonomy["silent_days"], 1)
+        self.assertEqual((autonomy["hints"], autonomy["questions"], autonomy["hint_share"]), (2, 3, 0.67))
+        from arvix.context import build_context
+
+        self.assertIn("АВТОНОМНОСТЬ: тихие дни 0.50 (1 дн) · вопросы без /answer 2/3", build_context(self.core))
 
 
 if __name__ == "__main__":

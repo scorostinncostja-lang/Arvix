@@ -11,11 +11,10 @@ import re
 from datetime import timedelta
 from typing import Any
 
-from arvix import interview, rules, safety
+from arvix import interview, load, rules, safety
 from arvix.brain import (
     DEBRIEF_SCHEMA,
     EXTRACT_SCHEMA,
-    LINK_RE,
     RETRO_SCHEMA,
     TEMPLATES_SCHEMA,
     VOICE_SCHEMA,
@@ -23,10 +22,12 @@ from arvix.brain import (
     apply_actions,
     clip,
     gentle_violation,
+    has_source,
 )
-from arvix.context import build_context, hm, task_line
+from arvix.context import build_context, end_time, hm, task_line
 from arvix.core import ArvixError, Core, parse_duration
 from arvix.prompt import constitution, system_prompt
+from arvix.stt import STT, STTError
 from arvix.telegram import templates as tpl
 from arvix.telegram.api import TelegramAPI, TelegramError
 
@@ -60,8 +61,9 @@ SCHEDULE_RULES = """<schedule>
   последний заканчивается минимум за 60 мин до отбоя.
 - 1–3 блока в будний день. Глубокая работа (deep_work) — в часы пика энергии, 45–90 минут.
 - Обязательные дела человека (школа, работа, дорога, репетиторы, секции) — блоками с их реальным временем и fixed=true:
-  их объём код никогда не меняет. Всё остальное (самостоятельная учёба, глубокая работа, спорт, отдых) — fixed=false:
-  длительность этих блоков код сам подстраивает раз в неделю по фактам (автонагрузка), ставь честную норму.
+  это занятое время. Код не меняет его объём и не делает из него задач с напоминаниями и отчётами.
+  Всё остальное (самостоятельная учёба, глубокая работа, спорт, отдых) — fixed=false: длительность этих блоков
+  код сам подстраивает раз в неделю по фактам (автонагрузка, старт — 70 %), ставь честную норму.
 - Спорт — сколько человек уже делает (sphere sport), не меньше.
 - Один восстановительный день (recovery): прогулка, спорт, отдых без экрана (tags offscreen), без учёбы.
 - Названия конкретные («Математика ОГЭ: задание 1–5»), если в ответах есть предметы, экзамены и цели.
@@ -84,22 +86,33 @@ def weekdays_label(days: list[int]) -> str:
     return ", ".join(WEEKDAY_NAMES[d] for d in days)
 
 
-def render_templates(templates: list[dict[str, Any]]) -> str:
-    """Распорядок текстом; итоговые часы считает код, а не модель."""
+def render_templates(templates: list[dict[str, Any]], factors: dict[str, float] | None = None) -> str:
+    """Распорядок текстом; итоговые часы считает код, а не модель. С factors своё время
+    показано так, как его поставит автонагрузка («90→65 мин»): человек подтверждает то,
+    что реально придёт задачами, а не то, что записала модель."""
     lines = ["📅 Распорядок недели", ""]
-    week_total = deep_total = 0
+    week_total = deep_total = fixed_total = 0
     for template in templates:
+        days = len(template["weekdays"])
         lines.append(f"{weekdays_label(template['weekdays'])} · {DAY_TYPE_RU.get(template['day_type'], template['day_type'])}")
         for block in sorted(template["blocks"], key=lambda b: b.get("start") or ""):
-            duration = int(block.get("duration") or 60)
-            hours, minutes = map(int, (block.get("start") or "00:00").split(":")[:2])
-            end = hours * 60 + minutes + duration
-            marks = (", глубокая" if block.get("deep_work") else "") + (f", ★{block['importance']}" if int(block.get("importance") or 3) >= 4 else "")
-            lines.append(f"  {block.get('start')}–{end // 60 % 24:02d}:{end % 60:02d} {block['title']} ({duration} мин{marks})")
-            week_total += duration * len(template["weekdays"])
-            deep_total += duration * len(template["weekdays"]) if block.get("deep_work") else 0
+            written = int(block.get("duration") or 60)
+            fixed = load.is_fixed(block)
+            duration = load.scaled_duration(block, factors) if factors else written
+            start = block.get("start") or "00:00"
+            marks = (", обязательное" if fixed else "") + (", глубокая" if block.get("deep_work") else "")
+            marks += f", ★{block['importance']}" if int(block.get("importance") or 3) >= 4 else ""
+            size = f"{written}→{duration} мин" if duration != written else f"{duration} мин"
+            lines.append(f"  {start}–{end_time(start, duration)} {block['title']} ({size}{marks})")
+            if fixed:
+                fixed_total += duration * days
+            else:
+                week_total += duration * days
+                deep_total += duration * days if block.get("deep_work") else 0
         lines.append("")
-    lines.append(f"Итого {hm(week_total)} в неделю, из них глубокой {hm(deep_total)}.")
+    lines.append(f"Итого {hm(week_total)} в неделю, из них глубокой {hm(deep_total)}." + (f" Обязательное: {hm(fixed_total)}." if fixed_total else ""))
+    if factors:
+        lines.append("Своё время код ставит с запасом (старт — 70 %) и раз в неделю пересматривает по фактам. Обязательное — занятое время, без напоминаний и отчётов.")
     return "\n".join(lines)
 
 
@@ -130,11 +143,12 @@ def parse_quick_task(text: str) -> dict[str, Any]:
 
 
 class Bot:
-    def __init__(self, core: Core, api: TelegramAPI, brain: Brain, owner_id: int):
+    def __init__(self, core: Core, api: TelegramAPI, brain: Brain, owner_id: int, stt: STT | None = None):
         self.core = core
         self.api = api
         self.brain = brain
         self.owner = int(owner_id)
+        self.stt = stt if stt is not None else STT(core.cfg)
 
     # --- отправка и ожидание ответа ------------------------------------------
 
@@ -164,7 +178,9 @@ class Bot:
             return  # single-user: всех остальных молча игнорируем
         self.core.refresh()
         text = (msg.get("text") or msg.get("caption") or "").strip()
-        if msg.get("photo"):
+        if media := msg.get("voice") or msg.get("audio"):
+            self.on_voice(media, sent_at=msg.get("date"))
+        elif msg.get("photo"):
             self.on_photo(text)
         elif text.startswith("/"):
             self.on_command(text)
@@ -188,6 +204,36 @@ class Bot:
             return
         self.converse(text)
 
+    def on_voice(self, media: dict[str, Any], sent_at: float | None = None) -> None:
+        """Голосовое → текст → тот же путь, что у набранного сообщения (safety, ожидаемый ответ, голова).
+        Распознанный текст бот показывает первым: ошибку распознавания человек видит до того,
+        как по ней что-то запишется."""
+        if not self.stt.enabled:
+            self.core.message_in("[голосовое — распознавание не настроено]")
+            self.send(tpl.VOICE_OFF)
+            return
+        if int(media.get("duration") or 0) > self.stt.max_seconds:
+            self.core.message_in("[голосовое — слишком длинное]")
+            self.send(f"Голосовое длиннее {self.stt.max_seconds // 60} мин. Разбей на части или напиши текстом.")
+            return
+        try:
+            self.api.typing(self.owner)
+        except TelegramError:
+            pass
+        try:
+            audio = self.api.download(media["file_id"])
+            text = self.stt.transcribe(audio, filename=media.get("file_name") or "voice.ogg")
+        except (TelegramError, STTError, KeyError) as exc:
+            self.core.message_in("[голосовое — не распознано]")
+            self.send(f"Голосовое не распознал: {exc}. Напиши текстом.")
+            return
+        if not text.strip():
+            self.core.message_in("[голосовое — пусто]")
+            self.send("В голосовом не разобрал слов. Повтори или напиши текстом.")
+            return
+        self.send(f"🎙 «{clip(text, 600)}»")
+        self.on_text(text, sent_at=sent_at)
+
     def safety_protocol(self, text: str) -> None:
         self.core.safety_flag("high", text[:200], source="l0")
         self.await_clear()
@@ -201,12 +247,12 @@ class Bot:
             elif kind == "report":
                 self.await_clear()
                 result = self.core.complete_task(waiting["task"], report=text, source="telegram")
-                self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]))
+                self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
             elif kind == "partial":
                 self.await_clear()
                 pct = int(m.group(1)) if (m := re.search(r"\b(\d{1,2})\b", text)) else 50
                 result = self.core.complete_task(waiting["task"], done_pct=pct, report=text, source="telegram")
-                self.send(tpl.completed(result["task"].title, result["xp"]) + f" · {pct}%")
+                self.send(tpl.completed(result["task"].title, result["xp"]) + f" · {pct}%" + tpl.warn(result["warnings"]))
             elif kind == "fail_reason":
                 self.await_clear()
                 task = self.core.explain_failure(waiting["task"], text, source="telegram")
@@ -220,7 +266,7 @@ class Bot:
             elif kind == "sleep":
                 self.await_clear()
                 result = self.core.log_sleep(parse_duration(text.split()[0]), source="telegram")
-                self.send(f"Сон {hm(result['duration_min'])}. Режим: {rules.MODE_LABELS[result['mode']]}")
+                self.send(f"Сон {hm(result['duration_min'])}. Режим: {rules.MODE_LABELS[result['mode']]}" + tpl.warn(result["warnings"]))
             else:
                 return False
         except ArvixError as exc:
@@ -235,7 +281,7 @@ class Bot:
         if waiting and waiting.get("kind") == "report":
             self.await_clear()
             result = self.core.complete_task(waiting["task"], report=caption or "фото-отчёт", proof_kind="photo", source="telegram")
-            self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]))
+            self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
         else:
             self.send("Фото принимаю как отчёт, когда жду его: кнопка «✅ Да» у задачи или /done <id>.")
 
@@ -285,7 +331,7 @@ class Bot:
         elif op == "yes":
             if task.proof == "confirm":
                 result = core.complete_task(task.id, source="telegram")
-                self.send(tpl.completed(task.title, result["xp"], result["debt_closed"]))
+                self.send(tpl.completed(task.title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
             else:
                 self.await_set("report", task=task.id)
                 self.send(tpl.ASK_PHOTO if task.proof == "photo" else tpl.ASK_REPORT)
@@ -351,7 +397,7 @@ class Bot:
             self.send("Не вышло собрать распорядок. " + (self.brain_down_hint() or "Попробуй /schedule ещё раз."))
             return
         core.store.kv_set(PENDING, result["templates"])
-        self.send(clip(result.get("summary", ""), 500) + "\n\n" + render_templates(result["templates"]),
+        self.send(clip(result.get("summary", ""), 500) + "\n\n" + render_templates(result["templates"], load.factors_of(core.state.budget)),
                   [[("✅ Сохранить", "s:save"), ("✏️ Поправить", "s:edit")]])
 
     # --- интервью ----------------------------------------------------------------
@@ -388,12 +434,13 @@ class Bot:
         if result is None:
             self.send("Ответы сохранены. " + self.brain_down_hint() + " Разложу их, когда голова вернётся (или /arvix:onboarding в Claude Code).")
             return
-        done, failed = apply_actions(self.core, result.get("actions") or [], source="telegram")
+        done, failed, warnings = apply_actions(self.core, result.get("actions") or [], source="telegram")
         summary = result.get("summary", "").strip()
         if done:
             summary += "\n" + " · ".join(done)
         if failed:
             summary += "\n⚠️ Не записано: " + "; ".join(failed)
+        summary += tpl.warn(warnings)
         if summary:
             self.send(summary.strip())
 
@@ -437,20 +484,22 @@ class Bot:
             ok = retry is not None and not gentle_violation(retry.get("reply", ""))
             result = retry if ok else {"actions": []}
             reply = retry["reply"].strip() if ok else tpl.GENTLE_FALLBACK
-        if result.get("learning") and not LINK_RE.search(reply):
+        if result.get("learning") and not has_source(reply):
             retry = self.brain.ask(
-                system=system + "\n\n<validator>Ответ обучающий, но без ссылки на первоисточник. Добавь 1–3 реальные ссылки, официальная документация первой. Не выдумывай URL.</validator>",
+                system=system + "\n\n<validator>Ответ обучающий, но первоисточник не назван. Назови его: учебник и параграф, "
+                "официальная документация или спецификация. Ссылку давай только настоящую; не уверен — без ссылки. Не выдумывай URL.</validator>",
                 prompt=text, schema=VOICE_SCHEMA, vault_tools=True,
             )
-            if retry and LINK_RE.search(retry.get("reply", "")):
+            if retry and has_source(retry.get("reply", "")):
                 result, reply = retry, retry["reply"].strip()
             else:
-                reply += "\n\n(Ссылку на первоисточник приложить не вышло — проверь по официальной документации.)"
-        done, failed = apply_actions(core, result.get("actions") or [], source="telegram", fallback_report=text)
+                reply += "\n\n(Первоисточник не назван — сверь тему с учебником или официальной документацией.)"
+        done, failed, warnings = apply_actions(core, result.get("actions") or [], source="telegram", fallback_report=text)
         if done:
             reply += "\n\n" + " · ".join(done)
         if failed:
             reply += "\n⚠️ Не выполнено: " + "; ".join(failed)
+        reply += tpl.warn(warnings)
         self.send(reply or "…")
 
     def brain_down_hint(self) -> str:
@@ -577,7 +626,7 @@ class Bot:
     def cmd_schedule(self, rest: str) -> None:
         if rest.strip() == "show" and self.core.state.templates:
             current = [{"weekdays": [w], **t} for w, t in sorted(self.core.state.templates.items())]
-            self.send(render_templates(current))
+            self.send(render_templates(current, load.factors_of(self.core.state.budget)))
             return
         self.propose_schedule(rest.strip())
 
@@ -628,7 +677,7 @@ class Bot:
             self.send("Формат: /done <id или часть названия> [что сделано]")
             return
         result = self.core.complete_task(ref, report=report or None, source="telegram")
-        self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]))
+        self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
 
     def cmd_add(self, rest: str) -> None:
         fields = parse_quick_task(rest)
@@ -672,7 +721,7 @@ class Bot:
             return
         result = self.core.log_sleep(parts[0], bedtime=parts[1] if len(parts) > 1 else None, source="telegram")
         self.await_clear()
-        self.send(f"Сон {hm(result['duration_min'])}. Режим: {rules.MODE_LABELS[result['mode']]}")
+        self.send(f"Сон {hm(result['duration_min'])}. Режим: {rules.MODE_LABELS[result['mode']]}" + tpl.warn(result["warnings"]))
 
     def cmd_sos(self, rest: str) -> None:
         mode = self.core.sos(rest.strip().lower() != "off", source="telegram")
@@ -692,9 +741,18 @@ class Bot:
         self.send_debrief(manual=True)
 
     def cmd_mentor(self, rest: str) -> None:
-        enabled = rest.strip().lower() in ("on", "вкл", "1")
-        self.core.set_mentor(enabled, by="telegram")
-        self.send("Режим ментора включён." if enabled else "Режим ментора выключен.")
+        """Выключение — только явным «off»: пустой или опечатанный аргумент показывает
+        состояние, а не отключает ментора молча."""
+        arg = rest.strip().lower()
+        if arg in ("on", "вкл", "1"):
+            self.core.set_mentor(True, by="telegram")
+            self.send("Режим ментора включён.")
+        elif arg in ("off", "выкл", "0"):
+            self.core.set_mentor(False, by="telegram")
+            self.send("Режим ментора выключен.")
+        else:
+            state = "включён" if self.core.state.mentor_enabled else "выключен"
+            self.send(f"Режим ментора {state}. Команды: /mentor on · /mentor off")
 
     def cmd_reason(self, rest: str) -> None:
         result = self.core.declare_reason(rest, source="telegram")

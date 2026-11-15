@@ -16,9 +16,9 @@ from arvix.config import PACKAGE_DIR
 from arvix.context import build_context
 
 CONSTITUTION_DIR = PACKAGE_DIR / "constitution"
-SECTIONS = ("identity", "mission", "voice", "autonomy_rule", "decision_rule", "honesty", "boundaries", "safety_override")
-# Разделы, которые выпадают в мягком режиме: отказ «с цифрой» в 🟥 неуместен.
-GENTLE_SKIP = frozenset({"decision_rule"})
+SECTIONS = ("identity", "mission", "voice", "autonomy_rule", "decision_rule", "critical", "honesty", "boundaries", "safety_override")
+# Разделы, которые выпадают в мягком режиме: цена «в цифрах» и разбор чужих ошибок в 🟥 неуместны.
+GENTLE_SKIP = frozenset({"decision_rule", "critical"})
 TONE_FILES = {"normal": "tone_norm", "pressure": "tone_pressure", "yellow": "tone_yellow", "red": "tone_red"}
 HARSH_TONES = ("tone_norm", "tone_pressure", "tone_yellow")
 EMERGENCY = "112"
@@ -108,9 +108,26 @@ def hook_context(core: Any) -> str:
         tone_block(st.mode, st.mentor_enabled),
     ]
     if not gentle:
-        parts += [constitution(st.profile, gentle=False, sections=("decision_rule",)), fewshot(gentle=False, only="harsh")]
+        parts += [constitution(st.profile, gentle=False, sections=("decision_rule", "critical")), fewshot(gentle=False, only="harsh")]
     parts.append("<context>\n" + build_context(core, gentle=gentle) + "\n</context>")
+    if not gentle:
+        parts.append(first_session_block(core))
     return "\n\n".join(p for p in parts if p)
+
+
+def first_session_block(core: Any) -> str:
+    """Первая встреча: знакомство не начато и распорядка нет — Арвикс сам начинает
+    интервью, а не ждёт команды. Когда есть хоть что-то, блок не выдаётся."""
+    st = core.state
+    status = core.interview_status()
+    if status["answered"] or st.interview_skipped or st.templates:
+        return ""
+    return (
+        "<first_session>\nЭто первая встреча: знакомство не начато, распорядка нет. Не жди команды.\n"
+        "Представься одной строкой и начни знакомство по скиллу onboarding: сначала прочитай хранилище "
+        "(notes action=overview и заметки о человеке), потом блок «Ядро» — по 3–4 вопроса за сообщение.\n"
+        "Что уже написано в заметках, не спрашивай заново — подтверди.\n</first_session>"
+    )
 
 
 STYLE_TOOLS = """<tools_rule>
@@ -147,8 +164,9 @@ def render_output_style() -> str:
 
 
 def render_claude_ai_instructions() -> str:
-    """Инструкции для проекта на claude.ai — без доступа к базе и хранилищу."""
-    sections = tuple(s for s in SECTIONS if s not in GENTLE_SKIP)
+    """Инструкции для проекта на claude.ai — без доступа к базе и хранилищу. Цены в цифрах
+    там нет (нет журнала), а проверять цели и планы человека нужно и без журнала."""
+    sections = tuple(s for s in SECTIONS if s != "decision_rule")
     note = (
         "<stateless>\nЗдесь у тебя нет доступа к журналу событий, XP/HP и Obsidian: они живут на ноутбуке.\n"
         "Не выдумывай цифры состояния. Если человек хочет отметить задачу, сон или трату — "

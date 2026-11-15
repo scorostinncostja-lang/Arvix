@@ -45,6 +45,25 @@ class HookTest(ArvixCase):
         self.assertIn(read_block("tone_red"), line)
         self.assertNotIn("HP", line)
 
+    def test_first_session_starts_onboarding(self) -> None:
+        """Пустой профиль → хук просит начать знакомство сам; после первого ответа блок исчезает."""
+        home = self.tmp / "home"
+        home.mkdir()
+        (home / ".arvix-home").touch()
+        context = json.loads(self.run_hook("session-start", str(home)))["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("<first_session>", context)
+        self.assertIn("onboarding", context)
+        from arvix.core import Core
+        from arvix.store import Store
+
+        self.at(None)
+        other = Core(self.core.cfg, Store(self.tmp / "data" / "arvix.db"))
+        other.interview_answer("name", "Дастан")
+        other.close()
+        context = json.loads(self.run_hook("session-start", str(home)))["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("<first_session>", context)
+        self.assertIn("Дастан", context)
+
     def test_brain_env_disables_hooks(self) -> None:
         home = self.tmp / "home"
         home.mkdir()

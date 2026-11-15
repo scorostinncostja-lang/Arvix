@@ -31,6 +31,7 @@ def split_text(text: str, limit: int = LIMIT) -> list[str]:
 class TelegramAPI:
     def __init__(self, token: str, http_timeout: int = 40):
         self.base = f"https://api.telegram.org/bot{token}/"
+        self.file_base = f"https://api.telegram.org/file/bot{token}/"
         self.http_timeout = http_timeout
 
     def call(self, method: str, _http_timeout: int | None = None, **params: Any) -> Any:
@@ -64,6 +65,18 @@ class TelegramAPI:
             if buttons and i == len(chunks) - 1:
                 params["reply_markup"] = {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in buttons]}
             self.call("sendMessage", **params)
+
+    def download(self, file_id: str, max_bytes: int = 20 * 1024 * 1024) -> bytes:
+        """Файл из Telegram (голосовое, фото): getFile → загрузка. Боту доступны файлы до 20 МБ."""
+        info = self.call("getFile", file_id=file_id)
+        try:
+            with urllib.request.urlopen(self.file_base + info["file_path"], timeout=self.http_timeout) as response:
+                data = response.read(max_bytes + 1)
+        except (urllib.error.URLError, TimeoutError, OSError, KeyError) as exc:
+            raise TelegramError(f"файл не скачался: {exc}") from exc
+        if len(data) > max_bytes:
+            raise TelegramError("файл больше 20 МБ")
+        return data
 
     def answer_callback(self, callback_id: str, text: str | None = None) -> None:
         params: dict[str, Any] = {"callback_query_id": callback_id}

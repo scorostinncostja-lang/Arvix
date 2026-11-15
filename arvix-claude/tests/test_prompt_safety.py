@@ -44,6 +44,15 @@ class PromptSafetyTest(ArvixCase):
         self.core.sos(True)
         self.assert_gentle(system_prompt(self.core))
 
+    def test_red_context_offers_the_smallest_task(self) -> None:
+        """«Одна маленькая вещь» — самая короткая задача дня, а не первая по времени."""
+        from arvix.context import build_context
+
+        self.core.add_task("Математика", start="16:00", duration_min=90, importance=4)
+        self.core.add_task("Растяжка", start="18:00", duration_min=10, importance=2)
+        self.core.sos(True)
+        self.assertIn("ОДНА МАЛЕНЬКАЯ ВЕЩЬ НА ВЫБОР: Растяжка", build_context(self.core))
+
     def test_normal_mode_has_its_tone_and_harsh_examples(self) -> None:
         text = system_prompt(self.core)
         self.assertIn(read_block("tone_norm"), text)

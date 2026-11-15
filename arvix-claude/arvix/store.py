@@ -127,3 +127,9 @@ class Store:
 
     def close(self) -> None:
         self._conn.close()
+
+    def __del__(self) -> None:
+        try:
+            self._conn.close()
+        except Exception:  # noqa: BLE001 — на выходе из процесса соединение может быть уже закрыто
+            pass

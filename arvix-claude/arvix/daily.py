@@ -1,7 +1,7 @@
 """Суточный цикл L0: закрытие дня, материализация шаблона, Протокол Ноль.
 
 catch_up() идемпотентен: его безопасно звать из любого процесса и сколько угодно
-раз — день закрывается ровно одним событием day_closed (02-MECHANICS §3, §7, §8).
+раз — день закрывается ровно одним событием day_closed (02-MECHANICS §3, §8, §9, §11).
 """
 
 from __future__ import annotations
@@ -73,13 +73,13 @@ def review_budget(core: Any) -> dict[str, Any] | None:
             red_days=sum(1 for _, c in closed if c.get("mode") == "red"),
             yellow_days=sum(1 for _, c in closed if c.get("mode") == "yellow"),
             sleep_avg=sum(sleeps) / len(sleeps) if sleeps else None,
-            sleep_target=int(st.profile.get("sleep_target_min") or core.cfg.mech("sleep_target_min", 450)),
+            sleep_target=core.sleep_target(),
             hp_drop=hp_drop,
         )
         week = load.week_load(st.templates, result["factors"])
         change = load.describe_change(old, result["factors"], st.templates)
         payload = {
-            "week_min": week["total"], "deep_min": week["deep"], "factors": result["factors"], "streaks": result["streaks"],
+            "week_min": week["total"] - week["fixed"], "deep_min": week["deep"], "factors": result["factors"], "streaks": result["streaks"],
             "verdict": result["verdict"], "reason": "; ".join(result["reasons"]), "change": change,
             "from_week_min": budget["week_min"], "from_deep_min": budget["deep_min"],
         }
@@ -110,18 +110,20 @@ def close_day(core: Any, d: date) -> dict[str, Any] | None:
 
         # 1. Неотчитанные задачи. Если Арвикс ни разу не спросил (бот выключен,
         #    работа только в Claude Code) — без урона и без долга: наказывать за
-        #    вопрос, которого не было, нечестно.
+        #    вопрос, которого не было, нечестно. Пока штрафы заморожены (🟥, ментор
+        #    выключен, тихий день, Протокол Ноль, 3+ дня игнора), долга тоже нет:
+        #    в эти дни бот сам говорит «без плана» и о задачах не напоминает.
         for task in [t for t in tasks if t.is_open]:
             per_task = rules.HP_FAIL[task.importance] if asked and answered else 0
             core.emit(
                 "task_failed",
-                {"id": task.id, "reason": "no_report", "debt": asked and task.importance >= 4, "hp": per_task},
+                {"id": task.id, "reason": "no_report", "debt": asked and task.importance >= 4 and mult > 0, "hp": per_task},
                 source="scheduler",
                 entity_id=task.id,
             )
             if per_task:
                 damages.append((per_task, f"task_failed:{task.id}", None))
-        # Игнор весь день — один штраф вместо стены за каждую задачу (02-MECHANICS §7).
+        # Игнор весь день — один штраф вместо стены за каждую задачу (02-MECHANICS §8).
         if ignored:
             damages.append((rules.HP_IGNORE_DAY, "ignore_day", None))
 
@@ -191,8 +193,8 @@ def close_day(core: Any, d: date) -> dict[str, Any] | None:
         if refund:
             core.emit("hp_changed", {"amount": refund, "reason": "shield_refund", "date": d.isoformat()}, source="scheduler")
 
-        # 8. Бонусы и регенерация (02-MECHANICS §2, §3).
-        sleep_target = int(st.profile.get("sleep_target_min") or cfg.mech("sleep_target_min", 450))
+        # 8. Бонусы и регенерация (02-MECHANICS §2, §3). Норма сна — из распорядка человека.
+        sleep_target = core.sleep_target()
         sleep_ok = day.sleep_min is not None and day.sleep_min >= sleep_target - 30
         if completion is not None and completion >= 100:
             xp_bonus.append((rules.BONUS_FULL_DAY, "full_day"))
@@ -210,7 +212,7 @@ def close_day(core: Any, d: date) -> dict[str, Any] | None:
             until = core.now() + timedelta(hours=48)
             core.emit("protocol_zero", {"on": True, "until": until.isoformat()}, source="scheduler")
 
-        deep_target = int(cfg.mech("deep_target_min", 120))
+        deep_target = core.deep_target(d)
         payload = {
             "date": d.isoformat(),
             "completion": completion,
@@ -264,6 +266,8 @@ def materialize(core: Any, d: date) -> list[str]:
         now = core.now()
         factors = load.factors_of(core.state.budget)
         for block in template["blocks"]:
+            if load.is_fixed(block):
+                continue  # школа, дорога, смена — занятое время, а не задача с отчётом и штрафом
             if d == now.date() and block["start"] and core.at(d, block["start"]) <= now:
                 continue
             task = core.add_task(

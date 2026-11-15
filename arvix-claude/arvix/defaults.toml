@@ -44,6 +44,21 @@ model = "sonnet"
 [roles.analyst]         # L2: разбор дня и недельное ретро, только в фоне
 model = "sonnet"
 
+[roles.stt]             # распознавание голосовых; для engine = "openai" — например "whisper-1"
+model = "whisper-large-v3-turbo"
+
+# Голосовые сообщения в Telegram (05-INTERFACES §2.6). engine: off | groq | openai | command.
+# Ключ пишет `arvix setup --stt groq` (скрытый ввод). command — своя программа на этой машине:
+# {input} — присланный .ogg, {wav} — временный .wav; печатает текст в stdout (deploy/stt-local.sh).
+[stt]
+engine = "off"
+api_key = ""
+base_url = ""
+language = "ru"
+max_seconds = 300
+timeout_sec = 90
+command = ""
+
 [mechanics]
 sleep_target_min = 450        # 7.5 ч, 02-MECHANICS §5
 deep_target_min = 120         # глубокая работа в день

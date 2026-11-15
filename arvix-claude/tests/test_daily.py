@@ -33,6 +33,17 @@ class CloseDayTest(ArvixCase):
         self.assertEqual(statuses, ["debt", "failed"])
         self.assertEqual(self.core.state.hp, 100 - 12 - 2)
 
+    def test_frozen_penalties_mean_no_debt_for_unreported(self) -> None:
+        """Тихий день (как и 🟥): бот о задачах не напоминал — неотчитанное не уходит в долг."""
+        self.core.silent_today()
+        self.core.add_task("Важное", importance=5, start="18:00")
+        self.core.message_out("разбор", key=f"debrief:{self.start.date().isoformat()}")
+        self.close()
+        task = next(iter(self.core.state.tasks.values()))
+        self.assertEqual(task.status, "failed")
+        self.assertEqual(self.core.state.debts(), [])
+        self.assertEqual(self.core.state.hp, 100)
+
     def test_ignored_day_is_one_penalty_and_day_three_freezes(self) -> None:
         for offset in range(3):
             self.at(self.start + timedelta(days=offset))

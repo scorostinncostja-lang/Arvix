@@ -15,7 +15,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from arvix import clock, interview, load, rules
+from arvix import checks, clock, interview, load, rules
 from arvix.config import Config, load_config
 from arvix.state import State, Task
 from arvix.store import Event, Store
@@ -70,6 +70,9 @@ class Core:
         self.state = State()
         self._tx_depth = 0
         self.refresh(catch_up=False)
+
+    def close(self) -> None:
+        self.store.close()
 
     # --- время ------------------------------------------------------------
 
@@ -173,6 +176,61 @@ class Core:
                 self.emit("mode_changed", {"from": self.state.mode, "to": mode, "trigger": trigger}, source=source)
         return mode
 
+    def sleep_target(self) -> int:
+        """Норма сна в минутах: явное поле профиля, иначе расстояние между целевым отбоем
+        и подъёмом из интервью, иначе конфиг. Норма подростка и взрослого различается —
+        её задаёт человек своим распорядком, а не константа."""
+        profile = self.state.profile
+        if profile.get("sleep_target_min"):
+            return int(profile["sleep_target_min"])
+        gap = rules.minutes_after(profile.get("bedtime_target"), profile.get("wake_target"))
+        if gap is not None and 240 <= gap <= 720:
+            return gap
+        return int(self.cfg.mech("sleep_target_min", 450))
+
+    def deep_target(self, d: date | None = None) -> int:
+        """Норма глубокой работы на день: столько, сколько её в плане дня (автонагрузка
+        уже подогнала блоки под человека), а без плана — из конфига."""
+        d = d or self.today()
+        planned = sum(t.duration_min for t in self.state.tasks_on(d) if t.deep_work)
+        return planned or int(self.cfg.mech("deep_target_min", 120))
+
+    def fixed_blocks(self, d: date | None = None) -> list[dict[str, Any]]:
+        """Обязательные блоки шаблона на дату (школа, дорога, смена) — занятое время для
+        контекста модели и проверки конфликтов. Задачами они не становятся."""
+        d = d or self.today()
+        template = self.state.templates.get(d.weekday()) or {}
+        return sorted((b for b in template.get("blocks", []) if b.get("start") and load.is_fixed(b)), key=lambda b: b["start"])
+
+    # --- проверки ввода: не верить на слово (02-MECHANICS §13) ---------------------
+
+    def goal_warnings(self, goal_id: str) -> list[str]:
+        goal = self.state.goals.get(goal_id)
+        return checks.goal_issues(goal, self.state.goals, self.today()) if goal else []
+
+    def task_warnings(self, task: Task) -> list[str]:
+        others = [t for t in self.state.tasks_on(task.local_date) if t.id != task.id and t.is_open]
+        now = self.now().strftime("%H:%M") if task.local_date == self.today() else None
+        return checks.task_issues(task, others, self.fixed_blocks(task.local_date), self.state.profile.get("bedtime_target"), now)
+
+    def audit(self, limit: int = 6) -> list[str]:
+        """Несостыковки, которые модель обязана поднять сама, не дожидаясь вопроса:
+        цели без срока и метрики, дубли, лишние цели года, задачи внахлёст, сон по плану меньше 7 ч."""
+        st = self.state
+        items: list[str] = []
+        for goal in st.goals.values():
+            for issue in self.goal_warnings(goal["id"])[:2]:
+                items.append(f"цель «{goal['title']}» [{goal['id']}]: {issue}")
+        for task in st.tasks_on(self.today()):
+            if task.is_open:
+                items += [f"[{task.id}] «{task.title}»: {i}" for i in self.task_warnings(task) if "пересекается" in i or "обязательное" in i]
+        if st.profile.get("bedtime_target") and st.profile.get("wake_target"):
+            items += checks.sleep_target_issues(self.sleep_target())
+        core_done = all(q in st.interview for q in ("main_goal", "main_goal_why"))
+        if core_done and not any(g.get("kind") == "main" and g.get("status", "active") == "active" for g in st.goals.values()):
+            items.append("главной цели нет — без неё план не к чему привязать")
+        return items[:limit]
+
     def penalty_multiplier(self, d: date | None = None, ignore_days: int = 0) -> float:
         d = d or self.today()
         day = self.state.days.get(d)
@@ -231,7 +289,8 @@ class Core:
         target = self.parse_day(day)
         with self.tx():
             debts = self.state.debts()
-            if sphere in rules.OPTIONAL_SPHERES and len(debts) >= 2 and task_source == "user":
+            # В 🟥 живые люди — часть восстановления, а не «необязательное»: блок снимается.
+            if sphere in rules.OPTIONAL_SPHERES and len(debts) >= 2 and task_source == "user" and self.effective_mode() != "red":
                 names = ", ".join(t.title for t in debts[:3])
                 raise ArvixError(
                     f"Долг: {len(debts)} задачи ({names}). Пока долг ≥ 2, новые необязательные дела "
@@ -285,16 +344,21 @@ class Core:
                 delay = (datetime.fromisoformat(task.actual_start) - self.at(task.local_date, task.start)).total_seconds() / 60
             xp = rules.task_xp(task.difficulty, task.importance, kind, delay, pct)
             deep = task.duration_min * pct // 100 if task.deep_work else 0
-            self.emit(
-                "task_completed",
-                {"id": task.id, "done_pct": pct, "xp": xp, "report": report, "proof_kind": kind, "deep_min": deep},
-                source=source,
-                entity_id=task.id,
+            now = self.now()
+            doubts = checks.report_issues(
+                task.title, now,
+                self.at(task.local_date, task.start) if task.start and task.status != "debt" else None,
+                datetime.fromisoformat(task.actual_start) if task.actual_start else None,
+                task.duration_min, pct,
             )
+            payload = {"id": task.id, "done_pct": pct, "xp": xp, "report": report, "proof_kind": kind, "deep_min": deep}
+            if doubts:
+                payload["doubts"] = doubts  # отчёт записан, но сомнение видно в журнале и разборе
+            self.emit("task_completed", payload, source=source, entity_id=task.id)
             if xp:
                 self.emit("xp_awarded", {"amount": xp, "reason": f"task:{task.id}"}, source=source, entity_id=task.id)
         self.recompute_mode(source="l0")
-        return {"task": task, "xp": xp, "debt_closed": task.debt_since is not None}
+        return {"task": task, "xp": xp, "debt_closed": task.debt_since is not None, "warnings": doubts}
 
     def fail_task(self, ref: Any, *, reason: str = "", source: str = "claude") -> dict[str, Any]:
         with self.tx():
@@ -371,7 +435,7 @@ class Core:
                 source=source,
             )
         mode = self.recompute_mode(source="l0")
-        return {"duration_min": minutes, "date": target, "mode": mode}
+        return {"duration_min": minutes, "date": target, "mode": mode, "warnings": checks.sleep_issues(minutes)}
 
     def log_expense(self, amount: Any, category: str, *, impulse: bool = False, note: str = "", source: str = "claude") -> dict[str, Any]:
         try:
@@ -713,7 +777,7 @@ class Core:
         created_by: str = "analyst",
         source: str = "l2",
     ) -> str:
-        """Директива без доказательств отклоняется (03-DATA-MODEL §3, инв. 6)."""
+        """Директива без доказательств отклоняется (03-DATA-MODEL §4, инв. 5)."""
         if kind not in DIRECTIVE_KINDS:
             raise ArvixError(f"kind директивы: {', '.join(DIRECTIVE_KINDS)}")
         ids = sorted({int(e) for e in evidence or []})
@@ -780,7 +844,7 @@ class Core:
         since = (st.budget or {}).get("since") or st.profile.get("season_start") or (st.first_date or self.today()).isoformat()
         if st.templates:
             week = load.week_load(st.templates, factors)
-            total, deep = week["total"], week["deep"]
+            total, deep = week["total"] - week["fixed"], week["deep"]  # бюджет — своё время, без школы и смен
             channels = {ch: week[ch] for ch in (*load.CHANNELS, "fixed")}
         else:
             total = int(st.profile.get("week_budget_min") or self.cfg.mech("week_budget_min", 1560))
@@ -845,4 +909,5 @@ class Core:
             "mentor_enabled": st.mentor_enabled, "streak": st.streak(today), "season": self.season(),
             "completion": st.completion(today), "debts": len(st.debts()), "protocol_zero": self.zero_active(),
             "shields_left": max(0, int(self.cfg.mech("shields_per_month", 2)) - st.shields_used(today)),
+            "autonomy": st.autonomy(today),
         }

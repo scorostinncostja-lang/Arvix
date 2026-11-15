@@ -1,4 +1,4 @@
-"""Контекст-пакет для L1 (04-AI-LAYER §3) — собирается кодом, не моделью.
+"""Контекст-пакет для L1 (04-AI-LAYER §4) — собирается кодом, не моделью.
 
 Формат — компактный текст, не JSON (JSON ест токены). Пустые поля не выводятся.
 Числа — полные, без округлений в пользу человека. В мягком режиме (🟥 или
@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 from arvix import rules
@@ -31,6 +31,23 @@ def hm(minutes: int | None) -> str:
     return f"{hours}ч{mins:02d}м" if hours else f"{mins}м"
 
 
+def end_time(start: str, duration: Any) -> str:
+    """«08:30» + 360 → «14:30» (через полночь — по кругу)."""
+    hours, minutes = map(int, start.split(":")[:2])
+    end = hours * 60 + minutes + int(duration or 0)
+    return f"{end // 60 % 24:02d}:{end % 60:02d}"
+
+
+def autonomy_line(data: dict[str, Any]) -> str:
+    """«Автономность: тихие дни 0.9 (3 дн) · вопросы без /answer 4/5» — пусто, пока нет данных."""
+    parts = []
+    if data.get("silent_ratio") is not None:
+        parts.append(f"тихие дни {data['silent_ratio']:.2f} ({data['silent_days']} дн)")
+    if data.get("hint_share") is not None:
+        parts.append(f"вопросы без /answer {data['hints']}/{data['questions']}")
+    return "Автономность: " + " · ".join(parts) if parts else ""
+
+
 def task_line(task: Any) -> str:
     bits = [f"[{task.id}]", task.start or "--:--", STATUS_ICON.get(task.status, "?"), task.title]
     meta = [f"{task.duration_min}м", f"imp{task.importance}", f"diff{task.difficulty}"]
@@ -43,9 +60,11 @@ def task_line(task: Any) -> str:
     return " ".join(bits) + " · " + " ".join(meta)
 
 
-def _facts(state: Any, message: str, limit: int = 8) -> list[str]:
-    """Топ важных фактов всегда + совпадения по словам сообщения (вместо векторов)."""
-    facts = list(state.facts.values())
+def _facts(state: Any, message: str, today: date | None = None, limit: int = 8) -> list[str]:
+    """Топ важных фактов всегда + совпадения по словам сообщения (вместо векторов).
+    Факт с истёкшим valid_until («сессия до пятницы») в контекст больше не попадает."""
+    alive = today.isoformat() if today else ""
+    facts = [f for f in state.facts.values() if not (alive and f.get("valid_until") and f["valid_until"] < alive)]
     top = [f for f in facts if f.get("topic") in TOP_TOPICS][:3]
     words = {w[:5] for w in re.findall(r"\w{4,}", message.lower())}
     scored = []
@@ -85,7 +104,7 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     profile = st.profile
     who = [profile.get("name")]
     if profile.get("bedtime_target") and profile.get("wake_target"):
-        who.append(f"сон по плану {profile['bedtime_target']}–{profile['wake_target']}")
+        who.append(f"сон по плану {profile['bedtime_target']}–{profile['wake_target']} (норма {hm(core.sleep_target())})")
     if any(who):
         lines.append("ЧЕЛОВЕК: " + " · ".join(x for x in who if x))
 
@@ -96,7 +115,8 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
             lines.append("СЕГОДНЯ:" + sleep.lstrip(" ·"))
         open_tasks = [t for t in tasks if t.is_open]
         if open_tasks:
-            lines.append(f"ОДНА МАЛЕНЬКАЯ ВЕЩЬ НА ВЫБОР: {open_tasks[0].title}")
+            small = min(open_tasks, key=lambda t: (t.duration_min or 999, t.importance))
+            lines.append(f"ОДНА МАЛЕНЬКАЯ ВЕЩЬ НА ВЫБОР: {small.title}")
         return "\n".join(lines)
 
     status = core.status()
@@ -108,12 +128,14 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     )
     done = sum(1 for t in tasks if t.status == "done")
     completion = st.completion(today)
-    deep_target = int(core.cfg.mech("deep_target_min", 120))
+    deep_target = core.deep_target(today)
     if tasks or sleep:
         pct = f" ({completion:.0f}%)" if completion is not None else ""
         lines.append(f"СЕГОДНЯ: {done}/{len(tasks)} задач{pct} · глубокая {hm(day.deep_min if day else 0)} из {hm(deep_target)}{sleep}")
     if tasks:
         lines.append("ЗАДАЧИ:\n" + "\n".join("  " + task_line(t) for t in tasks))
+    if busy := core.fixed_blocks(today):
+        lines.append("ЗАНЯТО: " + " · ".join(f"{b['start']}–{end_time(b['start'], b.get('duration', 60))} {b['title']}" for b in busy))
     debts = st.debts()
     if debts:
         lines.append("ДОЛГ: " + " · ".join(f"[{t.id}] {t.title} ({(today - t.debt_since).days} дн)" for t in debts if t.debt_since))
@@ -146,6 +168,9 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     if not st.templates:
         lines.append("РАСПОРЯДОК: шаблонов дней нет — задачи и напоминания не создаются. Предложи собрать распорядок.")
 
+    if autonomy := autonomy_line(status["autonomy"]):
+        lines.append("АВТОНОМНОСТЬ:" + autonomy.split(":", 1)[1])
+
     directives = st.active_directives(today)[:5]
     if directives:
         lines.append("ДИРЕКТИВЫ:\n" + "\n".join(f"  [{d['kind']}/p{d['priority']}] {d['text']}" + (f" — {d['voice_hint']}" if d.get("voice_hint") else "") for d in directives))
@@ -163,9 +188,13 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     traits = sorted(st.traits.values(), key=lambda t: -int(t.get("severity", 3)))[:4]
     if traits:
         lines.append("ЧЕРТЫ: " + " · ".join(f"{t['kind']}: {t['title']}" + (f" → {t['counter_strategy']}" if t.get("counter_strategy") else "") for t in traits))
-    facts = _facts(st, message)
+    facts = _facts(st, message, today)
     if facts:
         lines.append("ПАМЯТЬ: " + " · ".join(facts))
+
+    issues = core.audit()
+    if issues:  # код нашёл несостыковку — модель обязана её поднять (constitution/critical.md)
+        lines.append("ПРОВЕРИТЬ:\n" + "\n".join(f"  ⚠️ {i}" for i in issues))
 
     recent = []
     for offset, label in ((1, "вчера"), (2, "позавчера")):

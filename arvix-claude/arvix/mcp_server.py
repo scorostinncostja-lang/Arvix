@@ -75,7 +75,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         }, ["kind"]),
     },
     "profile": {
-        "description": "Профиль и долговременная память: get, set (key/value), goal (новая цель: title, why обязательно; этап: parent_id; обновить: goal_id + status active|done|dropped), goals (дерево целей), trait (kind: fear|weakness|bad_habit|good_habit|trigger), remember (topic, fact), forget (fact_id), template (шаблон дня: weekdays 0=пн…6=вс, day_type, blocks).",
+        "description": "Профиль и долговременная память: get, set (key/value), goal (новая цель: title, why обязательно; этап: parent_id; исправить или обновить: goal_id + любые поля, kind=dream, status active|done|dropped; ответ покажет ⚠️ несостыковки), goals (дерево целей), trait (kind: fear|weakness|bad_habit|good_habit|trigger), remember (topic, fact), forget (fact_id), template (шаблон дня: weekdays 0=пн…6=вс, day_type, blocks).",
         "inputSchema": _obj({
             "action": _enum("get", "set", "goal", "goals", "trait", "remember", "forget", "template"),
             "goal_id": STR, "parent_id": STR, "status": _enum("active", "done", "dropped"),
@@ -94,7 +94,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "inputSchema": _obj({"action": _enum("status", "next", "answer", "skip", "reset"), "qid": STR, "answer": STR, "block": STR}, ["action"]),
     },
     "check_request": {
-        "description": "Факты для решения по просьбе изменить план («хочу погулять в 15:00»): выполнение, глубокая работа, долг, режим, конфликты в окне, квоты. Ничего не меняет — вердикт формулируешь ты на этих цифрах.",
+        "description": "Факты для просьбы изменить план («хочу погулять в 15:00»): выполнение, глубокая работа, долг, режим, конфликты в окне, квоты. Ничего не меняет — ты называешь цену и вариант, решение принимает человек.",
         "inputSchema": _obj({"description": STR, "date": STR, "start": STR, "duration_min": INT}, ["description"]),
     },
     "debrief": {
@@ -141,6 +141,13 @@ def _vault(core: Core) -> Vault:
     return core.vault
 
 
+def _doubts(lines: list[str]) -> str:
+    """Несостыковки, найденные кодом (checks.py). Модель обязана назвать их человеку и исправить."""
+    if not lines:
+        return ""
+    return "\n⚠️ Проверь: " + "\n⚠️ Проверь: ".join(lines) + "\nНазови это человеку и исправь (critical_thinking), не продолжай молча."
+
+
 def t_context(core: Core, a: dict[str, Any]) -> str:
     return build_context(core, message=a.get("message", ""))
 
@@ -160,10 +167,10 @@ def t_task(core: Core, a: dict[str, Any]) -> str:
         t = core.add_task(a.get("title", ""), sphere=a.get("sphere") or "project", importance=a.get("importance") or 3,
                           difficulty=a.get("difficulty") or 3, start=a.get("start"), duration_min=a.get("duration_min") or 60,
                           deep_work=bool(a.get("deep_work")), day=a.get("date"), tags=a.get("tags") or ())
-        return f"Создана: {task_line(t)} · {t.local_date}"
+        return f"Создана: {task_line(t)} · {t.local_date}" + _doubts(core.task_warnings(t))
     if action == "complete":
         r = core.complete_task(a["task"], done_pct=a.get("done_pct") or 100, report=a.get("report"))
-        return f"Закрыта: {r['task'].title} · +{r['xp']} XP" + (" · долг закрыт" if r["debt_closed"] else "")
+        return f"Закрыта: {r['task'].title} · +{r['xp']} XP" + (" · долг закрыт" if r["debt_closed"] else "") + _doubts(r["warnings"])
     if action == "fail":
         r = core.fail_task(a["task"], reason=a.get("reason", ""))
         return f"Провал: {r['task'].title} · {r['hp']} HP" + (" · ушла в долг" if r["debt"] else "")
@@ -183,7 +190,7 @@ def t_log(core: Core, a: dict[str, Any]) -> str:
     kind = a["kind"]
     if kind == "sleep":
         r = core.log_sleep(a.get("duration") or a.get("minutes"), bedtime=a.get("bedtime"), day=a.get("date"))
-        return f"Сон {hm(r['duration_min'])} за {r['date']}. Режим: {rules.MODE_LABELS[r['mode']]}"
+        return f"Сон {hm(r['duration_min'])} за {r['date']}. Режим: {rules.MODE_LABELS[r['mode']]}" + _doubts(r["warnings"])
     if kind == "expense":
         r = core.log_expense(a.get("amount"), a.get("category", "прочее"), impulse=bool(a.get("impulse")), note=a.get("note", ""))
         return f"Трата {r['amount']:.2f} {r['currency']}. За неделю: {r['week_total']:.2f}"
@@ -212,7 +219,7 @@ def t_profile(core: Core, a: dict[str, Any]) -> str:
     if action == "goal":
         gid = core.set_goal(a.get("title", ""), why=a.get("why", ""), kind=a.get("kind"), deadline=a.get("deadline"),
                             metric=a.get("metric"), goal_id=a.get("goal_id"), parent_id=a.get("parent_id"), status=a.get("status"))
-        return f"Цель [{gid}] записана."
+        return f"Цель [{gid}] записана." + _doubts(core.goal_warnings(gid))
     if action == "goals":
         icons = {"active": "○", "done": "●", "dropped": "✖"}
         rows = [
@@ -270,7 +277,7 @@ def t_check_request(core: Core, a: dict[str, Any]) -> str:
     facts = core.day_facts(d)
     lines = [f"ПРОСЬБА: {a.get('description', '')}"]
     pct = f"{facts['completion']:.0f}%" if facts["completion"] is not None else "—"
-    lines.append(f"ВЫПОЛНЕНИЕ {d:%d.%m}: {facts['done']}/{facts['total']} ({pct}) · глубокая {hm(facts['deep_min'])} из {hm(int(core.cfg.mech('deep_target_min', 120)))} · сон {hm(facts['sleep_min'])}")
+    lines.append(f"ВЫПОЛНЕНИЕ {d:%d.%m}: {facts['done']}/{facts['total']} ({pct}) · глубокая {hm(facts['deep_min'])} из {hm(core.deep_target(d))} · сон {hm(facts['sleep_min'])}")
     lines.append(f"РЕЖИМ: {rules.MODE_LABELS[core.effective_mode()]} · HP {st.hp}")
     if facts["debts"]:
         lines.append(f"ДОЛГ: {len(facts['debts'])} — " + ", ".join(t.title for t in facts["debts"]) + (" · необязательные дела заблокированы" if len(facts["debts"]) >= 2 else ""))
@@ -278,11 +285,14 @@ def t_check_request(core: Core, a: dict[str, Any]) -> str:
         start = core.at(d, a["start"])
         end = start + timedelta(minutes=int(a.get("duration_min") or 60))
         clash = [t for t in facts["tasks"] if t.is_open and t.start and core.at(d, t.start) < end and core.at(d, t.start) + timedelta(minutes=t.duration_min) > start]
-        lines.append("КОНФЛИКТЫ: " + ("; ".join(task_line(t) for t in clash) if clash else "нет"))
+        busy = [b for b in core.fixed_blocks(d)
+                if core.at(d, b["start"]) < end and core.at(d, b["start"]) + timedelta(minutes=int(b.get("duration", 60))) > start]
+        found = [task_line(t) for t in clash] + [f"занято: {b['start']} {b['title']} ({b.get('duration', 60)} мин, обязательное)" for b in busy]
+        lines.append("КОНФЛИКТЫ: " + ("; ".join(found) if found else "нет"))
     quotas = core.cfg.mech("quotas") or {}
     week = facts["week"]
     lines.append("КВОТЫ НЕДЕЛИ: " + " · ".join(f"{QUOTA_RU.get(k, k)} {week['quotas'].get(k, 0)}/{v}" for k, v in quotas.items()))
-    lines.append("Вердикт формулируешь ты — на этих цифрах (decision_rule). Согласился — меняй план инструментом task.")
+    lines.append("Цену и один вариант формулируешь ты на этих цифрах (decision_rule); решение — за человеком. Его выбор запиши инструментом task.")
     return "\n".join(lines)
 
 
