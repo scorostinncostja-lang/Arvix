@@ -247,6 +247,7 @@ def apply_actions(
     done: list[str] = []
     failed: list[str] = []
     warnings: list[str] = []
+    added: list[str] = []
     for action in actions or []:
         kind = action.get("type")
         try:
@@ -257,8 +258,9 @@ def apply_actions(
                     start=_start_from_deadline(action), duration_min=action.get("duration_min") or 60,
                     deep_work=bool(action.get("deep_work")), day=action.get("date"), source=source,
                 )
-                done.append(f"+ задача [{task.id}] {task.title}")
-                warnings += [f"[{task.id}] {task.title}: {w}" for w in core.task_warnings(task)]
+                when = (f"{task.start}, " if task.start else "") + f"{task.duration_min} мин"
+                done.append(f"+ {task.title} · {when}" + (" · завтра" if task.local_date > core.today() else ""))
+                added.append(task.id)
             elif kind == "complete_task":
                 report = action.get("report") or fallback_report
                 result = core.complete_task(action["task"], done_pct=action.get("done_pct") or 100, report=report, source=source)
@@ -300,7 +302,7 @@ def apply_actions(
                     status=action.get("status"), source=source,
                 )
                 goal = core.state.goals[gid]
-                done.append(f"цель [{gid}] {goal['title']} · {goal['kind']}" + (f" · {goal['status']}" if goal.get("status") != "active" else ""))
+                done.append(f"цель «{goal['title']}» · {goal['kind']}" + (f" · {goal['status']}" if goal.get("status") != "active" else ""))
                 warnings += [f"цель «{goal['title']}»: {w}" for w in core.goal_warnings(gid)]
             elif kind == "add_trait":
                 core.add_trait(action.get("kind", "weakness"), action["title"], description=action.get("text", ""), source=source)
@@ -315,4 +317,10 @@ def apply_actions(
                 done.append(f"шаблон «{action.get('day_type')}» для дней {action.get('weekdays')}")
         except (ArvixError, KeyError, TypeError, ValueError) as exc:
             failed.append(f"{kind}: {exc}")
+    # Сомнения по новым задачам — после всех actions: модель часто добавляет блок и тем же
+    # ответом сдвигает соседний; проверка внахлёст до сдвига была бы ложной.
+    for task_id in added:
+        task = core.state.tasks.get(task_id)
+        if task is not None:
+            warnings += [f"«{task.title}»: {w}" for w in core.task_warnings(task)]
     return done, failed, warnings

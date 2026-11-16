@@ -15,6 +15,7 @@ from arvix.brain import Brain
 from arvix.config import load_config
 from arvix.core import Core
 from arvix.stt import STT
+from arvix.telegram import templates
 from arvix.telegram.api import TelegramAPI, TelegramError
 from arvix.telegram.bot import Bot
 from arvix.telegram.scheduler import Scheduler
@@ -40,6 +41,10 @@ def main() -> None:
         log.warning("голосовые не работают: %s", stt.problem())
     bot = Bot(core, api, brain, int(tg["owner_id"]), stt=stt)
     scheduler = Scheduler(bot)
+    try:
+        api.set_commands(templates.COMMANDS)  # меню «/» в клиенте Telegram
+    except TelegramError as exc:
+        log.warning("меню команд не установлено: %s", exc)
 
     stopping = False
     waiting = True  # ждём сеть или long poll — прерывать можно сразу

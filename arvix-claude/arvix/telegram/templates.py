@@ -23,20 +23,59 @@ HELP = """Пиши мне обычным текстом — команды не 
 • «Что у меня осталось на сегодня?» · «Как я иду к цели?»
 • «Запиши мысль: …» — в Obsidian Inbox
 • учебный вопрос — дам направление и источники, не готовый ответ
-• голосовое — распознаю, покажу текст и сделаю то же, что с набранным
+• голосовое — распознаю и отвечу по делу, текст расшифровки не показываю
 • цель или план, которые не сходятся с твоими часами и целями, — скажу и поправлю
+
+Кнопки внизу — быстрые действия: 📋 панель дня (задачи с кнопками, закреплена сверху),
+✅ отчёт по текущей задаче, 🎯 фокус-таймер, 😴 сон, ➕ задача, 📊 статус. Вернуть клавиатуру — /menu.
 
 Планы на неделю, цели, роадмапы, каркасы заметок — в Claude Code: cd ~/Arvix && claude
 
 Команды:
-/day /week /status — день, неделя, уровень и HP
+/day /week /status — панель дня, неделя, уровень и HP
 /schedule — собрать или поправить распорядок · /schedule show — текущий · /goals — цели
-/done <id> [что сделано] · /add Физика 18:00 60м !4 [deep] [завтра]
+/done <часть названия> [что сделано] · /add Физика 18:00 60м !4 [deep] [завтра]
 /sleep 7:30 [00:10] · /spend 1200 еда [!] · /note текст · /find запрос
-/focus 45 — фокус-сессия · /reason заболел — причина дня (щит)
+/focus [минуты] [задача] · /focus stop — фокус-таймер · /reason заболел — причина дня (щит)
 /debrief — разбор сейчас · /answer — готовый ответ на следующий учебный вопрос
 /onboard · /skip · /pause — знакомство
 /silent — тихий день · /sos — режим 🟥 · /mentor on — вернуть ментора · /export"""
+
+# Постоянная клавиатура под полем ввода (05-INTERFACES §2.7). Кнопка шлёт свой текст —
+# бот узнаёт его по MENU и выполняет действие без модели.
+MENU_DAY, MENU_DONE, MENU_FOCUS = "📋 День", "✅ Сделал", "🎯 Фокус"
+MENU_SLEEP, MENU_ADD, MENU_STATUS = "😴 Сон", "➕ Задача", "📊 Статус"
+KEYBOARD = [[MENU_DAY, MENU_DONE, MENU_FOCUS], [MENU_SLEEP, MENU_ADD, MENU_STATUS]]
+MENU = {MENU_DAY: "day", MENU_DONE: "done", MENU_FOCUS: "focus", MENU_SLEEP: "sleep", MENU_ADD: "add", MENU_STATUS: "status"}
+
+# Меню команд Telegram (кнопка «/» у поля ввода) — setMyCommands при старте бота.
+COMMANDS = [
+    ("day", "панель дня: задачи с кнопками"),
+    ("focus", "фокус-таймер: /focus 25 [задача]"),
+    ("done", "закрыть задачу: /done физика решил 10 задач"),
+    ("add", "задача без модели: /add Физика 18:00 60м !4"),
+    ("sleep", "сон: /sleep 7:30 [отбой 00:10]"),
+    ("status", "режим, уровень, HP, серия"),
+    ("week", "неделя: часы, квоты, траты"),
+    ("goals", "цели и этапы"),
+    ("schedule", "распорядок недели: собрать, поправить, show"),
+    ("spend", "трата: /spend 1200 еда [!]"),
+    ("note", "мысль в Inbox Obsidian"),
+    ("find", "поиск по заметкам"),
+    ("debrief", "разбор дня сейчас"),
+    ("reason", "причина плохого дня (щит)"),
+    ("answer", "готовый ответ на следующий учебный вопрос"),
+    ("silent", "тихий день"),
+    ("sos", "режим 🟥 на сутки · /sos off"),
+    ("mentor", "ментор: on / off"),
+    ("menu", "вернуть кнопки внизу"),
+    ("onboard", "знакомство: продолжить"),
+    ("export", "всё в Obsidian"),
+    ("help", "как со мной говорить"),
+]
+FOCUS_DEFAULT_MIN = 25
+FOCUS_MIN_LOGGED = 5  # короче — не сессия, а ложный старт
+PANEL_TITLE_MAX = 22
 
 ONBOARD_INTRO = (
     f"Чтобы держать твой день, мне нужно тебя знать. {len(interview.QUESTIONS)} вопросов, "
@@ -117,6 +156,67 @@ def safety(support: str | None) -> str:
 def _task_short(task: Any) -> str:
     debt = ", ДОЛГ" if task.debt_since else ""
     return f"{task.start or '--:--'} {task.title} ({task.duration_min} мин{debt})"
+
+
+def short_title(title: str, limit: int = PANEL_TITLE_MAX) -> str:
+    return title if len(title) <= limit else title[: limit - 1].rstrip(" :,-") + "…"
+
+
+PANEL_ICON = {"planned": "○", "active": "▶️", "done": "✅", "failed": "❌", "debt": "🔴", "cancelled": "✖️", "written_off": "✖️"}
+
+
+def day_panel(core: Any, d: Any = None) -> str:
+    """Панель дня — одно сообщение, которое бот правит на месте (05-INTERFACES §2.7).
+    Шапка — то, ради чего открывают приложение-трекер: сколько сделано, режим, HP, серия."""
+    st = core.state
+    today = d or core.today()
+    tasks = st.tasks_on(today)
+    done = sum(1 for t in tasks if t.status == "done")
+    status = core.status()
+    head = f"📋 {WEEKDAYS_FULL[today.weekday()]} · {done} из {len(tasks)}" if tasks else f"📋 {WEEKDAYS_FULL[today.weekday()]}"
+    head += f" · {rules.MODE_LABELS[core.effective_mode()].split()[0]} · HP {st.hp} · серия {status['streak']} дн"
+    lines = [head]
+    day = st.days.get(today)
+    if day and day.deep_min:
+        lines.append(f"Глубокая {hm(day.deep_min)} из {hm(core.deep_target(today))}")
+    for task in tasks:
+        line = f"{PANEL_ICON.get(task.status, '○')} {task.start or '--:--'} {task.title} ({task.duration_min} мин)"
+        if task.status == "active" and task.actual_start:
+            line += f" — идёт с {task.actual_start[11:16]}"
+        elif task.status == "done" and task.done_pct < 100:
+            line += f" — {task.done_pct}%"
+        lines.append(line)
+    if not tasks:
+        lines.append("Задач нет. ➕ — добавить, или напиши, что делаешь.")
+    debts = [t for t in st.debts() if t.local_date != today]
+    if debts:
+        lines.append("Долг: " + ", ".join(f"{t.title} ({(today - t.debt_since).days} дн)" for t in debts[:3] if t.debt_since))
+    if focus := core.store.kv_get("focus"):
+        lines.append(f"🎯 Фокус идёт до {focus['until'][11:16]}")
+    return "\n".join(lines)
+
+
+def panel_buttons(tasks: list[Any], focus_running: bool = False) -> list[list[tuple[str, str]]]:
+    """Строка кнопок на каждую открытую задачу: начать или закрыть, частично, отложить на 30.
+    «Не смогу» здесь нет намеренно: провал с уроном — только в напоминании или словами."""
+    rows: list[list[tuple[str, str]]] = []
+    for task in tasks:
+        if task.status == "planned":
+            rows.append([(f"▶️ {short_title(task.title)}", f"t:{task.id}:start"), ("✅", f"t:{task.id}:yes"), ("⏳ 30", f"t:{task.id}:d30")])
+        elif task.status == "active":
+            rows.append([(f"✅ {short_title(task.title)}", f"t:{task.id}:yes"), ("⚠️ частично", f"t:{task.id}:part")])
+    focus = ("⏹ стоп", "f:stop") if focus_running else (f"🎯 {FOCUS_DEFAULT_MIN} мин", "p:focus")
+    rows.append([("🔄", "p:refresh"), focus, ("➕", "p:add")])
+    return rows
+
+
+def focus_text(minutes: int, until: str, title: str | None, left: int | None = None) -> str:
+    what = f" · {title}" if title else ""
+    if left is None:
+        return f"🎯 Фокус {minutes} мин{what}\nДо {until}. Телефон убрать."
+    if left <= 0:
+        return f"🎯 Фокус {minutes} мин{what} — закончен."
+    return f"🎯 Фокус {minutes} мин{what}\nДо {until} · осталось {left} мин."
 
 
 def brief(core: Any) -> str:

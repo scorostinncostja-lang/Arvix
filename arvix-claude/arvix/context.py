@@ -48,8 +48,12 @@ def autonomy_line(data: dict[str, Any]) -> str:
     return "Автономность: " + " · ".join(parts) if parts else ""
 
 
-def task_line(task: Any) -> str:
-    bits = [f"[{task.id}]", task.start or "--:--", STATUS_ICON.get(task.status, "?"), task.title]
+def task_line(task: Any, with_id: bool = True) -> str:
+    """Строка задачи для модели (с id — она ссылается на задачи только по ним) или для
+    человека (with_id=False: id в чате не нужен, /done принимает часть названия)."""
+    bits = [task.start or "--:--", STATUS_ICON.get(task.status, "?"), task.title]
+    if with_id:
+        bits.insert(0, f"[{task.id}]")
     meta = [f"{task.duration_min}м", f"imp{task.importance}", f"diff{task.difficulty}"]
     if task.deep_work:
         meta.append("deep")

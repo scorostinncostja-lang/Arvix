@@ -9,6 +9,12 @@ home = "~/Arvix"      # папка, где Claude Code запускается в
 [telegram]
 token = ""
 owner_id = 0
+# Ответ головы уходит абзацами — отдельными сообщениями, как пишет человек. Пауза между
+# ними: base + length × per_char, не больше max (05-INTERFACES §2.4). 0 — всё одним сообщением.
+bubble_pause_sec = 0.6
+bubble_pause_per_char = 0.012
+bubble_pause_max_sec = 2.5
+bubbles_max = 4
 
 # Где в хранилище живут файлы Арвикса. Пути — от корня хранилища.
 # Чужие заметки Арвикс только дополняет; перезаписывает лишь свои и нетронутые.
@@ -58,6 +64,7 @@ language = "ru"
 max_seconds = 300
 timeout_sec = 90
 command = ""
+show_transcript = false   # true — перед ответом показывать «🎙 «…»»; по умолчанию бот просто отвечает
 
 [mechanics]
 sleep_target_min = 450        # 7.5 ч, 02-MECHANICS §5

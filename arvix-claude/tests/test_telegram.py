@@ -16,10 +16,27 @@ OWNER = 111
 class FakeAPI:
     def __init__(self) -> None:
         self.sent: list[tuple[str, Any]] = []
+        self.keyboards: list[Any] = []
+        self.edited: list[tuple[int, str, Any]] = []
+        self.pinned: list[int] = []
+        self.unpinned: list[int] = []
+        self.typing_calls = 0
 
-    def send(self, chat_id: int, text: str, buttons: Any = None) -> None:
+    def send(self, chat_id: int, text: str, buttons: Any = None, keyboard: Any = None) -> int:
         assert chat_id == OWNER
         self.sent.append((text, buttons))
+        if keyboard:
+            self.keyboards.append(keyboard)
+        return len(self.sent)  # message_id
+
+    def edit(self, chat_id: int, message_id: int, text: str, buttons: Any = None) -> None:
+        self.edited.append((message_id, text, buttons))
+
+    def pin(self, chat_id: int, message_id: int) -> None:
+        self.pinned.append(message_id)
+
+    def unpin(self, chat_id: int, message_id: int) -> None:
+        self.unpinned.append(message_id)
 
     def answer_callback(self, *a: Any, **k: Any) -> None:
         pass
@@ -28,7 +45,7 @@ class FakeAPI:
         pass
 
     def typing(self, *a: Any) -> None:
-        pass
+        self.typing_calls += 1
 
     def download(self, file_id: str) -> bytes:
         return b"OGG:" + file_id.encode()
@@ -36,6 +53,10 @@ class FakeAPI:
     @property
     def last(self) -> str:
         return self.sent[-1][0]
+
+    @property
+    def texts(self) -> list[str]:
+        return [t for t, _ in self.sent]
 
 
 class FakeBrain:
@@ -72,7 +93,8 @@ class BotCase(ArvixCase):
         super().setUp()
         self.api = FakeAPI()
         self.brain = FakeBrain()
-        self.bot = Bot(self.core, self.api, self.brain, OWNER)
+        self.pauses: list[float] = []
+        self.bot = Bot(self.core, self.api, self.brain, OWNER, sleep=self.pauses.append)
         self.scheduler = Scheduler(self.bot)
 
     def text(self, text: str, sender: int = OWNER) -> None:
@@ -112,7 +134,7 @@ class InboxTest(BotCase):
     def test_report_button_flow(self) -> None:
         task = self.core.add_task("Физика", importance=3, start="12:00")
         self.press(f"t:{task.id}:yes")
-        self.assertEqual(self.api.last, tpl.ASK_REPORT)
+        self.assertIn("что именно сделано — «Физика»?", self.api.last)
         self.text("решил 10 задач")
         self.assertIn("+", self.api.last)
         self.assertEqual(self.core.state.tasks[task.id].status, "done")
@@ -217,7 +239,8 @@ class InboxTest(BotCase):
         self.assertIn("Итого 1ч40м в неделю", self.api.last)
         self.press("s:save")
         self.assertEqual(self.core.state.templates[0]["blocks"][0]["title"], "Математика ОГЭ")
-        self.assertIn("Распорядок сохранён", self.api.last)
+        self.assertIn("Распорядок сохранён", self.api.texts[-2])
+        self.assertTrue(self.api.last.startswith("📋"), self.api.last)  # сразу панель с сегодняшними блоками
         self.assertIsNone(self.core.store.kv_get("tg_pending_templates"))
 
     def test_region_block_explained(self) -> None:
@@ -225,14 +248,29 @@ class InboxTest(BotCase):
         self.text("привет")
         self.assertIn("VPN", self.api.last)
 
-    def test_voice_is_shown_then_handled_like_text(self) -> None:
+    def test_voice_is_answered_without_showing_the_transcript(self) -> None:
+        """Расшифровку бот не показывает — отвечает по делу; что он понял, видно по квитанции.
+        В журнале сообщение помечено как голосовое."""
         self.bot.stt = FakeSTT("спал шесть часов, лёг в час")
-        self.brain.answers.append({"reply": "Записал.", "actions": [{"type": "log_sleep", "duration": "6:00", "bedtime": "01:00"}]})
+        self.brain.answers.append({"reply": "Шесть часов — мало.", "actions": [{"type": "log_sleep", "duration": "6:00", "bedtime": "01:00"}]})
         self.voice("abc")
         self.assertEqual(self.bot.stt.seen, [b"OGG:abc"])
-        self.assertTrue(any(t.startswith("🎙 «спал шесть часов") for t, _ in self.api.sent))
+        self.assertFalse(any(t.startswith("🎙") for t in self.api.texts), self.api.texts)
+        self.assertEqual(self.api.texts, ["Шесть часов — мало.", "сон 6ч00м"])
         self.assertEqual(self.brain.calls[-1]["prompt"], "спал шесть часов, лёг в час")
         self.assertEqual(self.core.state.days[self.core.today()].sleep_min, 360)
+        heard = [e for e in self.core.store.read(0) if e.kind == "message_in"][-1]
+        self.assertEqual(heard.payload["text"], "🎙 спал шесть часов, лёг в час")
+
+    def test_voice_transcript_shown_when_configured_and_when_brain_is_down(self) -> None:
+        self.bot.stt = FakeSTT("запиши мысль про графы")
+        self.bot.stt.show_transcript = True
+        self.brain.answers.append({"reply": "Записал.", "actions": []})
+        self.voice()
+        self.assertEqual(self.api.texts[-2], "🎙 «запиши мысль про графы»")
+        self.bot.stt = FakeSTT("а это голова не услышит")
+        self.voice()  # ответов у FakeBrain больше нет → голова «недоступна»
+        self.assertTrue(self.api.last.startswith("🎙 «а это голова не услышит»\n" + tpl.FALLBACK), self.api.last)
 
     def test_voice_answers_a_waiting_question_without_the_model(self) -> None:
         task = self.core.add_task("Физика", importance=3, start="12:00")
@@ -273,6 +311,183 @@ class InboxTest(BotCase):
         self.bot.send_brief()
         self.text("7:20")
         self.assertEqual(self.core.state.days[self.core.today()].sleep_min, 440)
+
+
+class BubblesTest(BotCase):
+    """Ответ головы уходит абзацами — отдельными сообщениями, квитанция кода — последним, без id."""
+
+    def test_paragraphs_become_separate_messages_with_pauses(self) -> None:
+        self.brain.answers.append({"reply": "Прогулка не засчитана: телефон был в кармане.\n\nПушкин завтра, ставлю на 19:30.\n\n\nСегодня 0 из 3.", "actions": []})
+        self.text("гулял с телефоном")
+        self.assertEqual(self.api.texts[-3:], ["Прогулка не засчитана: телефон был в кармане.", "Пушкин завтра, ставлю на 19:30.", "Сегодня 0 из 3."])
+        self.assertEqual(len(self.pauses), 2)  # пауза перед вторым и третьим, «набирает…» между ними
+        self.assertTrue(all(0 < p <= 2.5 for p in self.pauses), self.pauses)
+        self.assertEqual(self.api.typing_calls, 3)  # один перед головой, два между пузырьками
+        outs = [e for e in self.core.store.read(0) if e.kind == "message_out"]
+        self.assertEqual(len(outs), 1)  # в журнале и истории — одно сообщение целиком
+        self.assertIn("Сегодня 0 из 3.", outs[-1].payload["text"])
+
+    def test_too_many_paragraphs_are_merged_and_receipt_is_last_without_ids(self) -> None:
+        from arvix.telegram.bot import bubbles
+
+        self.assertEqual(bubbles("а\n\nб\n\nв\n\nг\n\nд\n\nе"), ["а", "б", "в", "г\n\nд\n\nе"])
+        self.assertEqual(bubbles("   "), [])
+        self.brain.answers.append({"reply": "Ставлю Пушкина на 19:30, блок математики сдвигаю на 20:40.", "actions": [
+            {"type": "add_task", "title": "Русский: биография Пушкина", "start": "19:30", "duration_min": 60, "importance": 4},
+        ]})
+        self.text("пушкин завтра сдаётся")
+        receipt = self.api.last
+        self.assertIn("+ Русский: биография Пушкина · 19:30, 60 мин", receipt)
+        self.assertNotRegex(receipt, r"\[[0-9a-f]{8}\]")  # id задач — для модели, не для человека
+        self.assertEqual(len(self.api.sent), 2)
+
+    def test_doubts_are_checked_after_all_actions(self) -> None:
+        """Модель добавляет блок и тем же ответом сдвигает соседний: проверка внахлёст — по итогу, а не по ходу."""
+        self.at(moscow(2026, 11, 2, 18, 0))
+        math = self.core.add_task("Математика", start="19:30", duration_min=45, importance=3)
+        self.brain.answers.append({"reply": "Пушкин в 19:30, математику на 20:40.", "actions": [
+            {"type": "add_task", "title": "Пушкин", "start": "19:30", "duration_min": 60, "importance": 4},
+            {"type": "defer_task", "task": math.id, "minutes": 70},
+        ]})
+        self.text("пушкин первым")
+        self.assertNotIn("пересекается", self.api.last)
+        self.assertIn("⏳ Математика → 20:40", self.api.last)
+
+    def test_receipt_alone_when_reply_is_empty(self) -> None:
+        task = self.core.add_task("Английский", importance=2, start="12:00")
+        self.brain.answers.append({"reply": "", "actions": [{"type": "complete_task", "task": task.id}]})
+        self.text("английский сделал")
+        self.assertEqual(len(self.api.sent), 1)
+        self.assertTrue(self.api.last.startswith("✅ Английский +"), self.api.last)
+
+
+class PanelTest(BotCase):
+    """Панель дня: закреплённое сообщение с кнопками, которое бот правит на месте."""
+
+    start = moscow(2026, 11, 2, 15, 0)
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.math = self.core.add_task("Математика ОГЭ", start="16:00", duration_min=45, importance=3, deep_work=True)
+        self.push = self.core.add_task("Русский: биография Пушкина", start="19:30", duration_min=60, importance=4)
+
+    def panel_id(self) -> int:
+        return self.core.store.kv_get("tg_panel")["message_id"]
+
+    def test_menu_button_sends_pinned_panel_with_task_buttons(self) -> None:
+        self.text(tpl.MENU_DAY)
+        text, buttons = self.api.sent[-1]
+        self.assertTrue(text.startswith("📋 Понедельник · 0 из 2 · 🟩 · HP 100 · серия 0 дн"), text)
+        self.assertIn("○ 16:00 Математика ОГЭ (45 мин)", text)
+        self.assertEqual(buttons[0], [("▶️ Математика ОГЭ", f"t:{self.math.id}:start"), ("✅", f"t:{self.math.id}:yes"), ("⏳ 30", f"t:{self.math.id}:d30")])
+        self.assertEqual(buttons[1][0][0], "▶️ Русский: биография Пу…")
+        self.assertEqual(buttons[-1], [("🔄", "p:refresh"), ("🎯 25 мин", "p:focus"), ("➕", "p:add")])
+        self.assertEqual(self.api.pinned, [self.panel_id()])
+        self.assertEqual(self.brain.calls, [])
+
+    def test_panel_button_edits_panel_in_place(self) -> None:
+        self.text(tpl.MENU_DAY)
+        before = len(self.api.sent)
+        self.press(f"t:{self.math.id}:start")
+        self.assertEqual(self.core.state.tasks[self.math.id].status, "active")
+        self.assertEqual(self.api.sent[before][0], tpl.reminder_start(self.math))
+        message_id, text, buttons = self.api.edited[-1]
+        self.assertEqual(message_id, self.panel_id())
+        self.assertIn("▶️ 16:00 Математика ОГЭ (45 мин) — идёт с 15:00", text)
+        self.assertEqual(buttons[0], [("✅ Математика ОГЭ", f"t:{self.math.id}:yes"), ("⚠️ частично", f"t:{self.math.id}:part")])
+
+    def test_scheduler_refreshes_panel_after_outside_change(self) -> None:
+        self.text(tpl.MENU_DAY)
+        self.scheduler.tick()
+        self.assertEqual(self.api.edited, [])  # ничего не поменялось — правок нет
+        self.core.complete_task(self.math.id, report="10 задач", source="cli")
+        self.scheduler.tick()
+        self.assertIn("📋 Понедельник · 1 из 2", self.api.edited[-1][1])
+        edits = len(self.api.edited)
+        self.scheduler.tick()
+        self.assertEqual(len(self.api.edited), edits)
+
+    def test_done_button_reports_current_task_or_shows_panel(self) -> None:
+        self.text(tpl.MENU_DONE)
+        self.assertIn("Нажми ✅ у задачи", self.api.last)  # две открытые, ни одна не идёт
+        self.core.start_task(self.math.id)
+        self.text(tpl.MENU_DONE)
+        self.assertIn("«Математика ОГЭ»", self.api.last)
+        self.text("45 минут задач из банка")
+        self.assertEqual(self.core.state.tasks[self.math.id].status, "done")
+
+    def test_add_button_quick_or_via_brain(self) -> None:
+        self.text(tpl.MENU_ADD)
+        self.text("Физика 18:00 30м !3")
+        self.assertTrue(any(t.title == "Физика" and t.start == "18:00" for t in self.core.state.tasks.values()))
+        self.assertEqual(self.brain.calls, [])
+        self.text(tpl.MENU_ADD)
+        self.brain.answers.append({"reply": "Ставлю на 18:30.", "actions": []})
+        self.text("повторить карточки")
+        self.assertEqual(self.brain.calls[-1]["prompt"], "Добавь задачу: повторить карточки")
+
+    def test_brief_brings_keyboard_and_panel(self) -> None:
+        self.bot.send_brief()
+        self.assertEqual(self.api.keyboards, [tpl.KEYBOARD])
+        self.assertTrue(self.api.last.startswith("📋"), self.api.last)
+        self.assertEqual(self.api.pinned, [self.panel_id()])
+
+    def test_red_mode_panel_has_no_tasks_or_numbers(self) -> None:
+        self.core.sos(True)
+        self.text(tpl.MENU_DAY)
+        text, buttons = self.api.sent[-1]
+        self.assertNotIn("Математика", text)
+        self.assertNotIn("HP", text)
+        self.assertEqual(buttons, [[("🔄", "p:refresh")]])
+
+
+class FocusTest(BotCase):
+    start = moscow(2026, 11, 2, 15, 55)
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.math = self.core.add_task("Математика ОГЭ", start="16:00", duration_min=40, importance=3, deep_work=True)
+
+    def test_focus_runs_on_next_task_counts_down_and_raises_proof(self) -> None:
+        self.text(tpl.MENU_FOCUS)
+        text, buttons = self.api.sent[-1]
+        self.assertEqual(text, "🎯 Фокус 25 мин · Математика ОГЭ\nДо 16:20. Телефон убрать.")
+        self.assertEqual(buttons, [[("⏹ Стоп", "f:stop")]])
+        self.assertEqual(self.core.state.tasks[self.math.id].status, "active")  # таймер = блок пошёл
+        timer_id = len(self.api.sent)
+        self.at(moscow(2026, 11, 2, 16, 3))
+        self.scheduler.tick()
+        self.assertEqual(self.api.edited[-1][0], timer_id)
+        self.assertIn("осталось 18 мин", self.api.edited[-1][1])  # 16:03 → до 16:20: 17 полных минут + текущая
+        self.at(moscow(2026, 11, 2, 16, 21))
+        self.scheduler.tick()
+        self.assertIn("закончен", self.api.edited[-1][1])
+        self.assertIn("Без прерываний?", self.api.last)
+        self.press("f:ok:25")
+        self.assertIn("25 мин по «Математика ОГЭ»", self.api.last)
+        self.assertEqual(self.core.state.tasks[self.math.id].focus_min, 25)
+        result = self.core.complete_task(self.math.id, report="40 задач")
+        self.assertEqual(result["xp"], 14)  # 10 × 1.0 × 1.0 × K_proof timer 1.4, вместо 11 за отчёт
+        self.assertEqual(self.core.state.days[self.core.today()].deep_min, 40)
+
+    def test_stop_logs_elapsed_or_drops_short_session(self) -> None:
+        self.text("/focus 50 матем")
+        self.at(moscow(2026, 11, 2, 15, 58))
+        self.press("f:stop")
+        self.assertIn("меньше 5 минут", self.api.last)
+        self.assertIsNone(self.core.store.kv_get("focus"))
+        self.text("/focus")
+        self.at(moscow(2026, 11, 2, 16, 10))
+        self.text("/focus stop")
+        self.assertIn("12 мин записано по «Математика ОГЭ»", self.api.last)
+        self.assertEqual(self.core.state.tasks[self.math.id].focus_min, 12)
+
+    def test_second_focus_shows_state_instead_of_restart(self) -> None:
+        self.text("/focus 30")
+        self.at(moscow(2026, 11, 2, 16, 5))
+        self.text(tpl.MENU_FOCUS)
+        self.assertIn("осталось 21 мин", self.api.last)
+        self.assertEqual(self.core.store.kv_get("focus")["minutes"], 30)
 
 
 class SchedulerTest(BotCase):

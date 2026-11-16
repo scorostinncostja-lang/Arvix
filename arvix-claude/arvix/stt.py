@@ -54,6 +54,9 @@ class STT:
         self.command = str(section.get("command") or "")
         self.max_seconds = int(section.get("max_seconds") or 300)
         self.timeout = int(section.get("timeout_sec") or 90)
+        # Показывать ли расшифровку перед ответом. По умолчанию нет: проверка распознавания —
+        # квитанция под ответом (что записано), а не лишнее сообщение (09-DECISIONS D20).
+        self.show_transcript = bool(section.get("show_transcript", False))
         self.model = cfg.model("stt") or ""
 
     def problem(self) -> str:
