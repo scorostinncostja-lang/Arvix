@@ -60,14 +60,14 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `day_materialized` | `date, day_type` | scheduler |
 | `task_created` | снимок задачи: `id, title, sphere, importance, difficulty, date, start, duration_min, deep_work, proof, source, tags` | человек, модель, scheduler |
 | `task_started` | `id, at` | человек |
-| `task_completed` | `id, done_pct, xp, report, proof_kind, deep_min` | человек, модель |
+| `task_completed` | `id, done_pct, xp, report, proof_kind, deep_min[, focus_min, doubts]` — `focus_min` есть, когда таймер покрыл ≥ половины блока (K_proof timer) | человек, модель |
 | `task_failed` | `id, reason, debt, hp` | человек, модель, scheduler (`no_report`) |
 | `task_reason` | `id, reason` — причина, присланная позже | человек |
 | `task_deferred` | `id, from, to, date, minutes` | человек, модель |
 | `task_cancelled` | `id, reason` | человек, модель |
 | `debt_written_off` | `id, justification` | человек, модель |
 | `sleep_recorded` | `duration_min, bedtime, date, source` | человек, модель |
-| `focus_session` | `duration_min, task_id` — без задачи идёт в глубокую работу дня | человек |
+| `focus_session` | `duration_min, task_id` — с задачей копится в `Task.focus_min`, без задачи идёт в глубокую работу дня | человек |
 | `expense_logged` | `amount, currency, category, impulse, note` | человек, модель |
 | `social_contact` | `who` | человек, модель |
 | `reason_declared` | `reason` — причина плохого дня для щита | человек, модель |

@@ -12,6 +12,7 @@ import urllib.request
 from typing import Any
 
 LIMIT = 4000
+Buttons = list[list[tuple[str, str]]]
 
 
 class TelegramError(RuntimeError):
@@ -26,6 +27,15 @@ def split_text(text: str, limit: int = LIMIT) -> list[str]:
         chunks.append(rest[:cut])
         rest = rest[cut:].lstrip("\n")
     return chunks + [rest] if rest else chunks
+
+
+def inline_markup(buttons: Buttons) -> dict[str, Any]:
+    return {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in buttons]}
+
+
+def reply_markup(keyboard: list[list[str]]) -> dict[str, Any]:
+    """Постоянная клавиатура под полем ввода: кнопки шлют свой текст как сообщение."""
+    return {"keyboard": [[{"text": t} for t in row] for row in keyboard], "resize_keyboard": True, "is_persistent": True}
 
 
 class TelegramAPI:
@@ -58,13 +68,38 @@ class TelegramAPI:
         return self.call("getUpdates", _http_timeout=timeout + 15, offset=offset, timeout=timeout,
                          allowed_updates=["message", "callback_query"])
 
-    def send(self, chat_id: int, text: str, buttons: list[list[tuple[str, str]]] | None = None) -> None:
+    def send(self, chat_id: int, text: str, buttons: Buttons | None = None, keyboard: list[list[str]] | None = None) -> int | None:
+        """Отправка; возвращает message_id последнего куска (им потом можно править панель).
+        У сообщения одна разметка: либо inline-кнопки под текстом, либо постоянная клавиатура."""
         chunks = split_text(text) or ["…"]
+        message_id = None
         for i, chunk in enumerate(chunks):
             params: dict[str, Any] = {"chat_id": chat_id, "text": chunk, "link_preview_options": {"is_disabled": True}}
-            if buttons and i == len(chunks) - 1:
-                params["reply_markup"] = {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in buttons]}
-            self.call("sendMessage", **params)
+            if i == len(chunks) - 1:
+                if buttons:
+                    params["reply_markup"] = inline_markup(buttons)
+                elif keyboard:
+                    params["reply_markup"] = reply_markup(keyboard)
+            result = self.call("sendMessage", **params)
+            message_id = (result or {}).get("message_id")
+        return message_id
+
+    def edit(self, chat_id: int, message_id: int, text: str, buttons: Buttons | None = None) -> None:
+        """Правка сообщения на месте — так живёт панель дня и обратный отсчёт фокуса."""
+        params: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "text": split_text(text)[0],
+                                  "link_preview_options": {"is_disabled": True}}
+        params["reply_markup"] = inline_markup(buttons) if buttons else {"inline_keyboard": []}
+        self.call("editMessageText", **params)
+
+    def pin(self, chat_id: int, message_id: int) -> None:
+        self.call("pinChatMessage", chat_id=chat_id, message_id=message_id, disable_notification=True)
+
+    def unpin(self, chat_id: int, message_id: int) -> None:
+        self.call("unpinChatMessage", chat_id=chat_id, message_id=message_id)
+
+    def set_commands(self, commands: list[tuple[str, str]]) -> None:
+        """Меню команд в клиенте Telegram (кнопка «/» слева от поля ввода)."""
+        self.call("setMyCommands", commands=[{"command": c, "description": d[:256]} for c, d in commands])
 
     def download(self, file_id: str, max_bytes: int = 20 * 1024 * 1024) -> bytes:
         """Файл из Telegram (голосовое, фото): getFile → загрузка. Боту доступны файлы до 20 МБ."""

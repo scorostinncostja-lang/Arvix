@@ -39,6 +39,7 @@ class Task:
     report: str | None = None
     debt_since: date | None = None
     reason: str | None = None
+    focus_min: int = 0  # фокус-сессии по этой задаче (таймер) — K_proof «timer» при закрытии
 
     @property
     def is_open(self) -> bool:
@@ -251,7 +252,12 @@ class State:
         target.bedtime = p.get("bedtime") or target.bedtime
 
     def _on_focus_session(self, ev: Event, p: dict, day: Day) -> None:
-        if not p.get("task_id"):
+        # Сессия по задаче копится в самой задаче (глубокая работа придёт с её закрытием);
+        # сессия без задачи — сразу глубокая работа дня.
+        task = self.tasks.get(p.get("task_id") or "")
+        if task is not None:
+            task.focus_min += int(p.get("duration_min", 0))
+        else:
             day.deep_min += int(p.get("duration_min", 0))
 
     def _on_expense_logged(self, ev: Event, p: dict, day: Day) -> None:

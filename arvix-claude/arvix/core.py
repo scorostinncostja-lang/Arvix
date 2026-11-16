@@ -260,10 +260,10 @@ class Core:
         if len(candidates) == 1:
             return candidates[0]
         if not candidates:
-            listing = "; ".join(f"[{t.id}] {t.title}" for t in self.state.tasks_on(self.today())) or "задач нет"
+            listing = "; ".join(f"{t.start or '--:--'} {t.title}" for t in self.state.tasks_on(self.today())) or "задач нет"
             raise ArvixError(f"Задача «{ref}» не найдена. Сегодня: {listing}")
-        listing = "; ".join(f"[{t.id}] {t.title} ({t.local_date})" for t in candidates[:6])
-        raise ArvixError(f"Под «{ref}» подходит несколько задач: {listing}. Уточни id.")
+        listing = "; ".join(f"{t.title} ({t.local_date:%d.%m})" for t in candidates[:6])
+        raise ArvixError(f"Под «{ref}» подходит несколько задач: {listing}. Назови точнее.")
 
     def add_task(
         self,
@@ -342,7 +342,10 @@ class Core:
             delay = None
             if task.actual_start and task.start:
                 delay = (datetime.fromisoformat(task.actual_start) - self.at(task.local_date, task.start)).total_seconds() / 60
-            xp = rules.task_xp(task.difficulty, task.importance, kind, delay, pct)
+            # Фокус-таймер по задаче хотя бы на половину её длительности — самое сильное
+            # доказательство из доступных (K_proof «timer», 02-MECHANICS §2); отчёт он не отменяет.
+            timed = task.focus_min and task.focus_min * 2 >= max(task.duration_min, 1)
+            xp = rules.task_xp(task.difficulty, task.importance, "timer" if timed else kind, delay, pct)
             deep = task.duration_min * pct // 100 if task.deep_work else 0
             now = self.now()
             doubts = checks.report_issues(
@@ -352,6 +355,8 @@ class Core:
                 task.duration_min, pct,
             )
             payload = {"id": task.id, "done_pct": pct, "xp": xp, "report": report, "proof_kind": kind, "deep_min": deep}
+            if timed:
+                payload["focus_min"] = task.focus_min
             if doubts:
                 payload["doubts"] = doubts  # отчёт записан, но сомнение видно в журнале и разборе
             self.emit("task_completed", payload, source=source, entity_id=task.id)
@@ -458,10 +463,12 @@ class Core:
         with self.tx():
             self.emit("social_contact", {"who": who[:100]}, source=source)
 
-    def log_focus(self, minutes: int, *, task_ref: Any = None, source: str = "claude") -> None:
-        task_id = self.resolve_task(task_ref).id if task_ref else None
+    def log_focus(self, minutes: int, *, task_ref: Any = None, source: str = "claude") -> Task | None:
+        task = self.resolve_task(task_ref) if task_ref else None
         with self.tx():
-            self.emit("focus_session", {"duration_min": int(minutes), "task_id": task_id}, source=source)
+            self.emit("focus_session", {"duration_min": int(minutes), "task_id": task.id if task else None}, source=source,
+                      entity_id=task.id if task else None)
+        return task
 
     def declare_reason(self, reason: str, *, source: str = "claude") -> dict[str, Any]:
         """Причина дня («заболел», «семья») — при закрытии дня щит снимет самый

@@ -1,5 +1,5 @@
 """Проактив L0 (02-MECHANICS §8, §12): брифинг, напоминания T−5 / T+0 / T+конец,
-чек-ин в 15:00, разбор, отбой, ретро, фокус-таймер и протокол игнора.
+чек-ин в 15:00, разбор, отбой, ретро, фокус-таймер, панель дня и протокол игнора.
 
 Решение «когда и что писать» — код. Модель зовётся только для разбора и ретро.
 Каждое сообщение дедуплицируется ключом в журнале (message_out.key), поэтому
@@ -15,6 +15,7 @@ from typing import Any
 
 from arvix.config import parse_hhmm
 from arvix.telegram import templates as tpl
+from arvix.telegram.api import TelegramError
 
 log = logging.getLogger("arvix.scheduler")
 BRIEF_WINDOW = timedelta(hours=3)
@@ -50,6 +51,7 @@ class Scheduler:
         back = bool(day.user_actions)  # человек уже что-то написал или нажал сегодня
 
         self.focus(now)
+        self.panel()
         if silent_days >= 2 and not back:
             self.ignore_protocol(now, silent_days)
             return
@@ -136,15 +138,15 @@ class Scheduler:
             log.warning("ретро не собралось — повтор через час")
 
     def focus(self, now: datetime) -> None:
-        state = self.core.store.kv_get("focus")
-        if state and datetime.fromisoformat(state["until"]) <= now:
-            self.core.store.kv_del("focus")
-            minutes = int(state["minutes"])
-            self.bot.send(
-                f"Фокус {minutes} минут закончен. Без прерываний?",
-                [[("✅ Да", f"f:ok:{minutes}"), ("⚠️ Прерывали", f"f:int:{minutes}")]],
-                key=f"focus:{state['until']}",
-            )
+        """Обратный отсчёт в сообщении таймера и вопрос о прерываниях по окончании — в боте."""
+        self.bot.focus_tick(now)
+
+    def panel(self) -> None:
+        """Панель дня живёт: сделанное снаружи (CLI, Claude Code, голова) видно без нажатий."""
+        try:
+            self.bot.refresh_panel()
+        except TelegramError as exc:
+            log.info("панель не обновилась: %s", exc)
 
     def ignore_protocol(self, now: datetime, silent_days: int) -> None:
         """02-MECHANICS §8: день 3 — одно сообщение и заморозка штрафов, дни 4–8 —

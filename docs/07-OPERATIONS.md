@@ -46,6 +46,7 @@ arvix setup --telegram --yes        # только привязать бота: 
 | `timezone` | `Europe/Moscow` | часовой пояс; профиль (`profile.timezone` из интервью) важнее |
 | `vault` · `home` | — · `~/Arvix` | хранилище Obsidian · дом Арвикса для Claude Code |
 | `[telegram] token · owner_id` | — | бот и единственный человек, которого он слушает |
+| `[telegram] bubble_pause_sec · bubble_pause_per_char · bubble_pause_max_sec · bubbles_max` | `0.6` · `0.012` · `2.5` · `4` | ответ головы абзацами-сообщениями с паузой «набирает…»; `bubble_pause_sec = 0` — одним сообщением |
 | `[vault_paths]` | `05_System/…`, `03_Resources/…` | места профиля, целей, роадмапов, конспектов, недель, Inbox, системной папки, ежедневных заметок и их шаблона |
 | `[schedule] brief` | `auto` | брифинг: подъём из профиля + 15 мин, или `"07:30"` |
 | `[schedule] midday · debrief` | `15:00` · `22:30` | чек-ин при выполнении < 40 % · разбор |
@@ -57,6 +58,7 @@ arvix setup --telegram --yes        # только привязать бота: 
 | `[roles.voice] model` · `[roles.analyst] model` | `sonnet` · `sonnet` | модели голоса и совета — **только здесь** (правило №4) |
 | `[roles.stt] model` | `whisper-large-v3-turbo` | модель распознавания голоса; для OpenAI — их модель |
 | `[stt] engine · api_key · language · max_seconds · timeout_sec · command` | `off` · — · `ru` · `300` · `90` · — | голосовые (§8) |
+| `[stt] show_transcript` | `false` | показывать `🎙 «…»` перед ответом на голосовое; по умолчанию бот просто отвечает (D20) |
 | `[mechanics] sleep_target_min` | `450` | норма сна, если распорядок не задан ([02-MECHANICS.md §7.1](02-MECHANICS.md#71-норма-сна--coresleep_target)) |
 | `[mechanics] deep_target_min` | `120` | норма глубокой работы, если в плане дня её нет |
 | `[mechanics] week_budget_min · week_deep_budget_min` | `1560` · `480` | бюджет недели без шаблонов |

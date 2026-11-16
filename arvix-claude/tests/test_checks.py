@@ -97,7 +97,7 @@ class CoreChecksTest(ArvixCase):
         done, failed, warnings = apply_actions(self.core, [{"type": "set_goal", "title": "Японский N2 к лету", "why": "аниме", "kind": "yearly"}])
         self.assertEqual(failed, [])
         self.assertTrue(any("нет срока" in w for w in warnings))
-        gid = done[0].split("[")[1][:8]
+        gid = next(iter(self.core.state.goals))  # в квитанции для человека id больше нет
         done, failed, warnings = apply_actions(self.core, [{"type": "set_goal", "goal_id": gid, "kind": "dream"}])
         self.assertEqual((failed, warnings), ([], []))
         self.assertEqual(self.core.state.goals[gid]["kind"], "dream")
