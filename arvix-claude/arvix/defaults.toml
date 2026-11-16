@@ -66,6 +66,14 @@ timeout_sec = 90
 command = ""
 show_transcript = false   # true — перед ответом показывать «🎙 «…»»; по умолчанию бот просто отвечает
 
+# Учебный блок в Telegram (06-LEARNING §8): задача сферы learning → урок по роадмапу.
+[learning]
+auto_lesson = true            # T+0 и ▶️ у учебной задачи присылают план блока; false — обычное «Блок пошёл»
+check_questions = 3           # вопросов проверки в конце блока
+tools = []                    # что ещё есть у человека, кроме названного в его заметках: ["Anki", "NotebookLM"]
+concept_dir = ""              # папка для каркасов заметок; пусто — папка с «concept» в названии или [vault_paths] notes
+concept_template = ""         # шаблон заметки; пусто — Templates/Concept.md из хранилища, если есть
+
 [mechanics]
 sleep_target_min = 450        # 7.5 ч, 02-MECHANICS §5
 deep_target_min = 120         # глубокая работа в день

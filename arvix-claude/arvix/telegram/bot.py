@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from arvix import interview, load, rules, safety
+from arvix import lesson as lesson_mod
 from arvix.brain import (
     DEBRIEF_SCHEMA,
     EXTRACT_SCHEMA,
@@ -43,6 +44,7 @@ AWAIT = "tg_await"
 LAST_TEXT = "tg_last_text"
 PANEL = "tg_panel"
 FOCUS = "focus"
+LESSON = "lesson"
 HISTORY = 10
 ANALYST_RULES = """<analyst>
 Ты — аналитик Арвикса. Ты не пересказываешь события — их видно и так.
@@ -326,6 +328,9 @@ class Bot:
                     self.quick_add(fields)
                 else:  # без времени — пусть голова подберёт окно по контексту
                     self.converse(f"Добавь задачу: {text}")
+            elif kind == "lesson_check":
+                self.await_clear()
+                self.grade_lesson(text)
             else:
                 return False
         except ArvixError as exc:
@@ -419,6 +424,9 @@ class Bot:
                 self.on_focus_button(rest)
             elif kind == "p":
                 self.on_panel_button(rest)
+            elif kind == "l":
+                task_id, _, op = rest.partition(":")
+                self.on_lesson_button(task_id, op)
         except ArvixError as exc:
             self.send(f"Отказ: {exc}")
 
@@ -426,11 +434,16 @@ class Bot:
         core = self.core
         task = core.resolve_task(task_id)
         if op == "start":
-            core.start_task(task.id, source="telegram")
-            self.send(tpl.reminder_start(task))
+            if self.is_lesson_task(task):
+                self.begin_lesson(task)
+            else:
+                core.start_task(task.id, source="telegram")
+                self.send(tpl.reminder_start(task))
         elif op in ("d15", "d30"):
             moved = core.defer_task(task.id, int(op[1:]), source="telegram")
             self.send(f"⏳ «{moved.title}» → {moved.start}")
+        elif op == "yes" and self.lesson_pending(task.id):
+            self.send_lesson_check()  # отчёт по учебному блоку — ответы на вопросы, а не «что сделано»
         elif op == "yes":
             if task.proof == "confirm":
                 result = core.complete_task(task.id, source="telegram")
@@ -542,12 +555,31 @@ class Bot:
         upcoming = sorted((t for t in tasks if t.start), key=lambda t: t.start)
         return next((t for t in upcoming if t.start >= now), upcoming[0] if upcoming else None)
 
-    def start_focus(self, minutes: int, task_ref: Any = None) -> None:
+    def release_stale_focus(self) -> None:
+        """Задача закрыта или отменена, пока шёл её таймер (например, /done руками): таймер
+        снимается сам, прошедшее записывается — иначе он молча блокирует следующий фокус."""
+        state = self.core.store.kv_get(FOCUS)
+        task = self.core.state.tasks.get(state.get("task_id") or "") if state else None
+        if not state or task is None or task.is_open:
+            return
+        self.core.store.kv_del(FOCUS)
+        elapsed = int((self.core.now() - datetime.fromisoformat(state["started"])).total_seconds() // 60)
+        self._finish_focus_message(state, min(elapsed, int(state["minutes"])))
+        if elapsed >= tpl.FOCUS_MIN_LOGGED:
+            self.core.log_focus(min(elapsed, int(state["minutes"])), task_ref=task.id, source="telegram")
+        if self.lesson_pending(task.id):
+            self.core.store.kv_del(LESSON)
+
+    def start_focus(self, minutes: int, task_ref: Any = None, *, lesson: bool = False) -> None:
+        self.release_stale_focus()
         if self.core.store.kv_get(FOCUS):
             self.send_focus_state()
             return
         minutes = max(5, min(int(minutes), 180))
         task = self.core.resolve_task(task_ref) if task_ref else self.focus_target()
+        if task is not None and not lesson and self.is_lesson_task(task):
+            self.begin_lesson(task)  # учебный блок: план, источники, вопросы, и уже потом таймер
+            return
         if task is not None and task.status == "planned":
             self.core.start_task(task.id, source="telegram")
         now = self.core.now()
@@ -604,6 +636,7 @@ class Bot:
 
     def focus_tick(self, now: datetime) -> None:
         """Обратный отсчёт в сообщении таймера раз в минуту; по окончании — вопрос о прерываниях."""
+        self.release_stale_focus()
         state = self.core.store.kv_get(FOCUS)
         if not state:
             return
@@ -622,6 +655,12 @@ class Bot:
         self.core.store.kv_del(FOCUS)
         minutes = int(state["minutes"])
         self._finish_focus_message(state, minutes)
+        if state.get("task_id") and self.lesson_pending(state["task_id"]):
+            # Учебный блок: таймер засчитан целиком, вместо «без прерываний?» — вопросы проверки
+            self.core.log_focus(minutes, task_ref=state["task_id"], source="telegram")
+            self.send_lesson_check(key=f"focus:{state['until']}")
+            self.refresh_panel()
+            return
         if state.get("task_id"):
             self.core.store.kv_set("focus_done", {"task_id": state["task_id"]})
         self.send(
@@ -630,6 +669,148 @@ class Bot:
             key=f"focus:{state['until']}",
         )
         self.refresh_panel()
+
+    # --- учебный блок (06-LEARNING §8) ----------------------------------------------------
+
+    def is_lesson_task(self, task: Any) -> bool:
+        return task.sphere == "learning" and bool(self.core.cfg.section("learning").get("auto_lesson", True))
+
+    def lesson_pending(self, task_id: str) -> bool:
+        """Урок по задаче подготовлен и ещё не проверен."""
+        state = self.core.store.kv_get(LESSON) or {}
+        return state.get("task_id") == task_id
+
+    def prepare_lesson(self, task: Any, *, key: str | None = None) -> dict[str, Any]:
+        """Один вызов головы: роадмап, журнал ошибок и метод человека → план по минутам, источники,
+        вопросы проверки. Голова молчит — запасной план кодом, проверка — обычное «Сделано?»."""
+        core = self.core
+        section = core.cfg.section("learning")
+        questions = int(section.get("check_questions") or lesson_mod.DEFAULT_QUESTIONS)
+        subject = lesson_mod.subject_of(task.title)
+        paths = core.cfg.vault_paths
+        methods = paths.get("notes") or "03_Resources/Обучение"
+        tools = section.get("tools") or []
+        rules_text = lesson_mod.LESSON_RULES.format(
+            minutes=task.duration_min, title=task.title, sphere=task.sphere, date=core.today().isoformat(),
+            roadmaps=paths.get("roadmaps") or "03_Resources/Роадмапы", methods=methods,
+            history="; ".join(core.lesson_history(subject)) or "нет",
+            tools=(": " + ", ".join(str(t) for t in tools)) if tools else "", questions=questions,
+        )
+        system = "\n\n".join([
+            constitution(core.state.profile, gentle=True, sections=("identity", "mission", "autonomy_rule", "honesty")),
+            rules_text, "<context>\n" + build_context(core) + "\n</context>",
+        ])
+        try:
+            self.api.typing(self.owner)
+        except TelegramError:
+            pass
+        result = self.brain.ask(system=system, prompt=f"Подготовь учебный блок: {task.title}, {task.duration_min} минут.",
+                                schema=lesson_mod.LESSON_SCHEMA, role="voice", vault_tools=True)
+        if not result or not result.get("plan"):
+            result = {"topic": task.title, "why": "", "roadmap_node": "", "plan": lesson_mod.fallback_plan(task.duration_min),
+                      "sources": [], "check": [], "fallback": True}
+        result["check"] = [c for c in result.get("check") or [] if c.get("q") and c.get("a")][:questions]
+        note_path = core.concept_skeleton(result.get("note_title") or result["topic"], subject,
+                                          [c["q"] for c in result["check"]], list(result.get("sources") or []))
+        core.lesson_started(task.id, result, note_path=note_path)
+        lesson = {"task_id": task.id, "topic": result["topic"], "plan": result["plan"], "check": result["check"],
+                  "note": note_path, "sources": result.get("sources") or [], "started": None}
+        core.store.kv_set(LESSON, lesson)
+        text = lesson_mod.render(result, task, note_path)
+        if result.get("fallback"):
+            text += "\n\nГолова недоступна — план общий, тема по названию задачи." + (" " + self.brain_down_hint() if self.brain_down_hint() else "")
+        buttons = [[(f"▶️ Начать · {task.duration_min} мин", f"l:{task.id}:go")]] if task.status == "planned" else None
+        self.send(text, buttons, key=key)
+        return lesson
+
+    def begin_lesson(self, task: Any) -> None:
+        """▶️ у учебной задачи: план (если ещё не было) → задача запущена → таймер на всю длительность."""
+        if not self.lesson_pending(task.id):
+            self.prepare_lesson(task)
+        lesson = self.core.store.kv_get(LESSON) or {}
+        if lesson.get("started"):
+            self.send_focus_state() if self.core.store.kv_get(FOCUS) else self.send("Блок уже идёт. Готов отвечать — ✅ на панели.")
+            return
+        task = self.core.resolve_task(task.id)
+        if task.status == "planned":
+            self.core.start_task(task.id, source="telegram")
+        self.core.store.kv_set(LESSON, {**lesson, "started": self.core.now().isoformat()})
+        self.start_focus(task.duration_min, task.id, lesson=True)
+
+    def on_lesson_button(self, task_id: str, op: str) -> None:
+        task = self.core.resolve_task(task_id)
+        if op == "go":
+            self.begin_lesson(task)
+        elif op == "check" and self.lesson_pending(task.id):
+            self.send_lesson_check()
+
+    def send_lesson_check(self, *, key: str | None = None) -> None:
+        lesson = self.core.store.kv_get(LESSON) or {}
+        if not lesson.get("check"):
+            task = self.core.resolve_task(lesson["task_id"])
+            self.core.store.kv_del(LESSON)
+            self.send(tpl.reminder_check(task), tpl.task_buttons_check(task.id), key=key)
+            return
+        self.await_set("lesson_check", task=lesson["task_id"])
+        self.send(lesson_mod.render_check(lesson), key=key)
+
+    def grade_lesson(self, answers: str) -> None:
+        """Второй вызов головы: ответы против эталонов → оценка, пробелы, что дочитать.
+        Задача закрывается кодом: done_pct по оценке, отчёт — ответы человека."""
+        core = self.core
+        lesson = core.store.kv_get(LESSON) or {}
+        task = core.resolve_task(lesson["task_id"])
+        system = "\n\n".join([
+            constitution(core.state.profile, gentle=True, sections=("identity", "voice", "honesty")),
+            lesson_mod.CHECK_RULES.format(topic=lesson.get("topic", ""), pairs=lesson_mod.check_pairs(lesson)),
+        ])
+        try:
+            self.api.typing(self.owner)
+        except TelegramError:
+            pass
+        result = self.brain.ask(system=system, prompt=answers, schema=lesson_mod.CHECK_SCHEMA, role="voice")
+        core.store.kv_del(LESSON)
+        score = None if result is None else rules.clamp(int(result.get("score_pct") or 0), 0, 100)
+        gaps = list((result or {}).get("gaps") or [])
+        core.lesson_checked(task.id, score_pct=score, answers=answers, gaps=gaps, next_step=(result or {}).get("next_step", ""))
+        receipt_lines = []
+        if task.is_open or task.status == "debt":
+            pct = 100 if score is None else max(30, score)
+            done = core.complete_task(task.id, done_pct=pct, report=f"проверка {score}%: {answers}" if score is not None else answers, source="telegram")
+            receipt_lines.append(tpl.completed(task.title, done["xp"]) + (f" · проверка {score}%" if score is not None else ""))
+            receipt_lines += [f"⚠️ Проверь: {w}" for w in done["warnings"]]
+        if gaps:
+            receipt_lines.append("В карточки и журнал ошибок: " + "; ".join(gaps[:4]))
+        if lesson.get("note"):
+            receipt_lines.append(f"📝 Заметка своими словами: {lesson['note']}")
+        if result is None:
+            feedback = "Оценить не могу — голова недоступна. Ответы записаны, блок закрыт как сделанный."
+        else:
+            feedback = (result.get("feedback") or "").strip()
+            if result.get("next_step"):
+                feedback += f"\n\nСледующий блок: {result['next_step'].strip()}"
+        self.reply(feedback, "\n".join(receipt_lines))
+        self.refresh_panel()
+
+    def lesson_context(self) -> str:
+        """Блок <lesson> в промпт L1, пока идёт учебный блок: объяснение у доски вместо подсказки."""
+        lesson = self.core.store.kv_get(LESSON) or {}
+        if not lesson.get("started"):
+            return ""
+        task = self.core.state.tasks.get(lesson["task_id"])
+        if task is None:
+            return ""
+        elapsed = int((self.core.now() - datetime.fromisoformat(lesson["started"])).total_seconds() // 60)
+        plan = "; ".join(f"{s.get('from_min')}–{s.get('to_min')} {s.get('step')}" for s in lesson.get("plan") or [])
+        return lesson_mod.LESSON_CONTEXT.format(topic=lesson.get("topic", ""), title=task.title, minutes=task.duration_min,
+                                                elapsed=f"{elapsed} мин", plan=plan)
+
+    def on_block_start(self, task: Any, *, key: str) -> bool:
+        """T+0 у учебной задачи: вместо «Блок пошёл» — план урока с кнопкой «Начать». False — обычный путь."""
+        if not self.is_lesson_task(task) or self.lesson_pending(task.id):
+            return False
+        self.prepare_lesson(task, key=key)
+        return True
 
     def propose_schedule(self, wishes: str = "") -> None:
         """Один вызов модели: ответы интервью + бюджет → шаблоны дней на подтверждение."""
@@ -734,6 +915,8 @@ class Bot:
         today = core.state.days.get(core.today())
         if silent_days >= 2 and today and today.user_actions <= 2:
             extra += "\n" + tpl.RETURN_HINT.format(days=silent_days)
+        if lesson := self.lesson_context():
+            extra += "\n" + lesson
         system = system_prompt(core, message=text, history=self.history(exclude_last=text), extra=extra.strip())
         result = self.brain.ask(system=system, prompt=text, schema=VOICE_SCHEMA, vault_tools=True)
         if result is None:
@@ -1029,6 +1212,23 @@ class Bot:
     def cmd_reason(self, rest: str) -> None:
         result = self.core.declare_reason(rest, source="telegram")
         self.send(f"Причина записана. Щитов осталось: {result['shields_left']} — снимет самый крупный урон при закрытии дня.")
+
+    def cmd_learn(self, rest: str) -> None:
+        """/learn — урок по ближайшей учебной задаче дня; /learn 30 физика — новый блок на 30 минут прямо сейчас."""
+        words = rest.split()
+        minutes = int(words.pop(0)) if words and words[0].isdigit() else None
+        topic = " ".join(words).strip()
+        today = [t for t in self.core.state.tasks_on(self.core.today()) if t.is_open and t.sphere == "learning"]
+        if topic:
+            today = [t for t in today if topic.lower() in t.title.lower()]
+        task = next((t for t in today if t.status == "active"), None) or (today[0] if today else None)
+        if task is None:
+            if not topic:
+                self.send("Учебных задач на сегодня нет. /learn 30 физика — начну блок на 30 минут прямо сейчас.")
+                return
+            task = self.core.add_task(topic, sphere="learning", importance=3, deep_work=True, start=self.core.now().strftime("%H:%M"),
+                                      duration_min=minutes or lesson_mod.DEFAULT_MINUTES, source="telegram")
+        self.begin_lesson(task)
 
     def cmd_focus(self, rest: str) -> None:
         """/focus · /focus 45 · /focus 45 физика · /focus физика · /focus stop"""

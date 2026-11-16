@@ -88,9 +88,10 @@ class Scheduler:
                 self.bot.send(tpl.reminder_before(task, minutes), tpl.task_buttons_before(task.id), key=before)
             go = f"rem0:{task.id}:{task.start}"
             if start <= now < start + timedelta(minutes=10) and task.status == "planned" and not core.sent(go):
-                self.bot.send(tpl.reminder_start(task), key=go)
+                if not self.bot.on_block_start(task, key=go):  # учебная задача — план урока вместо «Блок пошёл»
+                    self.bot.send(tpl.reminder_start(task), key=go)
             check = f"remend:{task.id}"
-            if end <= now < end + CHECK_WINDOW and not core.sent(check):
+            if end <= now < end + CHECK_WINDOW and not core.sent(check) and not self.bot.lesson_pending(task.id):
                 self.bot.send(tpl.reminder_check(task), tpl.task_buttons_check(task.id), key=check)
 
     def midday(self, now: datetime) -> None:
