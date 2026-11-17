@@ -54,7 +54,10 @@ arvix setup --telegram --yes        # только привязать бота: 
 | `[schedule] rollover` | `04:00` | до этого времени вчерашний день открыт для отчётов; сове — `05:00` |
 | `[schedule] bedtime_warning_min` | `30` | за сколько минут предупреждать об отбое |
 | `[schedule] silent_weekday` | `-1` | тихий день каждую неделю (`6` = воскресенье), `-1` — нет |
-| `[brain] claude_bin · timeout_sec · vault_tools` | `claude` · `180` · `true` | путь к `claude`; таймаут головы; читает ли голова хранилище |
+| `[brain] claude_bin · timeout_sec · vault_tools · web_tools` | `claude` · `180` · `true` · `true` | путь к `claude`; таймаут головы; читает ли голова хранилище и папку памяти; ищет ли в интернете (D24) |
+| `[schedule] curiosity` | `18:30` | Арвикс пишет первым раз в день (D27); `""` — выключено |
+| `[web] enabled · port · public_url · token` | `true` · `8787` · — · — | приложение (D26): API в службе бота на 127.0.0.1; внешний адрес пишет `deploy/web-setup.sh`; ключ — в базе, если не задан здесь |
+| `[weather] city` | — | запасной город для погоды, если в профиле его нет |
 | `[roles.voice] model` · `[roles.analyst] model` | `sonnet` · `sonnet` | модели голоса и совета — **только здесь** (правило №4) |
 | `[roles.stt] model` | `whisper-large-v3-turbo` | модель распознавания голоса; для OpenAI — их модель |
 | `[stt] engine · api_key · language · max_seconds · timeout_sec · command` | `off` · — · `ru` · `300` · `90` · — | голосовые (§8) |
@@ -68,6 +71,15 @@ arvix setup --telegram --yes        # только привязать бота: 
 | `[remote] host · app` | — | удалённый режим (§3) |
 
 После правки конфига: `systemctl --user restart arvix-telegram` (или на сервере).
+
+## 2.1. Приложение наружу (Mini App, телефон)
+
+```bash
+bash deploy/web-setup.sh root@HOST          # Caddy, https://<ip>.sslip.io:8443, [web] public_url, перезапуск бота
+```
+Порт 443 скрипт не трогает (на сервере его держит VPN), сертификат получает через 80. Чужие сайты Caddy не трогаются:
+свой блок — `/etc/caddy/arvix.caddy`. Проверка: `curl -sI https://<адрес>:8443/` и кнопка «Арвикс» у поля ввода в
+Telegram. Ключ для телефона без Telegram — `arvix app-token` (на сервере). Терминал — просто `arvix` на ноутбуке.
 
 ## 3. Сервер и удалённый режим
 
@@ -128,6 +140,9 @@ bash arvix-claude/deploy/install.sh                  # ноутбук: плаг�
 
 ## 6. Логи и отказы
 
+Скорость головы видна в журнале службы: строка `голова: 7.1 с, ходов 2, роль voice` на каждый вызов. Много ходов —
+модель искала инструментами; сообщения про заметки код ищет сам (`<vault_hits>`), чтобы ходов было меньше.
+
 | Симптом | Что делать |
 |---|---|
 | Бот не отвечает | `systemctl --user status arvix-telegram`, `journalctl --user -u arvix-telegram -n 50` (на сервере — через `ssh arvix@HOST`) |
@@ -142,6 +157,10 @@ bash arvix-claude/deploy/install.sh                  # ноутбук: плаг�
 | Токен бота где-то засветился (чат, скриншот, git) | @BotFather → `/revoke`, затем `arvix setup --telegram --yes` и `sync-server.sh … --init` |
 
 ## 7. Приватность
+
+- Погода: Open-Meteo получает название города и его координаты — больше ничего. Поиск в сети (D24): запросы головы
+  уходят в веб-поиск Claude; выключить — `[brain] web_tools = false`.
+- Приложение наружу открыто только через HTTPS и только с подписью Telegram владельца или ключом приложения.
 
 Наружу уходит: в Anthropic — сообщения, контекст-пакет и прочитанные головой заметки; в Telegram — переписка с ботом.
 Больше никуда. Журнал, конфиг, токены — только на своих машинах, права 600. Голова на сервере видит всё хранилище,

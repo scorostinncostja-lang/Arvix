@@ -1,7 +1,8 @@
 """Главный цикл Telegram-бота: long polling + тик планировщика.
 
-getUpdates ждёт до 20 секунд — это и есть «часы» планировщика. Ошибки сети
-(ноутбук проснулся без Wi-Fi) переживаются с экспоненциальной паузой.
+Поток опроса ждёт Telegram (getUpdates до 20 с) и кладёт апдейты в общую очередь (web/hub.py);
+туда же пишут приложение и терминал. Главный поток исполняет очередь и раз в 5 с — планировщик.
+Ошибки сети (ноутбук проснулся без Wi-Fi) переживаются с экспоненциальной паузой.
 """
 
 from __future__ import annotations
@@ -9,7 +10,9 @@ from __future__ import annotations
 import logging
 import signal
 import sys
+import threading
 import time
+from collections.abc import Callable
 
 from arvix.brain import Brain
 from arvix.config import load_config
@@ -19,9 +22,12 @@ from arvix.telegram import templates
 from arvix.telegram.api import TelegramAPI, TelegramError
 from arvix.telegram.bot import Bot
 from arvix.telegram.scheduler import Scheduler
+from arvix.web.hub import Hub
+from arvix.web.server import start_web
 
 log = logging.getLogger("arvix.daemon")
 POLL_SECONDS = 20
+TICK_SECONDS = 5  # планировщик: напоминания, таймер, панель
 MAX_PAUSE = 20  # после обрыва сети бот возвращается не позже чем через 20 с
 
 
@@ -41,47 +47,61 @@ def main() -> None:
         log.warning("голосовые не работают: %s", stt.problem())
     bot = Bot(core, api, brain, int(tg["owner_id"]), stt=stt)
     scheduler = Scheduler(bot)
+    app_url = str(cfg.section("web").get("public_url") or "").rstrip("/")
+    api.app_url = app_url + "/" if app_url else ""
     try:
-        api.set_commands(templates.COMMANDS)  # меню «/» в клиенте Telegram
+        api.set_commands(templates.COMMANDS)  # меню «/» пустое: говорят словами (D23)
+        api.set_menu_button(api.app_url)      # кнопка слева от поля ввода открывает приложение
     except TelegramError as exc:
-        log.warning("меню команд не установлено: %s", exc)
+        log.warning("меню не установлено: %s", exc)
+    hub = Hub()
+    web = start_web(cfg, hub)  # приложение и API — в том же процессе (arvix/web)
 
-    stopping = False
-    waiting = True  # ждём сеть или long poll — прерывать можно сразу
+    stopping = threading.Event()
 
     def stop(*_: object) -> None:
-        nonlocal stopping
-        stopping = True
-        if waiting:
-            raise SystemExit(0)  # иначе getUpdates/sleep держат процесс и systemd убивает его по таймауту
+        stopping.set()
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    offset = int(core.store.kv_get("tg_offset", 0))
-    pause = 1
-    log.info("Арвикс в Telegram запущен, владелец %s", tg["owner_id"])
-    while not stopping:
-        waiting = True
-        try:
-            updates = api.get_updates(offset, timeout=POLL_SECONDS)
-            pause = 1
-        except TelegramError as exc:
-            log.warning("Telegram недоступен: %s — пауза %s с", exc, pause)
-            time.sleep(pause)
-            pause = min(pause * 2, MAX_PAUSE)
-            updates = []
-        waiting = False
-        for update in updates:
-            offset = update["update_id"] + 1
-            core.store.kv_set("tg_offset", offset)  # до обработки: упавший апдейт не зациклит бота
+
+    def handle(update: dict) -> Callable[[Bot], None]:
+        def run(b: Bot) -> None:
+            b.core.store.kv_set("tg_offset", update["update_id"] + 1)  # до обработки: упавший апдейт не зациклит бота
+            b.handle(update)
+        return run
+
+    def poll() -> None:
+        """Отдельный поток: только ждёт Telegram и кладёт апдейты в общую очередь."""
+        offset = start_offset
+        pause = 1
+        while not stopping.is_set():
             try:
-                bot.handle(update)
+                updates = api.get_updates(offset, timeout=POLL_SECONDS)
+                pause = 1
+            except TelegramError as exc:
+                log.warning("Telegram недоступен: %s — пауза %s с", exc, pause)
+                stopping.wait(pause)
+                pause = min(pause * 2, MAX_PAUSE)
+                continue
+            for update in updates:
+                offset = update["update_id"] + 1
+                hub.post(handle(update), label=f"update {update.get('update_id')}")
+
+    start_offset = int(core.store.kv_get("tg_offset", 0))
+    threading.Thread(target=poll, name="tg-poll", daemon=True).start()
+    log.info("Арвикс в Telegram запущен, владелец %s", tg["owner_id"])
+    last_tick = 0.0
+    while not stopping.is_set():
+        hub.run_pending(bot, timeout=1.0)
+        if time.monotonic() - last_tick >= TICK_SECONDS:
+            last_tick = time.monotonic()
+            try:
+                scheduler.tick()
             except Exception:
-                log.exception("ошибка обработки апдейта %s", update.get("update_id"))
-        try:
-            scheduler.tick()
-        except Exception:
-            log.exception("ошибка планировщика")
+                log.exception("ошибка планировщика")
+    if web is not None:
+        web.shutdown()
     log.info("Остановлен")
 
 

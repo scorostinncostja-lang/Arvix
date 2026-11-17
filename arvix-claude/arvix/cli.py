@@ -560,6 +560,29 @@ def cmd_telegram(args: argparse.Namespace) -> None:
     main()
 
 
+def cmd_app(args: argparse.Namespace) -> None:
+    from arvix.tui import main as tui
+
+    tui()
+
+
+def cmd_app_token(args: argparse.Namespace) -> None:
+    """Печатает ключ приложения. Его просит `arvix` на ноутбуке по ssh; руками — для привязки
+    телефона без Telegram: открыть <адрес>/#t=<ключ> в браузере телефона."""
+    from arvix.web.auth import app_token
+
+    core = Core(load_config())
+    print(app_token(core))
+
+
+def cmd_app_url(args: argparse.Namespace) -> None:
+    url = args.url.strip().rstrip("/")
+    if url and not url.startswith("https://"):
+        sys.exit("Mini App в Telegram открывается только по https://")
+    path = write_user_config({"web": {"public_url": url}})
+    print(f"[web] public_url = {url or '—'} → {path}. Перезапусти бота: systemctl --user restart arvix-telegram")
+
+
 def cmd_mcp(args: argparse.Namespace) -> None:
     from arvix.mcp_server import serve
 
@@ -637,7 +660,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("host", nargs="?")
     add("desktop-mcp", cmd_desktop_mcp, "подключить к чату Claude Desktop")
     add("brain-test", cmd_brain_test, "пробный вызов головы").add_argument("text", nargs="?", default="Как у меня дела сегодня?")
-    add("telegram", cmd_telegram, "запустить Telegram-бота")
+    add("telegram", cmd_telegram, "запустить Telegram-бота (и приложение)")
+    add("app", cmd_app, "приложение в терминале (то же, что `arvix` без аргументов)")
+    add("app-token", cmd_app_token, "ключ приложения для телефона и терминала (печатает в stdout)")
+    add("app-url", cmd_app_url, "адрес приложения снаружи: https://… (пишет deploy/web-setup.sh)").add_argument("url")
     add("mcp", cmd_mcp, "MCP-сервер (stdio)")
     add("hook", cmd_hook, "хуки Claude Code").add_argument("event", choices=("session-start", "prompt"))
     return parser

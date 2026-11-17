@@ -62,6 +62,7 @@ class Scheduler:
             if full and not red:  # в 🟥 план — одна маленькая вещь: напоминаний о задачах нет
                 self.reminders(now)
                 self.midday(now)
+                self.curiosity(now)
             if full or back:
                 self.bedtime(now, gentle=red)
             self.brief(now, prefix=tpl.IGNORE_DAY2 if silent_days == 1 and not back else "")
@@ -70,6 +71,24 @@ class Scheduler:
 
     def _once(self, key: str, when: datetime, now: datetime, window: timedelta) -> bool:
         return when <= now < when + window and not self.core.sent(key)
+
+    def curiosity(self, now: datetime) -> None:
+        """Раз в день Арвикс пишет первым (bot.send_curiosity). Не во время разговора и не
+        во время фокуса; одна попытка в день — молчащая голова не дёргается каждые 20 с."""
+        when = self._when("curiosity")
+        key = f"curiosity:{now.date().isoformat()}"
+        if not when or not (when <= now < when + CHECK_WINDOW) or self.core.sent(key):
+            return
+        if self.core.store.kv_get("curiosity_tried") == now.date().isoformat() or self.core.store.kv_get("focus"):
+            return
+        last_in = self.core.store.kv_get("last_in_at")
+        if last_in and now.timestamp() - float(last_in) < 2 * 3600:
+            return
+        self.core.store.kv_set("curiosity_tried", now.date().isoformat())
+        try:
+            self.bot.send_curiosity()
+        except TelegramError as exc:
+            log.warning("любопытство не отправлено: %s", exc)
 
     def brief(self, now: datetime, prefix: str = "") -> None:
         if self._once(f"brief:{now.date().isoformat()}", self.brief_time(), now, BRIEF_WINDOW):

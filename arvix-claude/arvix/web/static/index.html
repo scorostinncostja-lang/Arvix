@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Арвикс</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="app.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <div class="top-title">
+      <div id="top-day" class="top-day">Арвикс</div>
+      <div id="top-sub" class="top-sub"></div>
+    </div>
+    <div id="top-mode" class="chip mode"></div>
+  </header>
+
+  <main id="view"></main>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="today" class="active"><span class="ico">◉</span><span>Сегодня</span></button>
+    <button data-tab="chat"><span class="ico">✦</span><span>Арвикс</span><i id="chat-dot" class="dot hidden"></i></button>
+    <button data-tab="notes"><span class="ico">▤</span><span>Заметки</span></button>
+    <button data-tab="progress"><span class="ico">▲</span><span>Прогресс</span></button>
+  </nav>
+</div>
+
+<div id="sheet-back" class="sheet-back hidden"></div>
+<section id="sheet" class="sheet hidden" role="dialog" aria-modal="true"></section>
+<div id="toast" class="toast hidden"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

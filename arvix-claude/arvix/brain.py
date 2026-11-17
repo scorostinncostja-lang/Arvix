@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from typing import Any
 
 from arvix.config import Config, data_dir
@@ -26,7 +27,19 @@ ACTION_TYPES = (
     "add_task", "complete_task", "fail_task", "defer_task", "cancel_task", "start_task",
     "log_sleep", "log_expense", "log_social", "remember", "note", "profile_set",
     "set_goal", "add_trait", "declare_reason", "learning_question", "safety_flag", "set_template",
+) + (
+    # Действия интерфейса: их исполняет бот после ответа, а не ядро (05-INTERFACES §2.1).
+    # Так человек говорит словами, а не командами: «давай позанимаемся физикой» → урок.
+    "plan_schedule", "show_schedule", "start_lesson", "start_focus", "stop_focus", "show_day", "show_status",
+    "show_week", "show_goals", "debrief_now", "rest_day", "silent_day", "open_app",
 )
+UI_ACTIONS = frozenset(ACTION_TYPES[ACTION_TYPES.index("plan_schedule"):])
+ACTION_RU = {
+    "add_task": "задача", "complete_task": "отчёт", "fail_task": "провал", "defer_task": "перенос", "cancel_task": "отмена",
+    "start_task": "старт", "log_sleep": "сон", "log_expense": "трата", "log_social": "социум", "remember": "память",
+    "note": "заметка", "profile_set": "профиль", "set_goal": "цель", "add_trait": "черта", "declare_reason": "причина дня",
+    "learning_question": "учебный вопрос", "safety_flag": "safety", "set_template": "распорядок",
+}
 
 _ACTION_FIELDS = {
     "type": {"type": "string", "enum": list(ACTION_TYPES)},
@@ -43,6 +56,7 @@ _ACTION_FIELDS = {
     "text": {"type": "string"}, "kind": {"type": "string"}, "why": {"type": "string"},
     "deadline": {"type": "string"}, "level": {"type": "string"}, "question": {"type": "string"},
     "direct": {"type": "boolean"},
+    "wishes": {"type": "string", "description": "для plan_schedule: распорядок и пожелания словами человека, полностью"},
     "goal_id": {"type": "string", "description": "для set_goal: id существующей цели — исправить её (kind, deadline, metric, status=dropped)"},
     "parent_id": {"type": "string", "description": "для set_goal: id цели, этапом которой становится эта"},
     "metric": {"type": "string", "description": "для set_goal: как проверить достижение — число, оценка, результат"},
@@ -175,12 +189,14 @@ class Brain:
         self.bin = section.get("claude_bin") or "claude"
         self.timeout = int(section.get("timeout_sec") or 180)
         self.vault_tools = bool(section.get("vault_tools", True))
+        self.web_tools = bool(section.get("web_tools", True))
         self.last_error = ""
+        self.last_stats: dict[str, Any] = {}
 
     def available(self) -> bool:
         return shutil.which(self.bin) is not None or os.path.isfile(self.bin)
 
-    def command(self, *, system: str, prompt: str, schema: dict[str, Any], role: str, vault_tools: bool) -> list[str]:
+    def command(self, *, system: str, prompt: str, schema: dict[str, Any], role: str, vault_tools: bool, web: bool = False) -> list[str]:
         cmd = [
             self.bin, "-p", prompt,
             "--system-prompt", system,
@@ -195,19 +211,37 @@ class Brain:
         ]
         if model := self.cfg.model(role):
             cmd += ["--model", model]
-        if vault_tools and self.vault_tools and self.cfg.vault:
-            cmd += ["--tools", "Read,Grep,Glob", "--allowedTools", "Read,Grep,Glob", "--add-dir", str(self.cfg.vault)]
+        tools: list[str] = []
+        dirs: list[str] = []
+        if vault_tools and self.vault_tools:
+            # Хранилище и дословная память разговоров (arvix/memory.py) — голова ищет в них сама,
+            # когда нужного нет в контексте, а не отвечает «не знаю».
+            if self.cfg.vault:
+                dirs.append(str(self.cfg.vault))
+            memory = data_dir() / "memory"
+            if memory.is_dir():
+                dirs.append(str(memory))
+            if dirs:
+                tools += ["Read", "Grep", "Glob"]
+        if web and self.web_tools:
+            tools += ["WebSearch", "WebFetch"]
+        if tools:
+            cmd += ["--tools", ",".join(tools), "--allowedTools", ",".join(tools)]
+            for folder in dirs:
+                cmd += ["--add-dir", folder]
         else:
             cmd += ["--tools", ""]
         return cmd
 
-    def ask(self, *, system: str, prompt: str, schema: dict[str, Any], role: str = "voice", vault_tools: bool = False) -> dict[str, Any] | None:
+    def ask(self, *, system: str, prompt: str, schema: dict[str, Any], role: str = "voice", vault_tools: bool = False,
+            web: bool = False) -> dict[str, Any] | None:
         """None — голова недоступна (лимит подписки, сеть, таймаут). Вызывающий
         отвечает шаблоном L0: напоминания и учёт от этого не ломаются."""
         cwd = data_dir() / "brain"
         cwd.mkdir(parents=True, exist_ok=True)
-        cmd = self.command(system=system, prompt=prompt, schema=schema, role=role, vault_tools=vault_tools)
+        cmd = self.command(system=system, prompt=prompt, schema=schema, role=role, vault_tools=vault_tools, web=web)
         env = {**os.environ, "ARVIX_BRAIN": "1"}
+        started = time.monotonic()
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout, cwd=cwd, env=env, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -225,6 +259,10 @@ class Brain:
             log.warning("claude -p ошибка: %s", self.last_error)
             return None
         self.last_error = ""
+        # Скорость видна в журнале службы: сколько ждали, сколько ходов с инструментами.
+        self.last_stats = {"sec": round(time.monotonic() - started, 1), "turns": data.get("num_turns"), "role": role,
+                           "api_ms": data.get("duration_api_ms")}
+        log.info("голова: %(sec)s с, ходов %(turns)s, роль %(role)s", self.last_stats)
         return data["structured_output"]
 
 
@@ -250,6 +288,8 @@ def apply_actions(
     added: list[str] = []
     for action in actions or []:
         kind = action.get("type")
+        if kind in UI_ACTIONS:
+            continue  # их исполняет бот (Bot.run_ui_actions)
         try:
             if kind == "add_task":
                 task = core.add_task(
@@ -289,7 +329,9 @@ def apply_actions(
                 core.log_social(action.get("who", ""), source=source)
                 done.append("социум +1")
             elif kind == "remember":
-                core.remember(action.get("topic", "general"), action["fact"], source=source)
+                # Модель иногда кладёт факт в text или value — факт важнее имени поля.
+                fact = action.get("fact") or action.get("text") or action.get("value") or action.get("title") or ""
+                core.remember(action.get("topic") or "general", str(fact), source=source)
             elif kind == "note":
                 core.capture_note(action["text"], source=source)
                 done.append("заметка в Inbox")
@@ -315,8 +357,12 @@ def apply_actions(
             elif kind == "set_template":
                 core.set_template(action.get("weekdays") or [], action.get("day_type", ""), action.get("blocks") or [], source=source)
                 done.append(f"шаблон «{action.get('day_type')}» для дней {action.get('weekdays')}")
-        except (ArvixError, KeyError, TypeError, ValueError) as exc:
-            failed.append(f"{kind}: {exc}")
+        except ArvixError as exc:
+            failed.append(f"{ACTION_RU.get(kind, kind)} — {exc}")
+        except (KeyError, TypeError, ValueError) as exc:
+            # Неполная команда модели — не повод показывать человеку «remember: 'fact'».
+            log.warning("action %s отброшен: %r (%s)", kind, exc, action)
+            failed.append(f"{ACTION_RU.get(kind, kind)} — не понял, что именно записать; скажи ещё раз словами")
     # Сомнения по новым задачам — после всех actions: модель часто добавляет блок и тем же
     # ответом сдвигает соседний; проверка внахлёст до сдвига была бы ложной.
     for task_id in added:

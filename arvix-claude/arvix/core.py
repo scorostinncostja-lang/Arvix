@@ -529,7 +529,7 @@ class Core:
         if self.cfg.vault:
             path = self.vault.inbox(text, self.now())
         with self.tx():
-            self.emit("note_captured", {"text": text[:2000], "path": path}, source=source)
+            self.emit("note_captured", {"text": text[:8000], "path": path}, source=source)
         return path
 
     # --- профиль и память -------------------------------------------------------
@@ -633,7 +633,7 @@ class Core:
         with self.tx():
             self.emit(
                 "fact_remembered",
-                {"id": fact_id, "topic": (topic or "general")[:40], "fact": fact[:500], "confidence": rules.clamp(int(confidence), 1, 5), "valid_until": valid_until},
+                {"id": fact_id, "topic": (topic or "general")[:40], "fact": fact[:4000], "confidence": rules.clamp(int(confidence), 1, 5), "valid_until": valid_until},
                 source=source,
                 entity_id=fact_id,
             )
@@ -894,13 +894,21 @@ class Core:
 
     # --- сообщения ------------------------------------------------------------------
 
+    # Переписка хранится дословно: это и есть долгая память Арвикса (arvix/memory.py).
+    # Раньше ответ резался до 600 символов — и через неделю он «забывал» собственные объяснения.
+    MESSAGE_LIMIT = 16000
+
     def message_in(self, text: str, *, channel: str = "telegram") -> None:
         with self.tx():
-            self.emit("message_in", {"text": text[:2000], "channel": channel}, source=channel)
+            self.emit("message_in", {"text": text[: self.MESSAGE_LIMIT], "channel": channel}, source=channel)
 
-    def message_out(self, text: str, *, key: str | None = None, channel: str = "telegram") -> None:
+    def message_out(self, text: str, *, key: str | None = None, channel: str = "telegram",
+                    buttons: list[list[tuple[str, str]]] | None = None) -> None:
+        payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "key": key, "channel": channel}
+        if buttons:  # приложение показывает те же кнопки под сообщением
+            payload["buttons"] = [[[t, d] for t, d in row] for row in buttons]
         with self.tx():
-            self.emit("message_out", {"text": text[:600], "key": key, "channel": channel}, source="bot")
+            self.emit("message_out", payload, source="bot")
 
     def sent(self, key: str, d: date | None = None) -> bool:
         day = self.state.days.get(d or self.today())

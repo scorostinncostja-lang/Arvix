@@ -50,10 +50,12 @@ class Event:
 
 
 class Store:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, shared: bool = False):
+        """shared=True — соединение можно звать из разных потоков (приложение читает
+        состояние из потоков HTTP-сервера). Порядок вызовов тогда держит внешний замок."""
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
-        self._conn = sqlite3.connect(path, timeout=15, isolation_level=None)
+        self._conn = sqlite3.connect(path, timeout=15, isolation_level=None, check_same_thread=not shared)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=15000")
         self._conn.executescript(SCHEMA)
