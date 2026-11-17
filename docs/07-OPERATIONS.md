@@ -192,8 +192,9 @@ ssh -t arvix@HOST '~/.local/bin/arvix setup --stt command --yes && systemctl --u
 
 **Голос Арвикса (ответ голосовым, озвучка разговора, D34)** — Piper с русским голосом, локально:
 ```bash
-ssh -t arvix@HOST 'bash ~/.local/share/arvix/app/deploy/tts-local.sh irina && systemctl --user restart arvix-telegram'
+ssh -t arvix@HOST 'bash ~/.local/share/arvix/app/deploy/tts-local.sh irina'
 ```
+Скрипт сам перезапускает бота и пишет «Готово: голос включён»; повторный запуск безопасен.
 Голоса: `irina`, `dmitri`, `denis`, `ruslan`. Без этого режим разговора в приложении говорит голосом телефона.
 
 **Аватар бота** — `arvix avatar [файл.png]` (по умолчанию `deploy/avatar.png`, исходник `deploy/avatar.svg`); Bot API
