@@ -49,11 +49,16 @@ def main() -> None:
     scheduler = Scheduler(bot)
     app_url = str(cfg.section("web").get("public_url") or "").rstrip("/")
     api.app_url = app_url + "/" if app_url else ""
-    try:
-        api.set_commands(templates.COMMANDS)  # меню «/» пустое: говорят словами (D23)
-        api.set_menu_button(api.app_url)      # кнопка слева от поля ввода открывает приложение
-    except TelegramError as exc:
-        log.warning("меню не установлено: %s", exc)
+    def setup_menu() -> None:
+        # В фоне: на нестабильной сети два вызова Telegram ждали таймауты по 40 с, и бот с приложением
+        # стартовали через полторы минуты. Меню — косметика, ждать его незачем.
+        try:
+            api.set_commands(templates.COMMANDS)  # меню «/» пустое: говорят словами (D23)
+            api.set_menu_button(api.app_url)      # кнопка слева от поля ввода открывает приложение
+        except TelegramError as exc:
+            log.warning("меню не установлено: %s", exc)
+
+    threading.Thread(target=setup_menu, name="tg-menu", daemon=True).start()
     hub = Hub()
     web = start_web(cfg, hub)  # приложение и API — в том же процессе (arvix/web)
 
