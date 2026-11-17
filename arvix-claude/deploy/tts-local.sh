@@ -3,7 +3,9 @@
 # текст никуда не уходит. Запускать на машине, где работает бот (сервер или ноутбук):
 #
 #   bash ~/.local/share/arvix/app/deploy/tts-local.sh [irina|dmitri|denis|ruslan]
-#   systemctl --user restart arvix-telegram
+#
+# Бот, если он запущен на этой машине, скрипт перезапускает сам. Повторный запуск безопасен:
+# скачанное не качается заново, секция [tts] переписывается той же.
 #
 # Скрипт кладёт Piper и голос в ~/.local/share/arvix/piper и пишет в конфиг:
 #   [tts] engine = "command", command = "<piper> --model <голос>.onnx --output_file {out}"
@@ -48,4 +50,9 @@ path.write_text(text, encoding="utf-8")
 path.chmod(0o600)
 print(f"Записал [tts] в {path}")
 PY
-echo "Дальше: systemctl --user restart arvix-telegram"
+if systemctl --user is-active --quiet arvix-telegram 2>/dev/null; then
+  systemctl --user restart arvix-telegram
+  echo "Готово: голос включён, бот перезапущен. Проверь — отправь Арвиксу голосовое."
+else
+  echo "Готово: голос настроен. Бот на этой машине не запущен — включится при его старте."
+fi
