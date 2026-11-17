@@ -45,6 +45,8 @@ fi
 step "Установка на сервере"
 "${SSH[@]}" 'bash ~/src/arvix-claude/deploy/install.sh && ~/.local/bin/arvix init-home >/dev/null && ~/.local/bin/arvix doctor' || true
 
+[[ "$INIT" == "--init" ]] || exit 0  # обновление: дальше — только шаги первой настройки
+
 cat <<EOF
 
 Дальше:

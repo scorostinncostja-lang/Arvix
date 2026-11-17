@@ -12,7 +12,9 @@ DATA="${XDG_DATA_HOME:-$HOME/.local/share}/arvix"
 APP="$DATA/app"
 BIN="$HOME/.local/bin"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/arvix/config.toml"
 PYTHON="$(command -v python3)"
+CONFIGURED=0; [[ -f "$CONF" ]] && CONFIGURED=1  # повторная установка = обновление: инструкции первого раза не нужны
 
 step() { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 
@@ -51,11 +53,13 @@ if command -v claude >/dev/null 2>&1; then
   else
     claude plugin install arvix@arvix --scope user
   fi
+elif (( CONFIGURED )); then
+  echo "Claude Code не в PATH — плагин пропущен (боту и голове он не нужен)"
 else
   echo "claude не найден. Потом: claude plugin marketplace add $APP && claude plugin install arvix@arvix"
 fi
 
-step "systemd: arvix-telegram.service и arvix-backup.timer (не запускаю до arvix setup)"
+if (( CONFIGURED )); then step "systemd: юниты обновлены"; else step "systemd: arvix-telegram.service и arvix-backup.timer (не запускаю до arvix setup)"; fi
 mkdir -p "$UNIT_DIR"
 CLAUDE_DIR="$(dirname "$(command -v claude 2>/dev/null || echo /usr/bin/claude)")"
 sed -e "s|@APP@|$APP|g" -e "s|@PYTHON@|$PYTHON|g" -e "s|@PATH@|$BIN:$CLAUDE_DIR:/usr/local/bin:/usr/bin:/bin|g" \
@@ -65,8 +69,9 @@ cp "$SRC/deploy/arvix-backup.timer" "$UNIT_DIR/arvix-backup.timer"
 sed -e "s|@APP@|$APP|g" "$SRC/deploy/arvix-vault-sync.service" > "$UNIT_DIR/arvix-vault-sync.service"
 cp "$SRC/deploy/arvix-vault-sync.timer" "$UNIT_DIR/arvix-vault-sync.timer"
 systemctl --user daemon-reload 2>/dev/null || true
+BOT=stopped
 if systemctl --user is-active --quiet arvix-telegram 2>/dev/null; then
-  systemctl --user restart arvix-telegram && echo "бот перезапущен на новой версии"
+  systemctl --user restart arvix-telegram && BOT=restarted
 fi
 
 if [[ "${1:-}" == "--desktop" ]]; then
@@ -74,12 +79,21 @@ if [[ "${1:-}" == "--desktop" ]]; then
   "$PYTHON" "$APP/scripts/arvix_cli.py" desktop-mcp
 fi
 
-if [[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/arvix/config.toml" ]]; then
-  step "Дом Арвикса"
-  "$PYTHON" "$APP/scripts/arvix_cli.py" init-home || true
+if (( CONFIGURED )); then
+  "$PYTHON" "$APP/scripts/arvix_cli.py" init-home >/dev/null 2>&1 || true
+  VERSION="$("$PYTHON" -c "import sys; sys.path.insert(0, '$APP'); import arvix; print(arvix.__version__)")"
+  REMOTE="$(sed -n '/^\[remote\]/,/^\[/{s/^host *= *"\(.*\)"/\1/p}' "$CONF")"
+  if [[ "$BOT" == restarted ]]; then
+    step "Готово: Арвикс $VERSION, бот перезапущен на новой версии"
+  elif [[ -n "$REMOTE" ]]; then
+    step "Готово: Арвикс $VERSION на этой машине. Бот и журнал — на сервере; обнови его: deploy/sync-server.sh $REMOTE"
+  else
+    step "Готово: Арвикс $VERSION. Бот здесь не запущен — systemctl --user enable --now arvix-telegram"
+  fi
+  exit 0
 fi
 
-step "Готово"
+step "Готово — первая установка"
 cat <<'EOF'
 Дальше:
   1. arvix setup                                   хранилище, часовой пояс, Telegram-бот
