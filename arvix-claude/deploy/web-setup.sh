@@ -74,7 +74,7 @@ for i in $(seq 1 30); do
 done
 
 step "Адрес в конфиг бота и перезапуск"
-"${SSH[@]}" "sudo -iu $BOT_USER bash -lc '~/.local/bin/arvix app-url $URL && XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user restart arvix-telegram && sleep 3 && systemctl --user is-active arvix-telegram'"
+"${SSH[@]}" "sudo -iu $BOT_USER bash -lc 'export XDG_RUNTIME_DIR=/run/user/\$(id -u); ~/.local/bin/arvix app-url $URL && systemctl --user restart arvix-telegram && sleep 3 && systemctl --user is-active arvix-telegram'"
 curl -s --max-time 10 -o /dev/null -w "приложение: %{http_code}\n" "$URL/"
 
 cat <<EOF
