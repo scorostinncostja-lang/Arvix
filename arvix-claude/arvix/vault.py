@@ -22,7 +22,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-SKIP_DIRS = {".obsidian", ".trash", ".git", "node_modules", "Cache"}
+# .stversions — корзина версий Syncthing (D29): старые копии заметок не должны находиться поиском.
+SKIP_DIRS = {".obsidian", ".trash", ".git", "node_modules", "Cache", ".stversions", ".stfolder"}
 MAX_READ_BYTES = 200_000
 DEFAULT_PATHS = {
     "profile": "05_System/Профиль Арвикса.md",

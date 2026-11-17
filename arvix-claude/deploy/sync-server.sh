@@ -31,7 +31,7 @@ sys.path.insert(0, src)
 from arvix.config import _toml_lines
 cfg = tomllib.load(open(cfg_path, "rb"))
 cfg.pop("remote", None)                      # сервер — это и есть «локально»
-cfg["vault"] = f"{remote_home}/vault"        # Syncthing: ноутбук ⇄ ~/vault
+cfg["vault"] = f"{remote_home}/vault"        # ноутбук ⇄ ~/vault; [sync] переносится как есть
 cfg["home"] = f"{remote_home}/Arvix"
 cfg.setdefault("brain", {})["claude_bin"] = f"{remote_home}/.local/bin/claude"
 print("# Конфиг Arvix на сервере. Создан deploy/sync-server.sh --init из конфига ноутбука.")
@@ -45,6 +45,7 @@ fi
 step "Установка на сервере"
 "${SSH[@]}" 'bash ~/src/arvix-claude/deploy/install.sh && ~/.local/bin/arvix init-home >/dev/null && ~/.local/bin/arvix doctor' || true
 
+SYNC_MODE="$(python3 -c 'import sys, tomllib; print((tomllib.load(open(sys.argv[1], "rb")).get("sync") or {}).get("vault", "rsync"))' "$CFG" 2>/dev/null || echo rsync)"
 cat <<EOF
 
 Дальше:
@@ -53,3 +54,6 @@ cat <<EOF
   systemctl --user enable --now arvix-backup.timer    # ежедневная копия журнала на ноутбук
 На сервере (один раз): claude setup-token → ~/.config/arvix/claude.env, systemctl --user enable --now arvix-telegram
 EOF
+if [[ "$SYNC_MODE" != "syncthing" ]]; then
+  echo "  bash deploy/syncthing-setup.sh $HOST          # хранилище ⇄ сервер через Syncthing вместо rsync-таймера"
+fi

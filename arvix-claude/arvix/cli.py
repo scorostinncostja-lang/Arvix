@@ -479,6 +479,14 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         check("бот на этой машине выключен (он на сервере)", active is not True, "systemctl --user disable --now arvix-telegram")
     elif tg.get("token") and active is not None:
         check("служба arvix-telegram запущена", active, "systemctl --user enable --now arvix-telegram")
+    from arvix import syncthing
+
+    marks = {syncthing.OK: "OK  ", syncthing.FAIL: "FAIL", syncthing.WARN: "!!  ", syncthing.INFO: "--  "}
+    for status, text, hint in syncthing.report(cfg.vault, cfg.section("sync"), remote=bool(remote)):
+        if status in (syncthing.OK, syncthing.FAIL):
+            check(text, status == syncthing.OK, hint)
+        else:
+            print(f"{marks[status]} {text}" + (f" — {hint}" if hint else ""))
     print(f"Данные: {data_dir()}" + (f" · режим: удалённый ({remote[0]})" if remote else ""))
     if not ok:
         sys.exit(1)
