@@ -4,7 +4,7 @@
 #   ssh root@HOST 'PUBKEY="'"$(cat ~/.ssh/id_ed25519.pub)"'" bash -s' < arvix-claude/deploy/server-setup.sh
 #
 # Что делает: пользователь arvix с linger (его службы живут без входа), зависимости
-# (python3, rsync, sqlite3, syncthing), ключ ноутбука в authorized_keys, Claude CLI под arvix.
+# (python3, rsync, sqlite3, syncthing, ffmpeg — видео Арвиксу), ключ ноутбука в authorized_keys, Claude CLI под arvix.
 # Дальше с ноутбука: bash arvix-claude/deploy/sync-server.sh arvix@HOST --init
 set -euo pipefail
 USER_NAME="${ARVIX_USER:-arvix}"
@@ -12,11 +12,11 @@ USER_NAME="${ARVIX_USER:-arvix}"
 if command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq python3 rsync sqlite3 syncthing curl ca-certificates
+  apt-get install -y -qq python3 rsync sqlite3 syncthing curl ca-certificates ffmpeg
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y -q python3 rsync sqlite syncthing curl
+  dnf install -y -q python3 rsync sqlite syncthing curl ffmpeg
 elif command -v pacman >/dev/null 2>&1; then
-  pacman -Sy --noconfirm --needed python rsync sqlite syncthing curl
+  pacman -Sy --noconfirm --needed python rsync sqlite syncthing curl ffmpeg
 fi
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || { echo "Нужен Python 3.11+ (есть $(python3 --version))"; exit 1; }
 

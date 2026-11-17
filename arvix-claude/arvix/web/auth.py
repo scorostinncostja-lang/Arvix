@@ -34,6 +34,29 @@ def app_token(core: Any) -> str:
     return str(token)
 
 
+PAIR_KEY = "web_pair_code"
+PAIR_MINUTES = 15
+
+
+def pair_code(core: Any) -> str:
+    """Одноразовый код привязки телефона: в переписке остаётся ссылка, которая через
+    15 минут или после первого открытия ничего не стоит. Постоянный ключ в чат не попадает."""
+    code = secrets.token_urlsafe(18)
+    core.store.kv_set(PAIR_KEY, {"code": code, "expires": core.now().timestamp() + PAIR_MINUTES * 60})
+    return code
+
+
+def claim_pair(core: Any, code: str) -> str | None:
+    """Код → ключ приложения, один раз. Чужой, старый или повторный код — None."""
+    saved = core.store.kv_get(PAIR_KEY) or {}
+    if not code or not saved.get("code") or not hmac.compare_digest(str(saved["code"]), str(code)):
+        return None
+    core.store.kv_del(PAIR_KEY)
+    if core.now().timestamp() > float(saved.get("expires") or 0):
+        return None
+    return app_token(core)
+
+
 def check_init_data(init_data: str, bot_token: str, owner_id: int, now: float | None = None) -> bool:
     """Подпись Mini App: secret = HMAC("WebAppData", bot_token); hash = HMAC(secret, строки k=v по алфавиту)."""
     if not init_data or not bot_token:

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640">
+  <!-- Аватар бота: квадрат без скруглений (Telegram сам обрезает кругом), знак «А» из иконки приложения,
+       орбита — «держит контур вокруг тебя». Пересобрать PNG: rsvg-convert -w 640 -h 640 deploy/avatar.svg -o deploy/avatar.png -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f6bff"/><stop offset="1" stop-color="#19b394"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.6">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="640" height="640" fill="url(#bg)"/>
+  <rect width="640" height="640" fill="url(#glow)"/>
+  <ellipse cx="320" cy="336" rx="214" ry="86" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="10"
+           transform="rotate(-24 320 336)"/>
+  <path d="M320 150 L452 462 H392 L364 396 H276 L248 462 H188 Z M320 246 L292 336 H348 Z" fill="#ffffff"/>
+  <circle cx="512" cy="248" r="20" fill="#ffffff"/>
+</svg>

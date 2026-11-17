@@ -67,7 +67,9 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `task_cancelled` | `id, reason` | человек, модель |
 | `debt_written_off` | `id, justification` | человек, модель |
 | `sleep_recorded` | `duration_min, bedtime, date, source` | человек, модель |
-| `focus_session` | `duration_min, task_id` — с задачей копится в `Task.focus_min`, без задачи идёт в глубокую работу дня | человек |
+| `focus_session` | `duration_min, task_id, topic?` — с задачей копится в `Task.focus_min`, без задачи (тема «физика») идёт в глубокую работу дня; сессии дня — `Day.focus` | человек |
+| `focus_noted` | `focus_event_id, date, note` — «что успел» к прошедшей сессии; сама сессия не меняется | человек |
+| `file_received` | `name, kind, size, path, read, caption` — файл от человека в хранилище (`arvix/files.py`) | человек |
 | `lesson_started` | `task_id, topic, subject, roadmap_node, minutes, plan[], sources[], questions[], note, fallback` — учебный блок подготовлен ([06-LEARNING.md §8](06-LEARNING.md#8-учебный-блок-в-telegram-)) | код + модель |
 | `lesson_checked` | `task_id, score_pct (null — голова недоступна), answers, gaps[], next_step` — проверка в конце блока; `State.lessons` | код + модель |
 | `expense_logged` | `amount, currency, category, impulse, note` | человек, модель |
@@ -77,7 +79,7 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `debrief_completed` | `date, answers, conclusion` | человек, модель |
 | `learning_question` | `question, mode (hint·direct)` | модель |
 | `note_captured` | `text, path` — Inbox | человек, модель |
-| `note_written` | `path, sha, owned, mode, created, backup` — чтобы отличать свои заметки от чужих | l0 |
+| `note_written` | `path, sha, owned, mode, created, backup` — чтобы отличать свои заметки от чужих; `mode = edit \| create` — правка человека из приложения (`owned = false`) | l0, человек |
 
 ### Счёт и режимы (пишет только код)
 | kind | payload | источник |
@@ -163,7 +165,7 @@ materialized, day_type, social, expenses, damages[], closed{}`.
 
 Правила записи — код (`vault.py`), не обещание:
 - новую заметку можно создать в любой папке, кроме служебных (`.obsidian`, `.trash`, `.git`…); путь вне хранилища отклоняется;
-- в чужую заметку — только дописать в конец (`append`) или обновить **свой** помеченный блок `<!-- arvix:имя --> … <!-- /arvix:имя -->`; текст человека вне блока не трогается;
+- в чужую заметку — только дописать в конец (`append`) или обновить **свой** помеченный блок `%% arvix:имя %% … %% /arvix:имя %%` (комментарий Obsidian, человеку не виден; старые `<!-- arvix:… -->` заменяются); текст человека вне блока не трогается;
 - перезаписать целиком — только свою заметку, которую человек с тех пор не менял (сверка sha из `note_written`), либо по явному согласию (`force`); перед перезаписью — копия в `05_System/Арвикс/_backup/`;
 - удалять Арвикс не умеет вообще.
 

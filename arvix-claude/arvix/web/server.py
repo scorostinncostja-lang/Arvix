@@ -8,11 +8,19 @@ GET  /api/state               экран «Сегодня»
 GET  /api/messages?before=id  переписка из журнала
 GET  /api/history?days=30     прогресс, цели, неделя
 GET  /api/notes?dir=…         папка хранилища · /api/note?path=… — заметка · /api/notes/search?q=…
+GET  /api/file?path=…         вложение заметки (картинка, PDF) — для ![[…]]
+GET  /api/graph               граф заметок: узлы, связи, призраки, одинокие, подсказки «связать»
 GET  /api/stream              поток событий: строка {"v": …} при любом изменении (fetch + ReadableStream)
-GET  /api/pair                ключ для PWA и терминала (только из Mini App)
+GET  /api/pair                одноразовая ссылка установки на телефон (только из Mini App)
+GET  /api/pair/claim?code=…   без входа: одноразовый код → ключ приложения (15 мин, один раз)
 POST /api/message {text} · /api/voice (аудио) · /api/button {data}
-POST /api/tasks {…} · /api/tasks/<id>/<op> · /api/lesson/<id> · /api/focus {minutes, task} · /api/focus/stop
+POST /api/tts {text}          озвучка ответа (ogg), если [tts] включена; иначе 404 — говорит голос телефона
+POST /api/upload              файл телом запроса (X-File-Name, X-Caption — urlencoded), до 20 МБ
+POST /api/tasks {…} · /api/tasks/<id>/<op> · /api/lesson/<id>
+POST /api/focus {minutes, task | topic} · /api/focus/<pause|resume|stop|cancel> · /api/focus/note {event, note}
 POST /api/capture {text}      мысль в Inbox
+POST /api/note {path, text, sha} · /api/note/new {dir, name} · /api/note/toggle {path, line, sha} · /api/note/link {a, b}
+                              правка заметки человеком; файл изменился после открытия — 409 и текущий текст
 """
 
 from __future__ import annotations
@@ -31,7 +39,7 @@ from typing import Any
 
 from arvix import __version__
 from arvix.config import Config
-from arvix.core import ArvixError, Core
+from arvix.core import ArvixError, Core, NoteConflict
 from arvix.store import Store
 from arvix.web import api
 from arvix.web.auth import app_token, authorize
@@ -112,10 +120,15 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             return data if isinstance(data, dict) else {}
 
         def body_bytes(self) -> bytes:
-            length = int(self.headers.get("Content-Length") or 0)
-            if length > MAX_BODY:
-                raise ArvixError("Слишком большой запрос")
-            return self.rfile.read(length) if length else b""
+            """Тело читается один раз и всегда: непрочитанные байты остались бы в keep-alive
+            соединении и испортили бы следующий запрос («{}GET /api/state» → 501)."""
+            if not hasattr(self, "_body"):
+                length = int(self.headers.get("Content-Length") or 0)
+                if length > MAX_BODY:
+                    self.close_connection = True
+                    raise ArvixError("Слишком большой запрос")
+                self._body = self.rfile.read(length) if length else b""
+            return self._body
 
         def authorized(self) -> str | None:
             return authorize(self.headers, token=app.token, bot_token=app.bot_token, owner_id=app.owner_id)
@@ -127,6 +140,18 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             if not url.path.startswith("/api/"):
                 self.static(url.path)
                 return
+            if url.path == "/api/pair/claim":  # без входа: сам код и есть одноразовый пропуск
+                code = dict(urllib.parse.parse_qsl(url.query)).get("code") or ""
+                try:
+                    token = app.hub.call(api.claim_pair(code), timeout=10)
+                except TimeoutError as exc:
+                    self.fail(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
+                    return
+                if token:
+                    self.send_json({"token": token})
+                else:
+                    self.fail(HTTPStatus.FORBIDDEN, "Ссылка устарела или уже открыта. Попроси Арвикса прислать новую.")
+                return
             who = self.authorized()
             if who is None:
                 self.fail(HTTPStatus.UNAUTHORIZED, "Нужен вход: откройте приложение из Telegram или привяжите ключ")
@@ -134,7 +159,10 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             query = dict(urllib.parse.parse_qsl(url.query))
             try:
                 if url.path == "/api/state":
-                    self.send_json(app.read(lambda c: api.state_view(c, thinking=app.hub.busy)) | {"app_version": __version__})
+                    from arvix.tts import TTS
+
+                    self.send_json(app.read(lambda c: api.state_view(c, thinking=app.hub.busy))
+                                   | {"app_version": __version__, "server_tts": TTS(app.cfg).enabled})
                 elif url.path == "/api/messages":
                     before = int(query["before"]) if query.get("before") else None
                     self.send_json({"messages": app.read(lambda c: api.messages_view(c, before=before)), "thinking": app.hub.busy})
@@ -144,8 +172,14 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 elif url.path == "/api/notes":
                     self.send_json(self.notes_dir(query.get("dir") or ""))
                 elif url.path == "/api/note":
-                    vault = app.vault()
-                    self.send_json({"path": query.get("path"), "text": vault.read(query.get("path") or "")})
+                    app.vault()
+                    self.send_json(app.read(lambda c: api.note_view(c, query.get("path") or "")))
+                elif url.path == "/api/file":
+                    self.send_asset(app.vault().asset(query.get("path") or ""))
+                elif url.path == "/api/graph":
+                    from arvix import graph
+
+                    self.send_json(graph.build(app.vault()))
                 elif url.path == "/api/notes/search":
                     self.send_json({"results": app.vault().search(query.get("q") or "", 20)})
                 elif url.path == "/api/stream":
@@ -154,8 +188,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     if who != "telegram":
                         self.fail(HTTPStatus.FORBIDDEN, "Ключ выдаётся только внутри Telegram")
                         return
-                    base = str(app.cfg.section("web").get("public_url") or "").rstrip("/")
-                    self.send_json({"token": app.token, "url": f"{base}/#t={app.token}" if base else ""})
+                    self.send_json(app.hub.call(api.pair_link()))
                 else:
                     self.fail(HTTPStatus.NOT_FOUND, "Нет такого адреса")
             except (ArvixError, ValueError, KeyError) as exc:
@@ -163,6 +196,17 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             url = urllib.parse.urlsplit(self.path)
+            try:
+                self.body_bytes()
+            except ArvixError as exc:
+                self.fail(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, str(exc))
+                return
+            if url.path == "/share":  # «Поделиться» до установки service worker: файлы не дошли, ведём в чат
+                self.send_response(HTTPStatus.SEE_OTHER)
+                self.send_header("Location", "/?tab=chat")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if self.authorized() is None:
                 self.fail(HTTPStatus.UNAUTHORIZED, "Нужен вход")
                 return
@@ -182,6 +226,33 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     ext = {"audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav"}.get(kind, "webm")
                     app.hub.post(api.voice(audio, f"voice.{ext}"), label="слушаю")
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
+                elif parts == ["upload"]:
+                    data = self.body_bytes()
+                    if not data:
+                        raise ArvixError("Пустой файл")
+                    name = urllib.parse.unquote(self.headers.get("X-File-Name") or "файл")
+                    caption = urllib.parse.unquote(self.headers.get("X-Caption") or "").strip()[:4000]
+                    kind = (self.headers.get("Content-Type") or "").split(";")[0]
+                    app.hub.post(api.upload(data, name, kind, caption), label="смотрю файл")
+                    self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
+                elif parts == ["tts"]:
+                    from arvix.tts import TTS, TTSError
+
+                    text = str(self.body_json().get("text") or "").strip()
+                    tts = TTS(app.cfg)
+                    if not tts.enabled:
+                        self.fail(HTTPStatus.NOT_FOUND, "Озвучка на сервере выключена — говорит голос телефона")
+                        return
+                    try:
+                        audio = tts.synth(text)
+                    except TTSError as exc:
+                        raise ArvixError(str(exc)) from exc
+                    self.send_response(200)
+                    self.send_header("Content-Type", "audio/ogg")
+                    self.send_header("Content-Length", str(len(audio)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(audio)
                 elif parts == ["button"]:
                     data = str(self.body_json().get("data") or "")
                     app.hub.post(api.button(data), label="думаю")
@@ -195,16 +266,40 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif parts == ["focus"]:
                     body = self.body_json()
-                    self.send_json(app.hub.call(api.focus_start(int(body.get("minutes") or 25), body.get("task"))))
-                elif parts == ["focus", "stop"]:
-                    self.send_json(app.hub.call(api.focus_stop()))
+                    self.send_json(app.hub.call(api.focus_start(int(body.get("minutes") or 25), body.get("task"), body.get("topic"))))
+                elif parts == ["focus", "note"]:
+                    body = self.body_json()
+                    self.send_json(app.hub.call(api.focus_note(int(body.get("event")), str(body.get("note") or ""))))
+                elif len(parts) == 2 and parts[0] == "focus":
+                    self.send_json(app.hub.call(api.focus_op(parts[1])))
                 elif parts == ["capture"]:
                     text = str(self.body_json().get("text") or "").strip()
                     if not text:
                         raise ArvixError("Пустая мысль")
                     self.send_json(app.hub.call(api.capture(text)))
+                elif parts[:1] == ["note"]:
+                    app.vault()
+                    body = self.body_json()
+                    if parts == ["note"]:
+                        text = body.get("text")
+                        if not isinstance(text, str) or len(text.encode()) > 2_000_000:
+                            raise ArvixError("Нет текста заметки")
+                        self.send_json(app.hub.call(api.note_save(str(body.get("path") or ""), text, body.get("sha") or None)))
+                    elif parts == ["note", "new"]:
+                        self.send_json(app.hub.call(api.note_create(str(body.get("dir") or ""), str(body.get("name") or ""))))
+                    elif parts == ["note", "link"]:
+                        self.send_json(app.hub.call(api.graph_link(str(body.get("a") or ""), str(body.get("b") or ""))))
+                    elif parts == ["note", "toggle"]:
+                        self.send_json(app.hub.call(api.note_toggle(str(body.get("path") or ""), int(body.get("line")), str(body.get("sha") or ""))))
+                    else:
+                        self.fail(HTTPStatus.NOT_FOUND, "Нет такого адреса")
                 else:
                     self.fail(HTTPStatus.NOT_FOUND, "Нет такого адреса")
+            except NoteConflict as exc:
+                from arvix.vault import sha
+
+                self.send_json({"error": str(exc), "conflict": True, "path": exc.path, "text": exc.current, "sha": sha(exc.current)},
+                               HTTPStatus.CONFLICT)
             except TimeoutError as exc:
                 self.fail(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
             except (ArvixError, ValueError, KeyError, TypeError) as exc:
@@ -226,6 +321,19 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 elif item.suffix.lower() == ".md":
                     files.append({"name": item.stem, "path": vault.rel(item), "modified": int(item.stat().st_mtime)})
             return {"dir": rel, "dirs": dirs, "files": files}
+
+        def send_asset(self, path: Path) -> None:
+            from arvix.vault import ASSET_TYPES
+
+            body = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", ASSET_TYPES.get(path.suffix.lower(), "application/octet-stream"))
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "private, max-age=300")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "sandbox")  # SVG из заметки не выполнит скрипт
+            self.end_headers()
+            self.wfile.write(body)
 
         def stream(self) -> None:
             """Живое обновление: строка JSON при каждом изменении, пинг раз в 15 с.

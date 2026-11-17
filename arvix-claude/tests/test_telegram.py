@@ -452,10 +452,14 @@ class FocusTest(BotCase):
         self.math = self.core.add_task("Математика ОГЭ", start="16:00", duration_min=40, importance=3, deep_work=True)
 
     def test_focus_runs_on_next_task_counts_down_and_raises_proof(self) -> None:
-        self.text(tpl.MENU_FOCUS)
+        self.text(tpl.MENU_FOCUS)  # не запускает сразу: случайное нажатие ничего не стоит
+        self.assertIsNone(self.core.store.kv_get("focus"))
+        self.assertIn("На сколько?", self.api.last)
+        self.assertIn(("25 мин", "f:go:25"), self.api.sent[-1][1][0])
+        self.press("f:go:25")
         text, buttons = self.api.sent[-1]
         self.assertEqual(text, "🎯 Фокус 25 мин · Математика ОГЭ\nДо 16:20. Телефон убрать.")
-        self.assertEqual(buttons, [[("⏹ Стоп", "f:stop")]])
+        self.assertEqual(buttons, [[("⏸ Пауза", "f:pause"), ("⏹ Закончить", "f:stop")], [("✕ Отменить, не записывать", "f:cancel")]])
         self.assertEqual(self.core.state.tasks[self.math.id].status, "active")  # таймер = блок пошёл
         timer_id = len(self.api.sent)
         self.at(moscow(2026, 11, 2, 16, 3))
@@ -467,7 +471,7 @@ class FocusTest(BotCase):
         self.assertIn("закончен", self.api.edited[-1][1])
         self.assertIn("Без прерываний?", self.api.last)
         self.press("f:ok:25")
-        self.assertIn("25 мин по «Математика ОГЭ»", self.api.last)
+        self.assertIn("Фокус: 25 мин · Математика ОГЭ — записано", self.api.texts[-2])
         self.assertEqual(self.core.state.tasks[self.math.id].focus_min, 25)
         result = self.core.complete_task(self.math.id, report="40 задач")
         self.assertEqual(result["xp"], 14)  # 10 × 1.0 × 1.0 × K_proof timer 1.4, вместо 11 за отчёт
@@ -482,7 +486,7 @@ class FocusTest(BotCase):
         self.text("/focus")
         self.at(moscow(2026, 11, 2, 16, 10))
         self.text("/focus stop")
-        self.assertIn("12 мин записано по «Математика ОГЭ»", self.api.last)
+        self.assertIn("Фокус: 12 мин · Математика ОГЭ — записано", self.api.last)
         self.assertEqual(self.core.state.tasks[self.math.id].focus_min, 12)
 
     def test_second_focus_shows_state_instead_of_restart(self) -> None:

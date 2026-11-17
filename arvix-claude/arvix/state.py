@@ -66,6 +66,7 @@ class Day:
     expenses: float = 0.0
     damages: list[tuple[int, str]] = field(default_factory=list)
     closed: dict[str, Any] | None = None
+    focus: list[dict[str, Any]] = field(default_factory=list)  # сессии таймера: минуты, задача или тема, заметка
 
 
 @dataclass
@@ -260,6 +261,16 @@ class State:
             task.focus_min += int(p.get("duration_min", 0))
         else:
             day.deep_min += int(p.get("duration_min", 0))
+        day.focus.append({"event_id": ev.id, "at": ev.at.isoformat(), "minutes": int(p.get("duration_min", 0)),
+                          "task_id": task.id if task else None, "topic": p.get("topic"), "note": None})
+
+    def _on_focus_noted(self, ev: Event, p: dict, day: Day) -> None:
+        # Заметка «что сделал» приходит после сессии отдельным событием: журнал не правится.
+        for d in (day, self.days.get(date.fromisoformat(p["date"])) if p.get("date") else None):
+            for session in (d.focus if d else []):
+                if session["event_id"] == p.get("focus_event_id"):
+                    session["note"] = p.get("note")
+                    return
 
     def _on_expense_logged(self, ev: Event, p: dict, day: Day) -> None:
         self.expenses.append({**p, "date": ev.local_date.isoformat(), "event_id": ev.id})

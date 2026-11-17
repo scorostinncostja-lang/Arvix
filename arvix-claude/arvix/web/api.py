@@ -48,7 +48,7 @@ def state_view(core: Any, *, thinking: str = "") -> dict[str, Any]:
         "now": now.isoformat(), "date": today.isoformat(), "weekday": tpl.WEEKDAYS_FULL[today.weekday()],
         "name": st.profile.get("name") or "", "mode": core.effective_mode(), "mode_label": rules.MODE_LABELS[core.effective_mode()],
         "gentle": gentle(core), "thinking": thinking, "version": st.last_event_id,
-        "focus": focus_view(core, focus), "lesson": {"task_id": lesson.get("task_id"), "topic": lesson.get("topic"),
+        "focus": focus_view(core, focus), "focus_choices": list(tpl.FOCUS_CHOICES), "lesson": {"task_id": lesson.get("task_id"), "topic": lesson.get("topic"),
                                                     "started": lesson.get("started")} if lesson else None,
     }
     tasks = st.tasks_on(today)
@@ -65,6 +65,7 @@ def state_view(core: Any, *, thinking: str = "") -> dict[str, Any]:
         "tasks": [task_view(t) for t in tasks],
         "tomorrow": [task_view(t) for t in st.tasks_on(today + timedelta(days=1))],
         "debts": [task_view(t) for t in st.debts()],
+        "sessions": sessions_view(core, today),
         "busy": [{"start": b["start"], "end": end_time(b["start"], b.get("duration", 60)), "title": b["title"]} for b in core.fixed_blocks(today)],
         "day_type": DAY_TYPES_RU.get(day.day_type) if day and getattr(day, "day_type", None) else None,
         "stats": {
@@ -83,7 +84,19 @@ def focus_view(core: Any, focus: dict[str, Any] | None) -> dict[str, Any] | None
         return None
     task = core.state.tasks.get(focus.get("task_id") or "")
     return {"until": focus["until"], "started": focus["started"], "minutes": int(focus["minutes"]),
-            "task_id": focus.get("task_id"), "title": task.title if task else None}
+            "task_id": focus.get("task_id"), "title": task.title if task else focus.get("topic"), "topic": focus.get("topic"),
+            "paused_at": focus.get("paused_at"), "max_pause_min": tpl.FOCUS_MAX_PAUSE_MIN}
+
+
+def sessions_view(core: Any, d: Any) -> list[dict[str, Any]]:
+    """Фокус-сессии дня: сколько, над чем, что сделано."""
+    day = core.state.days.get(d)
+    out = []
+    for s in (day.focus if day else []):
+        task = core.state.tasks.get(s.get("task_id") or "")
+        out.append({"event_id": s["event_id"], "at": s["at"], "minutes": s["minutes"],
+                    "title": task.title if task else (s.get("topic") or "глубокая работа"), "note": s.get("note")})
+    return out
 
 
 def messages_view(core: Any, *, before: int | None = None, limit: int = 60) -> list[dict[str, Any]]:
@@ -126,7 +139,7 @@ def history_view(core: Any, days: int = 30) -> dict[str, Any]:
               "deadline": g.get("deadline"), "why": g.get("why"), "metric": g.get("metric")}
              for depth, g in core.goal_tree() if g.get("status") != "dropped"]
     return {
-        "gentle": False, "days": rows, "goals": goals,
+        "gentle": False, "days": rows, "goals": goals, "heat": heatmap_view(core),
         "week": {
             "productive_min": week["productive_min"], "budget_min": plan["week_min"], "deep_min": week["deep_min"],
             "deep_budget_min": plan["deep_min"],
@@ -135,6 +148,49 @@ def history_view(core: Any, days: int = 30) -> dict[str, Any]:
         },
         "lessons": st.lessons[-10:],
     }
+
+
+def heat_level(completion: float | None, deep_min: int, done: int, deep_target: int) -> int:
+    """Цвет квадрата 0–4 — только за сделанную работу (задачи, глубокие минуты), не за сообщения:
+    иначе карту можно закрасить, ничего не сделав (П4). 3 = день серии (выполнение ≥ 70 %)."""
+    if completion is not None and completion >= 90 and deep_min >= max(deep_target, 1):
+        return 4
+    if (completion is not None and completion >= 70) or deep_min >= 90:
+        return 3
+    if (completion is not None and completion >= 40) or deep_min >= 45:
+        return 2
+    if done or deep_min >= 15:
+        return 1
+    return 0
+
+
+def heatmap_view(core: Any, weeks: int = 53) -> dict[str, Any]:
+    """Год квадратами, как вклад на GitHub: колонки — недели с понедельника, сегодня — справа.
+    Дни отдыха (тихий день, восстановление) — отдельным цветом: серию они не рвут."""
+    st = core.state
+    today = core.today()
+    start = today - timedelta(days=today.weekday() + 7 * (weeks - 1))
+    days, d = [], start
+    best = run = active = 0
+    while d <= today:
+        day = st.days.get(d)
+        tasks = st.tasks_on(d)
+        done = sum(1 for t in tasks if t.status == "done")
+        completion = st.completion(d)
+        deep = day.deep_min if day else 0
+        level = heat_level(completion, deep, done, core.deep_target(d))
+        rest = bool(day and (day.silent or day.day_type in ("recovery", "silent")))
+        tracked = st.first_date is not None and d >= st.first_date
+        days.append({"date": d.isoformat(), "level": level if tracked else -1, "rest": rest and not level, "done": done,
+                     "total": len(tasks), "deep_min": deep, "completion": completion, "focus": len(day.focus) if day else 0})
+        active += 1 if level else 0
+        if d < today:  # лучшая серия — по тому же правилу, что State.streak: незакрытый день рвёт
+            closed = day.closed.get("completion") if day and day.closed else -1
+            if closed is not None:  # день без задач (None) серию не рвёт и не удлиняет
+                run = run + 1 if closed >= 70 else 0
+                best = max(best, run)
+        d += timedelta(days=1)
+    return {"days": days, "streak": st.streak(today), "best": best, "active": active, "start": start.isoformat()}
 
 
 # --- изменения: выполняются в главном потоке (fn(bot)) ------------------------------------
@@ -182,20 +238,43 @@ def task_op(task_id: str, op: str, body: dict[str, Any]) -> Any:
     return run
 
 
-def focus_start(minutes: int, task_id: str | None) -> Any:
+def focus_start(minutes: int, task_id: str | None, topic: str | None = None) -> Any:
     def run(bot: Any) -> dict[str, Any]:
         with bot.via("web", SINK):
             # Человек сам выбрал минуты — это таймер, а не урок (урок — кнопкой ▶ у учебной задачи).
-            bot.start_focus(minutes, task_id or None, lesson=True)
+            bot.start_focus(minutes, task_id or None, lesson=True, topic=(topic or "").strip() or None)
         return {"focus": focus_view(bot.core, bot.core.store.kv_get(FOCUS))}
     return run
 
 
-def focus_stop() -> Any:
+def focus_op(op: str) -> Any:
+    """pause · resume · cancel · stop. stop возвращает сессию — к ней приложение спросит заметку."""
+    if op not in ("pause", "resume", "cancel", "stop"):
+        raise ArvixError(f"Неизвестное действие таймера: {op}")
+
     def run(bot: Any) -> dict[str, Any]:
         with bot.via("web", SINK):
-            bot.stop_focus()
-        return {"focus": None}
+            result = getattr(bot, f"{op}_focus")()
+        out: dict[str, Any] = {"focus": focus_view(bot.core, bot.core.store.kv_get(FOCUS))}
+        if op == "stop" and result:
+            bot.await_clear()  # заметку спросит само приложение, а не следующее сообщение в чате
+            session = next((s for s in sessions_view(bot.core, bot.core.today()) if s["event_id"] == result), None)
+            out["session"] = session
+        return out
+    return run
+
+
+def focus_stop() -> Any:
+    return focus_op("stop")
+
+
+def focus_note(event_id: int, note: str) -> Any:
+    def run(bot: Any) -> dict[str, Any]:
+        result = bot.core.note_focus(event_id, note, source="web")
+        waiting = bot.await_get()
+        if waiting and waiting.get("kind") == "focus_note" and int(waiting.get("event") or 0) == int(event_id):
+            bot.await_clear()
+        return result
     return run
 
 
@@ -235,11 +314,136 @@ def voice(audio: bytes, filename: str) -> Any:
     return run
 
 
+def upload(data: bytes, name: str, mime: str, caption: str) -> Any:
+    """Файл из приложения — тот же путь, что из Telegram: хранилище, журнал, голова."""
+    def run(bot: Any) -> None:
+        bot.core.refresh()
+        with bot.via("web", SINK):
+            bot.on_file({"file_name": name, "mime_type": mime}, caption=caption, data=data)
+    return run
+
+
+def pair_link() -> Any:
+    """Ссылка установки на телефон с одноразовым кодом (web/auth.py::pair_code)."""
+    def run(bot: Any) -> dict[str, Any]:
+        return {"url": bot.install_link()}
+    return run
+
+
+def claim_pair(code: str) -> Any:
+    def run(bot: Any) -> str | None:
+        from arvix.web.auth import claim_pair as claim
+
+        return claim(bot.core, code)
+    return run
+
+
 def lesson(task_id: str) -> Any:
     """Учебный блок из приложения: план урока (вызов головы), задача запущена, таймер."""
     def run(bot: Any) -> None:
         with bot.via("web", SINK):
             bot.begin_lesson(bot.core.resolve_task(task_id))
+    return run
+
+
+# --- заметки: чтение в потоке HTTP, запись — в главном потоке ---------------------------------
+
+def daily_date(core: Any, path: str) -> Any:
+    """Дата, если заметка — отчёт дня (по настройкам Daily notes), иначе None."""
+    if not core.cfg.vault:
+        return None
+    today = core.today()
+    for offset in range(-1, 31):
+        d = today - timedelta(days=offset)
+        if core.vault.daily_path(d) == path:
+            return d
+    return None
+
+
+def note_view(core: Any, path: str) -> dict[str, Any]:
+    """Заметка для экрана: текст, хэш для защиты от затирания, и какие строки-чекбоксы —
+    задачи Арвикса (их галочка закрывает задачу, а не просто меняет текст)."""
+    from arvix import daily_note
+    from arvix.vault import sha
+
+    vault = core.vault
+    path = vault.rel(vault.resolve(path, must_exist=True))
+    text = vault.read(path)
+    d = daily_date(core, path)
+    tasks: dict[str, Any] = {}
+    if d is not None:
+        for i, line in enumerate(text.split("\n")):
+            if task := daily_note.task_at_line(core, d, line):
+                tasks[str(i)] = task_view(task)
+    return {"path": path, "text": text, "sha": sha(text), "daily": d.isoformat() if d else None, "tasks": tasks}
+
+
+def note_save(path: str, text: str, base_sha: str | None) -> Any:
+    def run(bot: Any) -> dict[str, Any]:
+        bot.core.save_note(path, text, base_sha=base_sha, source="web")
+        return note_view(bot.core, path if path.endswith(".md") else path + ".md")
+    return run
+
+
+def note_create(folder: str, name: str) -> Any:
+    def run(bot: Any) -> dict[str, Any]:
+        import re
+
+        clean = re.sub(r'[\\/:*?"<>|#^\[\]]', " ", name).strip()
+        if not clean:
+            raise ArvixError("Название заметки пустое")
+        path = f"{folder.strip('/')}/{clean}.md" if folder.strip("/") else f"{clean}.md"
+        if (bot.core.vault.root / path).exists():
+            raise ArvixError(f"Заметка «{clean}» уже есть в этой папке")
+        bot.core.save_note(path, f"# {clean}\n\n", base_sha=None, source="web")
+        return note_view(bot.core, path)
+    return run
+
+
+def note_toggle(path: str, line: int, base_sha: str) -> Any:
+    """Галочка в заметке. Строка задачи Арвикса → не текст, а задача: ответ {"task"}, и
+    приложение проводит её через ✓ (с отчётом, если он нужен); [x] поставит код после закрытия."""
+    def run(bot: Any) -> dict[str, Any]:
+        from arvix import daily_note
+        from arvix.core import NoteConflict
+        from arvix.vault import sha
+
+        core = bot.core
+        view = note_view(core, path)
+        if view["sha"] != base_sha:
+            raise NoteConflict("Заметка изменилась — открыл свежую версию.", view["path"], view["text"])
+        lines = view["text"].split("\n")
+        if not 0 <= line < len(lines) or not (m := daily_note.CHECK_LINE.match(lines[line])):
+            raise ArvixError("В этой строке нет чекбокса")
+        checked = m.group(2) != " "
+        if (task := view["tasks"].get(str(line))) is not None:
+            if task["open"] and not checked:
+                return {"task": task}
+            if task["status"] == "done":
+                raise ArvixError("Задача уже закрыта. Журнал не переписывается — если ошибся, скажи Арвиксу.")
+            raise ArvixError("Задача закрыта как несделанная — галочка ей не поставится.")
+        lines[line] = f"{m.group(1)}[{' ' if checked else 'x'}]{m.group(3)}{m.group(4)}"
+        text = "\n".join(lines)
+        core.save_note(view["path"], text, base_sha=sha(view["text"]), source="web")
+        return note_view(core, view["path"])
+    return run
+
+
+def graph_link(a: str, b: str) -> Any:
+    """«Связать» из подсказки графа: в конец заметки a — строка «Связи: [[b]]». Правка человека
+    (он нажал), поэтому через save_note со сверкой версии."""
+    def run(bot: Any) -> dict[str, Any]:
+        from arvix import graph
+        from arvix.vault import sha
+
+        vault = bot.core.vault
+        a_rel = vault.rel(vault.resolve(a, must_exist=True))
+        b_path = vault.resolve(b, must_exist=True)
+        text = vault.read(a_rel)
+        new = graph.link_line(text, b_path.stem)
+        if new != text:
+            bot.core.save_note(a_rel, new, base_sha=sha(text), source="web")
+        return {"linked": True, "a": a_rel, "b": vault.rel(b_path)}
     return run
 
 

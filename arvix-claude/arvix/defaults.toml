@@ -45,6 +45,8 @@ claude_bin = "claude"
 timeout_sec = 180
 vault_tools = true      # даёт голове Read/Grep/Glob по хранилищу и по папке памяти (переписка по дням)
 web_tools = true        # WebSearch/WebFetch: факт, которого нет в заметках и памяти, голова ищет в сети (D24)
+skills = true           # навыки головы из head-skills/ (D33); в 🟥 — только мягкие
+skill_dirs = []         # свои папки-плагины с навыками, например ["~/study-desk"]; только в обычном режиме
 
 [roles.voice]           # L1: всё, что пишется в чат
 model = "sonnet"
@@ -97,3 +99,8 @@ sport = 3
 social = 2
 novelty = 1
 offscreen = 3
+
+[tts]                   # голос Арвикса (D34): ответ на голосовое — голосовым; озвучка режима разговора
+engine = "off"          # "command" — своя команда (Piper: deploy/tts-local.sh), текст на stdin, WAV в {out}
+command = ""
+voice_replies = true

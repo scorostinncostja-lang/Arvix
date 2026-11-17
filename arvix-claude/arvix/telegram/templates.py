@@ -50,6 +50,8 @@ def keyboard(app_url: str = "") -> list[list[str]]:
 COMMANDS: list[tuple[str, str]] = []
 FOCUS_DEFAULT_MIN = 25
 FOCUS_MIN_LOGGED = 5  # короче — не сессия, а ложный старт
+FOCUS_CHOICES = (15, 25, 45, 60, 90)
+FOCUS_MAX_PAUSE_MIN = 15  # дольше — это уже не пауза, а конец сессии
 PANEL_TITLE_MAX = 22
 
 ONBOARD_INTRO = (
@@ -192,6 +194,11 @@ def focus_text(minutes: int, until: str, title: str | None, left: int | None = N
     if left <= 0:
         return f"🎯 Фокус {minutes} мин{what} — закончен."
     return f"🎯 Фокус {minutes} мин{what}\nДо {until} · осталось {left} мин."
+
+
+def focus_paused_text(minutes: int, title: str | None, left: int, max_pause: int) -> str:
+    what = f" · {title}" if title else ""
+    return f"⏸ Фокус {minutes} мин{what} — пауза\nОсталось {left} мин. Пауза дольше {max_pause} мин закроет сессию."
 
 
 def brief(core: Any) -> str:
