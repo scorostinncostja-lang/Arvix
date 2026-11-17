@@ -174,6 +174,10 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
 
     if autonomy := autonomy_line(status["autonomy"]):
         lines.append("АВТОНОМНОСТЬ:" + autonomy.split(":", 1)[1])
+    if st.lessons:
+        recent = st.lessons[-4:]
+        lines.append("УРОКИ: " + " · ".join(
+            f"{x['date'][8:10]}.{x['date'][5:7]} {x['subject']}: {x['topic']}" + (f" {x['score']}%" if x.get("score") is not None else "") for x in recent))
 
     directives = st.active_directives(today)[:5]
     if directives:

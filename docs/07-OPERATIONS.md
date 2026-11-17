@@ -58,6 +58,7 @@ arvix setup --telegram --yes        # только привязать бота: 
 | `[roles.voice] model` · `[roles.analyst] model` | `sonnet` · `sonnet` | модели голоса и совета — **только здесь** (правило №4) |
 | `[roles.stt] model` | `whisper-large-v3-turbo` | модель распознавания голоса; для OpenAI — их модель |
 | `[stt] engine · api_key · language · max_seconds · timeout_sec · command` | `off` · — · `ru` · `300` · `90` · — | голосовые (§8) |
+| `[learning] auto_lesson · check_questions · tools · concept_dir · concept_template` | `true` · `3` · `[]` · — · — | учебный блок ([06-LEARNING.md §8](06-LEARNING.md#8-учебный-блок-в-telegram-)): включён ли, сколько вопросов проверки, дополнительные инструменты, папка и шаблон каркаса заметки |
 | `[stt] show_transcript` | `false` | показывать `🎙 «…»` перед ответом на голосовое; по умолчанию бот просто отвечает (D20) |
 | `[mechanics] sleep_target_min` | `450` | норма сна, если распорядок не задан ([02-MECHANICS.md §7.1](02-MECHANICS.md#71-норма-сна--coresleep_target)) |
 | `[mechanics] deep_target_min` | `120` | норма глубокой работы, если в плане дня её нет |

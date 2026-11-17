@@ -826,6 +826,72 @@ class Core:
         with self.tx():
             self.emit("learning_question", {"question": question[:500], "mode": "direct" if direct else "hint"}, source=source)
 
+    # --- учебный блок (06-LEARNING §8) -----------------------------------------------
+
+    def lesson_started(self, task_ref: Any, lesson: dict[str, Any], *, note_path: str | None = None, source: str = "telegram") -> Task:
+        from arvix import lesson as lesson_mod
+
+        task = self.resolve_task(task_ref)
+        with self.tx():
+            self.emit("lesson_started", {
+                "task_id": task.id, "topic": str(lesson.get("topic", ""))[:200], "subject": lesson_mod.subject_of(task.title)[:80],
+                "roadmap_node": str(lesson.get("roadmap_node") or "")[:200], "minutes": task.duration_min,
+                "plan": [str(s.get("step", ""))[:160] for s in lesson.get("plan") or []][:8],
+                "sources": [str(s)[:160] for s in lesson.get("sources") or []][:6],
+                "questions": [str(c.get("q", ""))[:300] for c in lesson.get("check") or []][:6],
+                "note": note_path, "fallback": bool(lesson.get("fallback")),
+            }, source=source, entity_id=task.id)
+        return task
+
+    def lesson_checked(self, task_ref: Any, *, score_pct: int | None, answers: str, gaps: list[str], next_step: str = "", source: str = "telegram") -> Task:
+        task = self.resolve_task(task_ref)
+        with self.tx():
+            self.emit("lesson_checked", {
+                "task_id": task.id, "score_pct": None if score_pct is None else rules.clamp(int(score_pct), 0, 100),
+                "answers": answers[:3000], "gaps": [str(g)[:200] for g in gaps][:8], "next_step": next_step[:300],
+            }, source=source, entity_id=task.id)
+        return task
+
+    def lesson_history(self, subject: str, limit: int = 5) -> list[str]:
+        """Прошлые уроки по предмету — чтобы следующий блок шёл дальше, а не по кругу."""
+        rows = [x for x in self.state.lessons if x.get("subject", "").lower() == subject.lower()]
+        out = []
+        for x in rows[-limit:]:
+            score = f" — {x['score']}%" if x.get("score") is not None else " — без проверки"
+            out.append(f"{x['date'][8:10]}.{x['date'][5:7]} {x['topic']}{score}")
+        return out
+
+    def concept_skeleton(self, title: str, subject: str, questions: list[str], sources: list[str]) -> str | None:
+        """Каркас заметки по шаблону человека в его папку концептов; чужой файл не трогается.
+        Возвращает путь или None (хранилища нет / заметка уже есть)."""
+        from arvix import lesson as lesson_mod
+        from arvix.vault import VaultError
+
+        if not self.cfg.vault:
+            return None
+        section = self.cfg.section("learning")
+        vault = self.vault
+        template = None
+        rel_tpl = section.get("concept_template") or next(
+            (vault.rel(p) for p in vault.root.rglob("Concept.md") if "emplate" in str(p.parent.name)), None)
+        if rel_tpl:
+            try:
+                template = vault.read(rel_tpl)
+            except VaultError:
+                template = None
+        folder = section.get("concept_dir") or next(
+            (p.name for p in sorted(vault.root.iterdir()) if p.is_dir() and "concept" in p.name.lower()), None)
+        if not folder:
+            folder = self.cfg.vault_paths.get("notes") or vault.paths.get("notes") or "Конспекты"
+        rel = f"{folder}/{lesson_mod.safe_name(title)}.md"
+        try:
+            if vault.resolve(rel).exists():
+                return rel  # конспект уже есть — это файл человека
+            result = self.write_note(rel, lesson_mod.skeleton(template, title, subject, self.today(), questions, sources), source="telegram")
+        except (ArvixError, VaultError):
+            return None
+        return result["path"]
+
     # --- сообщения ------------------------------------------------------------------
 
     def message_in(self, text: str, *, channel: str = "telegram") -> None:

@@ -68,6 +68,8 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `debt_written_off` | `id, justification` | человек, модель |
 | `sleep_recorded` | `duration_min, bedtime, date, source` | человек, модель |
 | `focus_session` | `duration_min, task_id` — с задачей копится в `Task.focus_min`, без задачи идёт в глубокую работу дня | человек |
+| `lesson_started` | `task_id, topic, subject, roadmap_node, minutes, plan[], sources[], questions[], note, fallback` — учебный блок подготовлен ([06-LEARNING.md §8](06-LEARNING.md#8-учебный-блок-в-telegram-)) | код + модель |
+| `lesson_checked` | `task_id, score_pct (null — голова недоступна), answers, gaps[], next_step` — проверка в конце блока; `State.lessons` | код + модель |
 | `expense_logged` | `amount, currency, category, impulse, note` | человек, модель |
 | `social_contact` | `who` | человек, модель |
 | `reason_declared` | `reason` — причина плохого дня для щита | человек, модель |

@@ -91,6 +91,7 @@ class State:
     shields: list[date] = field(default_factory=list)
     expenses: list[dict[str, Any]] = field(default_factory=list)
     learning: list[dict[str, Any]] = field(default_factory=list)
+    lessons: list[dict[str, Any]] = field(default_factory=list)  # учебные блоки: тема, задача, оценка проверки
     safety: list[dict[str, Any]] = field(default_factory=list)
     penalized: set[str] = field(default_factory=set)
     notes: dict[str, str] = field(default_factory=dict)  # заметки Арвикса: путь → хэш последней записи
@@ -286,6 +287,17 @@ class State:
 
     def _on_learning_question(self, ev: Event, p: dict, day: Day) -> None:
         self.learning.append({**p, "date": ev.local_date.isoformat()})
+
+    def _on_lesson_started(self, ev: Event, p: dict, day: Day) -> None:
+        self.lessons.append({"task_id": p.get("task_id"), "topic": p.get("topic", ""), "subject": p.get("subject", ""),
+                             "date": ev.local_date.isoformat(), "score": None})
+
+    def _on_lesson_checked(self, ev: Event, p: dict, day: Day) -> None:
+        for lesson in reversed(self.lessons):
+            if lesson["task_id"] == p.get("task_id") and lesson["score"] is None:
+                lesson["score"] = p.get("score_pct")
+                lesson["gaps"] = list(p.get("gaps") or [])
+                break
 
     def _on_safety_flag(self, ev: Event, p: dict, day: Day) -> None:
         if p.get("level") not in rules.SAFETY_ALARM_LEVELS:
