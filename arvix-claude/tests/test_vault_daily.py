@@ -64,8 +64,9 @@ class DailyNoteTest(ArvixCase):
         fields = parse_frontmatter(text)
         self.assertEqual((fields["sleep"], fields["wake"], fields["workout"], fields["phone_h"]), ("7ч30", "07:00", "да", "3"))
         self.assertIn("лечь раньше", text)
-        self.assertEqual(text.count("<!-- arvix:день -->"), 1)
-        self.assertIn("Завтра зал в 11:00 снова.", text)
+        self.assertEqual(text.count("%% arvix:день %%"), 1)
+        self.assertIn("**Вывод.** Завтра зал в 11:00 снова.", text)
+        self.assertNotIn("день норм", text)  # ответ разбора — в журнале, не в заметке человека
 
     def test_past_days_are_not_created(self) -> None:
         self.assertIsNone(daily_note.sync(self.core, self.core.today() - timedelta(days=3)))

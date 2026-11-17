@@ -79,7 +79,12 @@ bash deploy/web-setup.sh root@HOST          # Caddy, https://<ip>.sslip.io:8443,
 ```
 Порт 443 скрипт не трогает (на сервере его держит VPN), сертификат получает через 80. Чужие сайты Caddy не трогаются:
 свой блок — `/etc/caddy/arvix.caddy`. Проверка: `curl -sI https://<адрес>:8443/` и кнопка «Арвикс» у поля ввода в
-Telegram. Ключ для телефона без Telegram — `arvix app-token` (на сервере). Терминал — просто `arvix` на ноутбуке.
+Telegram. Телефон — в личке «скинь приложение на телефон»: одноразовая ссылка на 15 минут → Chrome → «Установить».
+Ключ для телефона без Telegram — `arvix app-token` (на сервере). Терминал — просто `arvix` на ноутбуке.
+
+**Файлы Арвиксу** (D29) ложатся в хранилище: `[vault_paths] files`, по умолчанию `00_Inbox/Файлы/<дата>/`, и
+синхронизируются на ноутбук вместе с ним. Видео нужен ffmpeg на машине бота — новый сервер получает его из
+`deploy/server-setup.sh`, на уже настроенном: `sudo apt install -y ffmpeg`. Проверка — `arvix doctor`, строка «видео».
 
 ## 3. Сервер и удалённый режим
 
@@ -184,6 +189,15 @@ ssh -t arvix@HOST 'bash ~/.local/share/arvix/app/deploy/stt-local.sh base'
 ssh -t arvix@HOST '~/.local/bin/arvix setup --stt command --yes && systemctl --user restart arvix-telegram'
 ```
 `base` быстрее, `small` точнее по-русски и медленнее в 2–3 раза.
+
+**Голос Арвикса (ответ голосовым, озвучка разговора, D34)** — Piper с русским голосом, локально:
+```bash
+ssh -t arvix@HOST 'bash ~/.local/share/arvix/app/deploy/tts-local.sh irina && systemctl --user restart arvix-telegram'
+```
+Голоса: `irina`, `dmitri`, `denis`, `ruslan`. Без этого режим разговора в приложении говорит голосом телефона.
+
+**Аватар бота** — `arvix avatar [файл.png]` (по умолчанию `deploy/avatar.png`, исходник `deploy/avatar.svg`); Bot API
+`setMyProfilePhoto`, BotFather не нужен.
 
 Проверка — `arvix doctor` (строка «голосовые»). Сбой распознавания бот объясняет в чате: неверный ключ, лимит,
 недоступный сервис — и просит написать текстом.

@@ -16,6 +16,7 @@ import argparse
 import getpass
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -464,6 +465,10 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         print("--   голосовые выключены — arvix setup --stt groq (или локально: deploy/stt-local.sh)")
     else:
         check(f"голосовые: {stt.engine}", stt.enabled, stt.problem())
+    if shutil.which("ffmpeg"):
+        print("OK   видео Арвиксу: ffmpeg есть — кадры и звук из роликов")
+    else:
+        print("--   видео Арвиксу: нет ffmpeg — ролик сохранится без кадров и расшифровки (sudo apt install -y ffmpeg)")
     tg = cfg.section("telegram")
     check("Telegram токен и владелец", bool(tg.get("token") and tg.get("owner_id")), "arvix setup --telegram --yes")
     if tg.get("token"):
@@ -566,6 +571,25 @@ def cmd_app(args: argparse.Namespace) -> None:
     tui()
 
 
+def cmd_avatar(args: argparse.Namespace) -> None:
+    """Поставить боту аватар (Bot API setMyProfilePhoto). По умолчанию — deploy/avatar.png."""
+    from arvix.telegram.api import TelegramAPI, TelegramError
+
+    cfg = load_config()
+    token = str(cfg.section("telegram").get("token") or "")
+    if not token:
+        sys.exit("Telegram не настроен: arvix setup --telegram --yes")
+    path = Path(args.path) if args.path else Path(__file__).resolve().parent.parent / "deploy" / "avatar.png"
+    data = path.read_bytes()
+    if not data.startswith(b"\x89PNG"):
+        sys.exit(f"{path}: нужен PNG (квадрат, от 640×640)")
+    try:
+        TelegramAPI(token).set_profile_photo(data)
+    except TelegramError as exc:
+        sys.exit(f"Аватар не поставлен: {exc}")
+    print(f"Аватар бота обновлён: {path.name}")
+
+
 def cmd_app_token(args: argparse.Namespace) -> None:
     """Печатает ключ приложения. Его просит `arvix` на ноутбуке по ssh; руками — для привязки
     телефона без Telegram: открыть <адрес>/#t=<ключ> в браузере телефона."""
@@ -663,6 +687,8 @@ def build_parser() -> argparse.ArgumentParser:
     add("telegram", cmd_telegram, "запустить Telegram-бота (и приложение)")
     add("app", cmd_app, "приложение в терминале (то же, что `arvix` без аргументов)")
     add("app-token", cmd_app_token, "ключ приложения для телефона и терминала (печатает в stdout)")
+    p = add("avatar", cmd_avatar, "поставить боту аватар (по умолчанию deploy/avatar.png)")
+    p.add_argument("path", nargs="?")
     add("app-url", cmd_app_url, "адрес приложения снаружи: https://… (пишет deploy/web-setup.sh)").add_argument("url")
     add("mcp", cmd_mcp, "MCP-сервер (stdio)")
     add("hook", cmd_hook, "хуки Claude Code").add_argument("event", choices=("session-start", "prompt"))

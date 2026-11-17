@@ -37,6 +37,15 @@ class ArvixError(ValueError):
     """Отказ L0 с объяснением для человека: долг, неизвестная задача и т.п."""
 
 
+class NoteConflict(ArvixError):
+    """Заметка изменилась после открытия: в ошибке — текущий текст, чтобы выбрать версию."""
+
+    def __init__(self, message: str, path: str, current: str):
+        super().__init__(message)
+        self.path = path
+        self.current = current
+
+
 def new_id() -> str:
     return uuid.uuid4().hex[:8]
 
@@ -463,12 +472,28 @@ class Core:
         with self.tx():
             self.emit("social_contact", {"who": who[:100]}, source=source)
 
-    def log_focus(self, minutes: int, *, task_ref: Any = None, source: str = "claude") -> Task | None:
+    def log_focus(self, minutes: int, *, task_ref: Any = None, topic: str | None = None, source: str = "claude") -> Task | None:
+        """Фокус-сессия. topic — тема без задачи («физика»): минуты идут в глубокую работу дня."""
         task = self.resolve_task(task_ref) if task_ref else None
+        payload: dict[str, Any] = {"duration_min": int(minutes), "task_id": task.id if task else None}
+        if topic and not task:
+            payload["topic"] = str(topic).strip()[:120]
         with self.tx():
-            self.emit("focus_session", {"duration_min": int(minutes), "task_id": task.id if task else None}, source=source,
-                      entity_id=task.id if task else None)
+            self.emit("focus_session", payload, source=source, entity_id=task.id if task else None)
         return task
+
+    def note_focus(self, event_id: int, note: str, *, source: str = "claude") -> dict[str, Any]:
+        """«Что сделал» к прошедшей сессии — отдельным событием, сама сессия не меняется."""
+        note = note.strip()
+        if not note:
+            raise ArvixError("Пустая заметка к фокусу")
+        ev = next((e for e in self.store.read(max(0, int(event_id) - 1)) if e.id == int(event_id)), None)
+        if ev is None or ev.kind != "focus_session":
+            raise ArvixError("Нет такой фокус-сессии")
+        with self.tx():
+            self.emit("focus_noted", {"focus_event_id": ev.id, "date": ev.local_date.isoformat(), "note": note[:1000]}, source=source,
+                      entity_id=ev.entity_id)
+        return {"event_id": ev.id, "note": note[:1000]}
 
     def declare_reason(self, reason: str, *, source: str = "claude") -> dict[str, Any]:
         """Причина дня («заболел», «семья») — при закрытии дня щит снимет самый
@@ -518,9 +543,38 @@ class Core:
             result["owned"] = True  # свой файл остаётся своим
         return self._note_event(result, f"block:{name}", source)
 
+    def save_note(self, rel: str, content: str, *, base_sha: str | None, source: str = "web") -> dict[str, Any]:
+        """Правка человека из приложения (или новая заметка при base_sha=None). Файл изменился
+        после открытия — NoteConflict с текущим текстом; ничего не записано."""
+        from arvix.vault import VaultConflict, VaultError
+
+        if not str(rel).endswith(".md"):
+            rel = f"{rel}.md"
+        try:
+            result = self.vault.save(rel, content, base_sha=base_sha)
+        except VaultConflict as exc:
+            raise NoteConflict(str(exc), exc.path, exc.current) from exc
+        except VaultError as exc:
+            raise ArvixError(str(exc)) from exc
+        return self._note_event(result, "create" if result["created"] else "edit", source) if result["changed"] else result
+
     def update_note(self, rel: str, transform: Any, *, source: str = "claude") -> dict[str, Any]:
         result = self.vault.update_text(rel, transform, owned_sha=self.state.notes.get(rel))
         return self._note_event(result, "fields", source) if result["changed"] else result
+
+    def receive_file(self, data: bytes, name: str, mime: str = "", *, stt: Any = None, caption: str = "",
+                     source: str = "telegram") -> dict[str, Any]:
+        """Файл от человека — в хранилище (arvix/files.py), факт — в журнал. Читает его голова."""
+        from arvix import files
+
+        try:
+            info = files.store(self, data, name, mime, stt=stt)
+        except files.FileError as exc:
+            raise ArvixError(str(exc)) from exc
+        with self.tx():
+            self.emit("file_received", {"name": info["name"], "kind": info["kind"], "size": info["size"], "path": info["path"],
+                                        "read": info["read"][:20], "caption": caption[:500]}, source=source)
+        return info
 
     def capture_note(self, text: str, *, source: str = "claude") -> str | None:
         if not text.strip():

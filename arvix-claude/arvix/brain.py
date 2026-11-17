@@ -16,10 +16,13 @@ import re
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 
 from arvix.config import Config, data_dir
 from arvix.core import ArvixError, Core
+
+HEAD_SKILLS = Path(__file__).resolve().parent.parent / "head-skills"  # библиотека навыков головы (D33)
 
 log = logging.getLogger("arvix.brain")
 
@@ -31,7 +34,7 @@ ACTION_TYPES = (
     # Действия интерфейса: их исполняет бот после ответа, а не ядро (05-INTERFACES §2.1).
     # Так человек говорит словами, а не командами: «давай позанимаемся физикой» → урок.
     "plan_schedule", "show_schedule", "start_lesson", "start_focus", "stop_focus", "show_day", "show_status",
-    "show_week", "show_goals", "debrief_now", "rest_day", "silent_day", "open_app",
+    "show_week", "show_goals", "debrief_now", "rest_day", "silent_day", "open_app", "install_app",
 )
 UI_ACTIONS = frozenset(ACTION_TYPES[ACTION_TYPES.index("plan_schedule"):])
 ACTION_RU = {
@@ -163,9 +166,12 @@ SOURCE_RE = re.compile(
 )
 
 
+GENTLE_RE = re.compile(r"(?<![а-яёa-z])(?:" + "|".join(re.escape(w.strip()) for w in GENTLE_STOP) + ")", re.IGNORECASE)
+
+
 def gentle_violation(text: str) -> bool:
-    low = f" {text.lower()}"
-    return any(word in low for word in GENTLE_STOP)
+    """Слова давления — с начала слова: «лень» да, «маленькая вещь» (совет самого 🟥) — нет."""
+    return bool(GENTLE_RE.search(text or ""))
 
 
 def has_source(text: str) -> bool:
@@ -190,13 +196,28 @@ class Brain:
         self.timeout = int(section.get("timeout_sec") or 180)
         self.vault_tools = bool(section.get("vault_tools", True))
         self.web_tools = bool(section.get("web_tools", True))
+        # Навыки головы (D33): своя проверенная библиотека + папки плагинов, которые владелец указал сам.
+        self.skills_enabled = bool(section.get("skills", True))
+        self.skill_dirs = [str(Path(p).expanduser()) for p in (section.get("skill_dirs") or []) if p]
         self.last_error = ""
         self.last_stats: dict[str, Any] = {}
 
     def available(self) -> bool:
         return shutil.which(self.bin) is not None or os.path.isfile(self.bin)
 
-    def command(self, *, system: str, prompt: str, schema: dict[str, Any], role: str, vault_tools: bool, web: bool = False) -> list[str]:
+    def skill_plugins(self, skills: str) -> list[str]:
+        """Папки-плагины с навыками: «gentle» — только безопасные в 🟥 (разговор, тревога);
+        «full» — вся библиотека и папки владельца из [brain] skill_dirs; «off» — без навыков."""
+        if skills == "off" or not self.skills_enabled:
+            return []
+        dirs = [str(HEAD_SKILLS / "gentle")]
+        if skills == "full":
+            dirs += [str(HEAD_SKILLS / "full")] + [d for d in self.skill_dirs if Path(d).is_dir()]
+        return dirs
+
+    def command(self, *, system: str, prompt: str, schema: dict[str, Any], role: str, vault_tools: bool, web: bool = False,
+                skills: str = "off") -> list[str]:
+        plugins = self.skill_plugins(skills)
         cmd = [
             self.bin, "-p", prompt,
             "--system-prompt", system,
@@ -204,11 +225,12 @@ class Brain:
             "--json-schema", json.dumps(schema, ensure_ascii=False),
             "--setting-sources", "",
             "--strict-mcp-config",
-            "--disable-slash-commands",
             "--no-session-persistence",
             "--permission-mode", "dontAsk",
             "--permission-prompts", "none",
         ]
+        if not plugins:
+            cmd.append("--disable-slash-commands")  # навыки — тоже слеш-команды: без библиотеки выключено всё
         if model := self.cfg.model(role):
             cmd += ["--model", model]
         tools: list[str] = []
@@ -225,6 +247,10 @@ class Brain:
                 tools += ["Read", "Grep", "Glob"]
         if web and self.web_tools:
             tools += ["WebSearch", "WebFetch"]
+        if plugins:
+            tools.append("Skill")
+            for folder in plugins:
+                cmd += ["--plugin-dir", folder]
         if tools:
             cmd += ["--tools", ",".join(tools), "--allowedTools", ",".join(tools)]
             for folder in dirs:
@@ -234,12 +260,12 @@ class Brain:
         return cmd
 
     def ask(self, *, system: str, prompt: str, schema: dict[str, Any], role: str = "voice", vault_tools: bool = False,
-            web: bool = False) -> dict[str, Any] | None:
+            web: bool = False, skills: str = "off") -> dict[str, Any] | None:
         """None — голова недоступна (лимит подписки, сеть, таймаут). Вызывающий
         отвечает шаблоном L0: напоминания и учёт от этого не ломаются."""
         cwd = data_dir() / "brain"
         cwd.mkdir(parents=True, exist_ok=True)
-        cmd = self.command(system=system, prompt=prompt, schema=schema, role=role, vault_tools=vault_tools, web=web)
+        cmd = self.command(system=system, prompt=prompt, schema=schema, role=role, vault_tools=vault_tools, web=web, skills=skills)
         env = {**os.environ, "ARVIX_BRAIN": "1"}
         started = time.monotonic()
         try:

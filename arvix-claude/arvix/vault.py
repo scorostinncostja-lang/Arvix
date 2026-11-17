@@ -5,10 +5,12 @@
 
 - создать новую заметку можно в любой папке, кроме служебных;
 - в чужую заметку — только дописать в конец или обновить свой помеченный блок
-  <!-- arvix:имя --> … <!-- /arvix:имя -->, текст человека вне блока не трогается;
+  %% arvix:имя %% … %% /arvix:имя %% (комментарий Obsidian — человеку не виден), текст вне блока не трогается;
 - перезаписать целиком — только свою заметку, которую человек с тех пор не менял
   (сверка хэша), либо по явному согласию (force); перед перезаписью — бэкап;
-- удалять Арвикс не умеет вообще.
+- удалять Арвикс не умеет вообще;
+- человек правит свои заметки из приложения (save): запись только если файл не менялся
+  с момента открытия (сверка хэша), иначе — конфликт с обеими версиями, без молчаливой потери.
 
 Поиск — по словам с грубой поддержкой русских окончаний (общая основа слова).
 """
@@ -18,12 +20,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 SKIP_DIRS = {".obsidian", ".trash", ".git", "node_modules", "Cache"}
 MAX_READ_BYTES = 200_000
+ASSET_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+               ".svg": "image/svg+xml", ".pdf": "application/pdf", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": "video/mp4"}
 DEFAULT_PATHS = {
     "profile": "05_System/Профиль Арвикса.md",
     "goals": "05_System/Цели",
@@ -34,11 +38,21 @@ DEFAULT_PATHS = {
     "system": "05_System/Арвикс",
     "daily": "",
     "daily_template": "",
+    "files": "00_Inbox/Файлы",
 }
 
 
 class VaultError(ValueError):
     pass
+
+
+class VaultConflict(VaultError):
+    """Файл изменился после того, как человек его открыл."""
+
+    def __init__(self, path: str, current: str):
+        super().__init__(f"«{path}» изменилась, пока ты её правил (ноутбук или синхронизация). Сравни и выбери версию.")
+        self.path = path
+        self.current = current
 
 
 def detect_paths(root: Path) -> dict[str, str]:
@@ -152,13 +166,67 @@ def set_frontmatter(text: str, values: dict[str, Any], *, only_empty: bool = Tru
 
 
 def replace_block(text: str, name: str, content: str) -> str:
-    start, end = f"<!-- arvix:{name} -->", f"<!-- /arvix:{name} -->"
+    """Свой блок внутри заметки. Метки — комментарии Obsidian %% … %%: в режиме чтения и
+    в Live Preview их не видно. Старые HTML-метки <!-- arvix:… --> заменяются новыми."""
+    start, end = f"%% arvix:{name} %%", f"%% /arvix:{name} %%"
     block = f"{start}\n{content.strip()}\n{end}"
-    if start in text and end in text:
-        head, _, rest = text.partition(start)
-        _, _, tail = rest.partition(end)
-        return head + block + tail
+    for old_start, old_end in ((start, end), (f"<!-- arvix:{name} -->", f"<!-- /arvix:{name} -->")):
+        if old_start in text and old_end in text:
+            head, _, rest = text.partition(old_start)
+            _, _, tail = rest.partition(old_end)
+            return head + block + tail
     return text.rstrip("\n") + "\n\n" + block + "\n"
+
+
+MONTHS = ("январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь")
+MONTHS_GEN = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря")
+WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье")
+WEEKDAYS_SHORT = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+_MOMENT = re.compile(r"\[[^\]]*\]|YYYY|YY|MMMM|MMM|MM|M|DD|Do|D|dddd|ddd|dd|HH|H|mm|ss|ww|w|E")
+# Шаблоны Obsidian: ядро ({{date}}, {{date:DD.MM.YYYY}}, {{time}}, {{title}}) и Templater
+# (<% tp.date.now("YYYY-MM-DD") %>, <% tp.date.now("D MMMM", 1) %>, <% tp.file.title %>).
+_CORE_TOKEN = re.compile(r"\{\{\s*(date|time|title)\s*(?::\s*([^}]*?))?\s*\}\}", re.IGNORECASE)
+_TEMPLATER_DATE = re.compile(r"<%[-_*]?\s*tp\.date\.now\(\s*(?:[\"']([^\"']*)[\"'])?\s*(?:,\s*(-?\d+))?[^)]*\)\s*[-_]?%>")
+_TEMPLATER_TITLE = re.compile(r"<%[-_*]?\s*tp\.file\.title\s*[-_]?%>")
+PLACEHOLDER = re.compile(r"\{\{\s*(?:date|time|title)\b[^}]*\}\}|<%[-_*]?\s*tp\.(?:date\.now|file\.title)\b", re.IGNORECASE)
+
+
+def format_moment(fmt: str, dt: datetime) -> str:
+    """Формат даты в синтаксисе moment.js (его понимает Obsidian), русские названия."""
+    genitive = "D" in fmt  # «17 ноября», но «ноябрь 2026»
+
+    def one(m: re.Match[str]) -> str:
+        tok = m.group(0)
+        if tok.startswith("["):
+            return tok[1:-1]
+        week = dt.isocalendar()[1]
+        return {
+            "YYYY": f"{dt.year:04d}", "YY": f"{dt.year % 100:02d}",
+            "MMMM": (MONTHS_GEN if genitive else MONTHS)[dt.month - 1], "MMM": MONTHS_GEN[dt.month - 1][:3],
+            "MM": f"{dt.month:02d}", "M": str(dt.month), "DD": f"{dt.day:02d}", "Do": f"{dt.day}-е", "D": str(dt.day),
+            "dddd": WEEKDAYS[dt.weekday()], "ddd": WEEKDAYS_SHORT[dt.weekday()], "dd": WEEKDAYS_SHORT[dt.weekday()],
+            "HH": f"{dt.hour:02d}", "H": str(dt.hour), "mm": f"{dt.minute:02d}", "ss": f"{dt.second:02d}",
+            "ww": f"{week:02d}", "w": str(week), "E": str(dt.isoweekday()),
+        }[tok]
+
+    return _MOMENT.sub(one, fmt)
+
+
+def render_template(text: str, dt: datetime, title: str) -> str:
+    """Подставляет переменные шаблона Obsidian так же, как это сделал бы сам Obsidian."""
+    def core(m: re.Match[str]) -> str:
+        kind, fmt = m.group(1).lower(), (m.group(2) or "").strip()
+        if kind == "title":
+            return title
+        return format_moment(fmt or ("YYYY-MM-DD" if kind == "date" else "HH:mm"), dt)
+
+    def templater(m: re.Match[str]) -> str:
+        shift = int(m.group(2) or 0)
+        return format_moment(m.group(1) or "YYYY-MM-DD", dt + timedelta(days=shift))
+
+    text = _CORE_TOKEN.sub(core, text)
+    text = _TEMPLATER_DATE.sub(templater, text)
+    return _TEMPLATER_TITLE.sub(title, text)
 
 
 class Vault:
@@ -191,6 +259,21 @@ class Vault:
             return base
         safe = re.sub(r'[\\/:*?"<>|]', "-", name).strip()
         return f"{base}/{safe}.md" if base else f"{safe}.md"
+
+    def asset(self, rel: str) -> Path:
+        """Вложение заметки (картинка, PDF) для показа в приложении. Ищет как Obsidian:
+        точный путь, затем по имени файла в любой папке."""
+        rel = str(rel).strip().lstrip("/")
+        if Path(rel).suffix.lower() not in ASSET_TYPES:
+            raise VaultError(f"Не вложение: {rel}")
+        path = self.resolve(rel)
+        if path.is_file():
+            return path
+        name = Path(rel).name
+        for found in self.root.rglob(name):
+            if found.is_file() and not any(part in SKIP_DIRS for part in found.relative_to(self.root).parts):
+                return found
+        raise VaultError(f"Нет такого файла: {rel}")
 
     def files(self) -> list[Path]:
         out = []
@@ -308,6 +391,23 @@ class Vault:
         if new != current:
             path.write_text(new, encoding="utf-8")
         return {"path": self.rel(path), "changed": new != current, "sha": sha(new), "owned": owned_sha == sha(current)}
+
+    def save(self, rel: str, content: str, *, base_sha: str | None) -> dict[str, Any]:
+        """Правка самого человека из приложения. base_sha — хэш текста, который он открыл:
+        если файл с тех пор изменился (ноутбук, синхронизация, Арвикс), запись не идёт —
+        VaultConflict с текущим текстом, чтобы ничья правка не пропала молча."""
+        path = self.resolve(rel, must_exist=base_sha is not None)
+        if path.suffix.lower() != ".md":
+            raise VaultError(f"Это не заметка: {rel}")
+        if path.exists():
+            current = path.read_text(encoding="utf-8", errors="replace")
+            if base_sha is None or sha(current) != base_sha:
+                raise VaultConflict(self.rel(path), current)
+            if current == content:
+                return {"path": self.rel(path), "created": False, "sha": base_sha, "owned": False, "changed": False}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return {"path": self.rel(path), "created": base_sha is None, "sha": sha(content), "owned": False, "changed": True}
 
     def backup(self, path: Path, content: str) -> str:
         flat = self.rel(path).replace("/", "__")

@@ -9,13 +9,36 @@ const TOKEN_KEY = "arvix_token";
 const state = { tab: "today", data: null, messages: [], history: null, notesDir: "", note: null, thinking: "", seen: 0, version: "" };
 
 // --- вход --------------------------------------------------------------------------------------
-(function pairFromHash() {
-  const m = location.hash.match(/[#&]t=([\w-]+)/);
-  if (m) {
-    try { localStorage.setItem(TOKEN_KEY, m[1]); } catch (_) { /* приватный режим */ }
-    history.replaceState(null, "", location.pathname);
+/* Привязка телефона: #p=<одноразовый код> из ссылки Арвикса (живёт 15 минут, срабатывает
+ * один раз) → ключ приложения. Старые ссылки #t=<ключ> тоже принимаются. */
+async function pairFromHash() {
+  const t = location.hash.match(/[#&]t=([\w-]+)/), p = location.hash.match(/[#&]p=([\w-]+)/);
+  if (!t && !p) return;
+  history.replaceState(null, "", location.pathname);
+  let key = t ? t[1] : "";
+  if (p) {
+    try {
+      const res = await fetch("/api/pair/claim?code=" + encodeURIComponent(p[1]));
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { toast(data.error || "Ссылка не сработала"); return; }
+      key = data.token;
+    } catch (_) { toast("Нет связи с сервером"); return; }
   }
-})();
+  try { localStorage.setItem(TOKEN_KEY, key); } catch (_) { /* приватный режим */ }
+}
+
+/* Chrome сам предлагает установку (WebAPK — настоящее приложение с иконкой): ловим это
+ * событие и показываем свою кнопку, чтобы не искать пункт в меню ⋮. */
+let installPrompt = null;
+const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; if (state.tab === "today") renderToday(); });
+window.addEventListener("appinstalled", () => { installPrompt = null; toast("Арвикс установлен — ищи иконку на экране"); });
+async function installApp() {
+  if (!installPrompt) { toast("Меню браузера ⋮ → «Установить приложение»"); return; }
+  installPrompt.prompt();
+  await installPrompt.userChoice.catch(() => null);
+  installPrompt = null; if (state.tab === "today") renderToday();
+}
 
 function token() {
   try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (_) { return ""; }
@@ -35,7 +58,7 @@ async function api(path, opts = {}) {
   });
   const data = await res.json().catch(() => ({}));
   if (res.status === 401) throw Object.assign(new Error(data.error || "Нужен вход"), { auth: true });
-  if (!res.ok) throw new Error(data.error || "Ошибка " + res.status);
+  if (!res.ok) throw Object.assign(new Error(data.error || "Ошибка " + res.status), { status: res.status, data });
   return data;
 }
 
@@ -137,6 +160,10 @@ function renderToday() {
       <div class="stat"><b>${hm(s.deep_min)}</b><span>глубокая из ${hm(s.deep_target)}</span><div class="bar deep"><i style="width:${Math.min(100, 100 * s.deep_min / Math.max(1, s.deep_target))}%"></i></div></div>
     </div>`;
   }
+  if (installPrompt && !TG && !standalone()) {
+    html += `<div class="card install-card"><div><b>📲 Арвикс как приложение</b><div class="muted small">Иконка на экране, своё окно, без адресной строки</div></div>
+      <button class="pill primary" id="install-now">Установить</button></div>`;
+  }
   html += focusCard(d);
   if (d.lesson && d.lesson.topic) {
     html += `<div class="card"><h3>Урок</h3><div><b>${esc(d.lesson.topic)}</b></div>
@@ -156,24 +183,59 @@ function renderToday() {
   }
   view.innerHTML = html;
   bindToday();
+  $("#install-now") && ($("#install-now").onclick = installApp);
   tickFocus();
 }
 
 function focusCard(d) {
   const f = d.focus;
+  const sessions = d.sessions || [];
+  const list = sessions.length ? `<div class="sessions">${sessions.map((x) => `<div class="session">
+      <span class="muted small">${esc(new Date(x.at).toTimeString().slice(0, 5))}</span><b>${hm(x.minutes)}</b>
+      <span class="grow">${esc(x.title)}${x.note ? `<span class="muted small"> — ${esc(x.note)}</span>` : ""}</span>
+      ${x.note ? "" : `<button class="link small" data-act="focus-note" data-event="${x.event_id}" data-min="${x.minutes}" data-title="${esc(x.title)}">+ что сделал</button>`}
+    </div>`).join("")}<div class="muted small">Всего: ${hm(sessions.reduce((a, x) => a + x.minutes, 0))}</div></div>` : "";
   if (f) {
-    return `<div class="card focus" id="focus-card" data-until="${esc(f.until)}" data-start="${esc(f.started)}">
+    const paused = !!f.paused_at;
+    return `<div class="card"><div class="focus${paused ? " paused" : ""}" id="focus-card" data-until="${esc(f.until)}" data-minutes="${f.minutes}" data-paused="${esc(f.paused_at || "")}">
       <div class="ring" id="focus-ring"><div id="focus-left">--:--</div></div>
-      <div class="focus-body"><div class="muted small">Фокус · ${f.minutes} мин · до ${esc(f.until.slice(11, 16))}</div>
+      <div class="focus-body"><div class="muted small">${paused ? `Пауза · до ${f.max_pause_min} мин, потом сессия закроется` : `Фокус · ${f.minutes} мин`}</div>
         <div class="focus-title">${esc(f.title || "глубокая работа")}</div>
-        <div class="pills"><button class="pill danger" data-act="focus-stop">⏹ Стоп</button></div></div></div>`;
+        <div class="pills">${paused ? `<button class="pill primary" data-act="focus-op" data-op="resume">▶ Дальше</button>` : `<button class="pill" data-act="focus-op" data-op="pause">⏸ Пауза</button>`}
+          <button class="pill" data-act="focus-op" data-op="stop">⏹ Закончить</button>
+          <button class="pill danger" data-act="focus-op" data-op="cancel" aria-label="Отменить, не записывать">✕</button></div></div></div>${list}</div>`;
   }
   if (d.gentle) return "";
   const open = (d.tasks || []).filter((t) => t.open);
-  const target = open.find((t) => t.status === "active") || open[0];
-  return `<div class="card"><h3>Фокус</h3>
-    <div class="muted small">${target ? "на «" + esc(target.title) + "»" : "глубокая работа"} — телефон экраном вниз</div>
-    <div class="pills">${[25, 45, 60, 90].map((m) => `<button class="pill${m === 25 ? " primary" : ""}" data-act="focus" data-min="${m}" data-task="${target ? target.id : ""}">${m} мин</button>`).join("")}</div></div>`;
+  const form = state.focusForm || (state.focusForm = { target: (open.find((t) => t.status === "active") || open[0] || {}).id || "topic", minutes: 25, topic: "" });
+  if (form.target !== "topic" && !open.some((t) => t.id === form.target)) form.target = open[0] ? open[0].id : "topic";
+  const choices = d.focus_choices || [15, 25, 45, 60, 90];
+  const custom = !choices.includes(+form.minutes);
+  return `<div class="card focus-setup"><h3>Фокус</h3>
+    <div class="field"><label>На что</label><div class="seg wrap" data-focus="target">
+      ${open.map((t) => `<button type="button" data-v="${t.id}" class="${form.target === t.id ? "on" : ""}">${esc(t.title)}</button>`).join("")}
+      <button type="button" data-v="topic" class="${form.target === "topic" ? "on" : ""}">✎ Своя тема</button></div>
+      ${form.target === "topic" ? `<input id="focus-topic" class="input" placeholder="Например: физика, задачи 1–5" value="${esc(form.topic)}" maxlength="120">` : ""}</div>
+    <div class="field"><label>Сколько</label><div class="seg" data-focus="minutes">
+      ${choices.map((m) => `<button type="button" data-v="${m}" class="${+form.minutes === m ? "on" : ""}">${m}</button>`).join("")}
+      <button type="button" data-v="custom" class="${custom ? "on" : ""}">${custom ? form.minutes : "своё"}</button></div></div>
+    <button class="btn primary" data-act="focus-go">▶ Начать ${form.minutes} мин</button>
+    <div class="muted small" style="margin-top:6px">Телефон экраном вниз. Пауза и отмена — на таймере.</div>${list}</div>`;
+}
+
+function openFocusNoteSheet(session) {
+  openSheet(`<h2>Что успел?</h2><p class="muted small">${esc(session.title)} · ${hm(session.minutes)}</p>
+    <div class="field"><textarea id="fn-text" rows="3" placeholder="Например: §12 — 5 задач, одна с ошибкой в единицах"></textarea></div>
+    <button class="btn primary" id="fn-save">Записать</button><button class="btn" id="fn-skip">Пропустить</button>`, () => {
+    setTimeout(() => $("#fn-text").focus(), 50);
+    $("#fn-skip").onclick = () => { closeSheet(); load("today"); };
+    $("#fn-save").onclick = async () => {
+      const note = $("#fn-text").value.trim();
+      if (!note) { toast("Пара слов — или «Пропустить»"); return; }
+      try { await api("focus/note", { json: { event: session.event_id, note } }); notify("success"); closeSheet(); toast("Вписал в сессию"); load("today"); }
+      catch (err) { toast(err.message); }
+    };
+  });
 }
 
 function busyRow(b) {
@@ -202,7 +264,29 @@ function findTask(id) {
   return [...(d.tasks || []), ...(d.debts || []), ...(d.tomorrow || [])].find((t) => t.id === id);
 }
 
+function bindFocusSetup() {
+  const f = state.focusForm;
+  if (!f) return;
+  view.querySelectorAll("[data-focus]").forEach((g) => g.addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    haptic("soft");
+    const topicEl = $("#focus-topic"); if (topicEl) f.topic = topicEl.value;
+    if (g.dataset.focus === "minutes") {
+      if (b.dataset.v === "custom") {
+        const v = parseInt(prompt("Сколько минут? 5–180", String(f.minutes)) || "", 10);
+        if (!v) return;
+        f.minutes = Math.max(5, Math.min(180, v));
+      } else f.minutes = +b.dataset.v;
+    } else f.target = b.dataset.v;
+    renderToday();
+    if (f.target === "topic" && g.dataset.focus === "target") setTimeout(() => $("#focus-topic") && $("#focus-topic").focus(), 30);
+  }));
+  const topicEl = $("#focus-topic");
+  if (topicEl) topicEl.addEventListener("input", () => { f.topic = topicEl.value; });
+}
+
 function bindToday() {
+  bindFocusSetup();
   view.querySelectorAll("[data-act]").forEach((el) => el.addEventListener("click", async () => {
     const act = el.dataset.act, id = el.dataset.id;
     haptic();
@@ -217,8 +301,18 @@ function bindToday() {
         const r = await api(`tasks/${id}/done`, { json: {} });
         notify("success"); toast(`✓ +${r.xp} XP` + (r.warnings && r.warnings.length ? "\n" + r.warnings.join("\n") : ""));
       } else if (act === "more") { openTaskSheet(findTask(id)); return; }
-      else if (act === "focus") { await api("focus", { json: { minutes: +el.dataset.min, task: el.dataset.task || null } }); toast("Фокус пошёл. Таймер есть и в Telegram."); }
-      else if (act === "focus-stop") { await api("focus/stop", { json: {} }); }
+      else if (act === "focus-go") {
+        const f = state.focusForm, topic = f.target === "topic" ? ($("#focus-topic") ? $("#focus-topic").value.trim() : f.topic) : "";
+        await api("focus", { json: { minutes: +f.minutes, task: f.target === "topic" ? null : f.target, topic: topic || null } });
+        f.topic = ""; toast("Фокус пошёл. Таймер есть и в Telegram.");
+      } else if (act === "focus-op") {
+        const op = el.dataset.op;
+        if (op === "cancel" && !confirm("Отменить фокус? Ничего не запишется.")) return;
+        const r = await api("focus/" + op, { json: {} });
+        if (op === "stop" && r.session) { await load("today"); openFocusNoteSheet(r.session); return; }
+        if (op === "stop") toast("Меньше 5 минут — не сессия, ничего не записано");
+        if (op === "cancel") toast("Отменено, ничего не записано");
+      } else if (act === "focus-note") { openFocusNoteSheet({ event_id: +el.dataset.event, minutes: +el.dataset.min, title: el.dataset.title }); return; }
       await load("today");
     } catch (err) { notify("error"); toast(err.message); }
   }));
@@ -229,16 +323,18 @@ function tickFocus() {
   clearInterval(focusTimer);
   const card = $("#focus-card");
   if (!card) return;
-  const until = new Date(card.dataset.until).getTime(), start = new Date(card.dataset.start).getTime();
+  const until = new Date(card.dataset.until).getTime(), total = (+card.dataset.minutes || 1) * 60000;
+  const pausedAt = card.dataset.paused ? new Date(card.dataset.paused).getTime() : 0;
   const step = () => {
-    const left = Math.max(0, until - Date.now());
+    const left = Math.max(0, until - (pausedAt || Date.now()));
     const m = Math.floor(left / 60000), s = Math.floor((left % 60000) / 1000);
     const el = $("#focus-left"); if (!el) return clearInterval(focusTimer);
     el.textContent = `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-    $("#focus-ring").style.setProperty("--p", String(1 - left / Math.max(1, until - start)));
-    if (!left) { clearInterval(focusTimer); notify("success"); setTimeout(() => load("today"), 1500); }
+    $("#focus-ring").style.setProperty("--p", String(Math.min(1, 1 - left / total)));
+    if (!left && !pausedAt) { clearInterval(focusTimer); notify("success"); setTimeout(() => load("today"), 1500); }
   };
-  step(); focusTimer = setInterval(step, 1000);
+  step();
+  if (!pausedAt) focusTimer = setInterval(step, 1000);
 }
 
 // --- шторки ------------------------------------------------------------------------------------
@@ -350,7 +446,7 @@ function openPartSheet(t) {
   });
 }
 
-function openReportSheet(t) {
+function openReportSheet(t, after = null) {
   openSheet(`<h2>Отчёт</h2><p class="muted small">${esc(t.title)}</p>
     <div class="field"><textarea id="r-report" rows="4" placeholder="Что сделано: цифры, темы, результат"></textarea></div>
     <button class="btn primary" id="r-save">Сделано</button>`, () => {
@@ -360,7 +456,8 @@ function openReportSheet(t) {
       if (!report) { toast("Пара слов о сделанном"); return; }
       try {
         const r = await api(`tasks/${t.id}/done`, { json: { report } });
-        notify("success"); closeSheet(); toast(`✓ +${r.xp} XP`); load("today");
+        notify("success"); closeSheet(); toast(`✓ +${r.xp} XP`);
+        if (after) after(); else load("today");
       } catch (err) { toast(err.message); }
     };
   });
@@ -386,7 +483,10 @@ function renderChat() {
   if (!$(".composer")) {
     const c = document.createElement("div");
     c.className = "composer";
-    c.innerHTML = `<button class="round" id="mic" aria-label="Голосовое">🎙</button>
+    c.innerHTML = `<button class="round" id="attach" aria-label="Прислать файл">📎</button>
+      <input type="file" id="file" multiple hidden>
+      <button class="round" id="mic" aria-label="Голосовое">🎙</button>
+      <button class="round" id="talk-btn" aria-label="Поговорить голосом">📞</button>
       <textarea id="msg" rows="1" placeholder="Сообщение Арвиксу"></textarea>
       <button class="round send" id="send" aria-label="Отправить">↑</button>`;
     document.body.appendChild(c);
@@ -395,6 +495,9 @@ function renderChat() {
     ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !("ontouchstart" in window)) { e.preventDefault(); sendMessage(); } });
     $("#send").onclick = sendMessage;
     $("#mic").onclick = toggleRecord;
+    $("#attach").onclick = () => $("#file").click();
+    $("#talk-btn").onclick = openTalk;
+    $("#file").onchange = (e) => { sendFiles([...e.target.files]); e.target.value = ""; };
   }
   view.querySelectorAll("[data-btn]").forEach((b) => b.addEventListener("click", async () => {
     haptic(); b.disabled = true;
@@ -417,6 +520,168 @@ async function sendMessage() {
   state.messages.push({ id: 0, at: new Date().toISOString(), who: "me", text, channel: "web", buttons: [] });
   state.thinking = "думаю"; renderChat();
   try { await api("message", { json: { text } }); } catch (err) { toast(err.message); }
+}
+
+/* Файлы Арвиксу: фото, PDF, документы, архив репозитория, аудио, видео — до 20 МБ.
+ * Подпись — текст из поля ввода (к первому файлу). Ответ придёт в ленту потоком. */
+const MAX_FILE = 20 * 1024 * 1024;
+async function sendFiles(files) {
+  const ta = $("#msg");
+  let caption = ta.value.trim();
+  for (const file of files) {
+    if (file.size > MAX_FILE) { toast(`«${file.name}» больше 20 МБ — сожми или раздели`); continue; }
+    state.messages.push({ id: 0, at: new Date().toISOString(), who: "me", text: "📎 " + file.name + (caption ? " — " + caption : ""), channel: "web", buttons: [] });
+    state.thinking = "смотрю файл"; renderChat();
+    try {
+      const res = await fetch("/api/upload", { method: "POST", body: file, headers: { ...authHeaders(), "Content-Type": file.type || "application/octet-stream",
+        "X-File-Name": encodeURIComponent(file.name), "X-Caption": encodeURIComponent(caption) } });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Ошибка " + res.status);
+      haptic();
+    } catch (err) { toast(err.message); }
+    caption = "";
+  }
+  ta.value = ""; ta.style.height = "auto";
+}
+
+/* --- Режим разговора (D34): говоришь → Арвикс отвечает вслух → снова слушает. Без нажатий.
+ * Конец фразы — по тишине (Web Audio). Голос ответа — телефона (speechSynthesis, бесплатно);
+ * если его нет (WebView Telegram), — озвучка сервера /api/tts, если она включена; иначе только текст. */
+const talk = { on: false, phase: "", stream: null, rec: null, ctx: null, raf: 0, audio: null, lastId: 0, voice: null };
+
+function talkVoices() {
+  if (!("speechSynthesis" in window)) return null;
+  const list = speechSynthesis.getVoices().filter((v) => /^ru/i.test(v.lang));
+  return list.find((v) => /google|милена|milena|irina|ирина/i.test(v.name)) || list[0] || null;
+}
+if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => { talk.voice = talkVoices(); };
+
+async function openTalk() {
+  if (talk.on) return;
+  talk.on = true; talk.voice = talkVoices(); talk.nudged = false;
+  try { const r = await api("messages"); talk.lastId = Math.max(0, ...r.messages.map((m) => m.id || 0)); }  // старые ответы не озвучиваем
+  catch (_) { talk.lastId = Math.max(0, ...state.messages.map((m) => m.id || 0)); }
+  const el = document.createElement("div");
+  el.id = "talk"; el.className = "talk";
+  el.innerHTML = `<div class="talk-top"><b>Разговор с Арвиксом</b><button class="pill" id="talk-end">Завершить</button></div>
+    <button class="talk-orb" id="talk-orb" aria-label="Перебить или начать говорить"><span id="talk-level"></span></button>
+    <div class="talk-status" id="talk-status">Подключаю микрофон…</div>
+    <div class="talk-text" id="talk-text"></div>
+    <div class="muted small talk-hint">Говори как обычно — пауза в полторы секунды значит «я договорил». Тап по кругу — перебить.</div>`;
+  document.body.appendChild(el);
+  $("#talk-end").onclick = closeTalk;
+  $("#talk-orb").onclick = () => { if (talk.phase === "speaking" || talk.phase === "idle") { stopSpeaking(); talkListen(); } };
+  if (TG) { TG.BackButton.show(); TG.BackButton.onClick(closeTalk); }
+  talkListen();
+}
+
+function closeTalk() {
+  talk.on = false; talk.phase = "";
+  stopSpeaking();
+  if (talk.rec && talk.rec.state === "recording") { talk.rec.onstop = null; talk.rec.stop(); }
+  if (talk.stream) talk.stream.getTracks().forEach((t) => t.stop());
+  if (talk.ctx) talk.ctx.close().catch(() => {});
+  cancelAnimationFrame(talk.raf);
+  talk.stream = talk.ctx = talk.rec = null;
+  $("#talk") && $("#talk").remove();
+  if (TG) { TG.BackButton.offClick(closeTalk); TG.BackButton.hide(); }
+  if (state.tab === "chat") load("chat");
+}
+
+function talkStatus(text, phase) {
+  talk.phase = phase || talk.phase;
+  const s = $("#talk-status"); if (s) s.textContent = text;
+  const orb = $("#talk-orb"); if (orb) orb.dataset.phase = talk.phase;
+}
+
+async function talkListen() {
+  if (!talk.on) return;
+  try {
+    if (!talk.stream) {
+      talk.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      talk.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      talk.analyser = talk.ctx.createAnalyser(); talk.analyser.fftSize = 1024;
+      talk.ctx.createMediaStreamSource(talk.stream).connect(talk.analyser);
+    }
+  } catch (err) { talkStatus("Нет доступа к микрофону: " + err.message, "idle"); return; }
+  const type = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus", "audio/mp4"].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+  const rec = talk.rec = new MediaRecorder(talk.stream, type ? { mimeType: type } : undefined);
+  const chunks = [];
+  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  rec.onstop = () => { if (talk.on && spoke) talkSend(new Blob(chunks, { type: rec.mimeType || "audio/webm" })); };
+  rec.start(); haptic("light");
+  talkStatus("Слушаю…", "listening");
+  const buf = new Uint8Array(talk.analyser.fftSize);
+  let spoke = false, voiced = 0, quietSince = 0;
+  const started = performance.now();
+  const loop = () => {
+    if (!talk.on || rec.state !== "recording") return;
+    talk.analyser.getByteTimeDomainData(buf);
+    let sum = 0; for (const v of buf) sum += (v - 128) ** 2;
+    const rms = Math.sqrt(sum / buf.length) / 128, now = performance.now();
+    const lvl = $("#talk-level"); if (lvl) lvl.style.transform = `scale(${1 + Math.min(rms * 6, 0.6)})`;
+    if (rms > 0.035) { voiced += 1; quietSince = 0; if (voiced > 4) spoke = true; }
+    else if (spoke && !quietSince) quietSince = now;
+    if (spoke && quietSince && now - quietSince > 1500) { rec.stop(); return; }           // договорил
+    if (now - started > 60000) { if (spoke) rec.stop(); else { rec.onstop = null; rec.stop(); talkStatus("Я здесь. Тапни круг, когда захочешь продолжить.", "idle"); } return; }
+    if (!spoke && now - started > 12000 && !talk.nudged) { talk.nudged = true; talkStatus("Я слушаю — скажи, что на душе или как прошёл день.", "listening"); }
+    talk.raf = requestAnimationFrame(loop);
+  };
+  loop();
+}
+
+async function talkSend(blob) {
+  talkStatus("Думаю…", "thinking");
+  $("#talk-text").textContent = "";
+  try { await api("voice", { body: blob, headers: { "Content-Type": blob.type.split(";")[0] } }); }
+  catch (err) { talkStatus(err.message, "idle"); return; }
+  const deadline = Date.now() + 200000;
+  while (talk.on && Date.now() < deadline) {      // ответ придёт в журнал — ждём новое сообщение Арвикса
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const r = await api("messages");
+      const fresh = r.messages.filter((m) => m.id > talk.lastId);
+      if (fresh.length) talk.lastId = Math.max(...fresh.map((m) => m.id));
+      const mine = fresh.filter((m) => m.who === "me").pop();
+      if (mine && $("#talk-text")) $("#talk-text").innerHTML = `<div class="muted small">ты: ${esc(mine.text.replace(/^🎙\s*/, ""))}</div>`;
+      const answer = fresh.filter((m) => m.who === "arvix").map((m) => m.text).join("\n");
+      if (answer) { state.messages = r.messages; await talkSpeak(answer); return; }
+    } catch (_) { /* сеть моргнула — ждём дальше */ }
+  }
+  if (talk.on) talkStatus("Ответа нет — голова, похоже, недоступна. Тапни круг, чтобы попробовать ещё.", "idle");
+}
+
+function stopSpeaking() {
+  try { if ("speechSynthesis" in window) speechSynthesis.cancel(); } catch (_) { /* нет */ }
+  if (talk.audio) { talk.audio.pause(); talk.audio = null; }
+}
+
+async function talkSpeak(text) {
+  if (!talk.on) return;
+  const box = $("#talk-text"); if (box) box.innerHTML += `<div class="talk-answer">${esc(text)}</div>`;
+  talkStatus("Говорю… (тап — перебить)", "speaking");
+  const clean = text.replace(/https?:\/\/\S+/g, "").replace(/[*_`#>|~=\[\]]/g, "").replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "");
+  const done = () => { if (talk.on && talk.phase === "speaking") talkListen(); };
+  const voice = talk.voice || talkVoices();
+  if (voice) {
+    const parts = clean.match(/[^.!?…\n]+[.!?…]*/g) || [clean];
+    parts.forEach((p, i) => {
+      const u = new SpeechSynthesisUtterance(p.trim()); u.voice = voice; u.lang = voice.lang; u.rate = 1.05;
+      if (i === parts.length - 1) u.onend = done;
+      speechSynthesis.speak(u);
+    });
+    return;
+  }
+  if (state.data && state.data.server_tts) {
+    try {
+      const res = await fetch("/api/tts", { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ text: clean }) });
+      if (res.ok) {
+        talk.audio = new Audio(URL.createObjectURL(await res.blob()));
+        talk.audio.onended = done; await talk.audio.play(); return;
+      }
+    } catch (_) { /* упадём в текст */ }
+  }
+  talkStatus("Голоса для озвучки нет — читай ответ. Слушаю дальше через пару секунд.", "speaking");
+  setTimeout(done, Math.min(8000, 1500 + clean.length * 25));
 }
 
 let recorder, chunks = [], recStart = 0;
@@ -446,8 +711,10 @@ async function toggleRecord() {
 // --- Заметки -----------------------------------------------------------------------------------
 function renderNotes() {
   if (state.note) { renderNote(); return; }
+  if (state.notesView === undefined) { try { state.notesView = localStorage.getItem("arvix_notes_view") || "list"; } catch (_) { state.notesView = "list"; } }
+  if (state.notesView === "graph" && !state.notesResults) { renderGraph(); return; }
   const list = state.notesList;
-  let html = `<div class="search"><input id="n-q" type="search" placeholder="Поиск по заметкам" value="${esc(state.notesQuery || "")}"></div>
+  let html = notesSwitch() + `<div class="search"><input id="n-q" type="search" placeholder="Поиск по заметкам" value="${esc(state.notesQuery || "")}"></div>
     <div class="card"><h3>Мысль в Inbox</h3><div class="field" style="margin:0"><textarea id="n-cap" rows="2" placeholder="Записать и не держать в голове"></textarea></div>
     <button class="pill primary" id="n-save" style="margin-top:8px">Записать</button></div>`;
   if (state.notesResults) {
@@ -457,7 +724,8 @@ function renderNotes() {
       `<div class="empty">Ничего не нашлось.</div>`;
   } else if (list) {
     const parts = state.notesDir ? state.notesDir.split("/") : [];
-    html += `<div class="crumbs"><button data-dir="">Хранилище</button>${parts.map((p, i) => ` / <button data-dir="${esc(parts.slice(0, i + 1).join("/"))}">${esc(p)}</button>`).join("")}</div>`;
+    html += `<div class="crumbs-row"><div class="crumbs"><button data-dir="">Хранилище</button>${parts.map((p, i) => ` / <button data-dir="${esc(parts.slice(0, i + 1).join("/"))}">${esc(p)}</button>`).join("")}</div>
+      <button class="pill" id="n-new">+ Заметка</button></div>`;
     html += list.dirs.map((d) => `<button class="list-item" data-dir="${esc(d.path)}"><span>📁</span><span class="grow">${esc(d.name)}</span><span class="muted">›</span></button>`).join("");
     html += list.files.map((f) => `<button class="list-item" data-path="${esc(f.path)}"><span>📄</span><span class="grow">${esc(f.name)}</span>
       <span class="muted small">${new Date(f.modified * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}</span></button>`).join("");
@@ -472,6 +740,8 @@ function renderNotes() {
     try { state.notesResults = (await api("notes/search?q=" + encodeURIComponent(state.notesQuery))).results; renderNotes(); } catch (err) { toast(err.message); }
   });
   $("#n-clear") && ($("#n-clear").onclick = () => { state.notesResults = null; state.notesQuery = ""; renderNotes(); });
+  $("#n-new") && ($("#n-new").onclick = newNote);
+  bindNotesSwitch();
   $("#n-save").onclick = async () => {
     const text = $("#n-cap").value.trim(); if (!text) return;
     try { const r = await api("capture", { json: { text } }); notify("success"); toast("Записано" + (r.path ? ": " + r.path : "")); $("#n-cap").value = ""; } catch (err) { toast(err.message); }
@@ -483,71 +753,620 @@ function renderNotes() {
   view.querySelectorAll("[data-path]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.path)));
 }
 
-async function openNote(path) {
-  try {
-    state.note = await api("note?path=" + encodeURIComponent(path));
-    renderNote(); window.scrollTo(0, 0);
-    if (TG) { TG.BackButton.show(); TG.BackButton.onClick(closeNote); }
-  } catch (err) { toast(err.message); }
-}
-function closeNote() {
-  state.note = null; if (TG) { TG.BackButton.offClick(closeNote); TG.BackButton.hide(); }
-  renderNotes();
+// --- Граф заметок: как в Obsidian + подсказки связей от Арвикса (D32) ---------------------------
+const GRAPH_COLORS = ["#8a5cf5", "#19b394", "#4f6bff", "#e8a317", "#e5484d", "#2fb7d6", "#d65db1", "#7cb342", "#ff8a3d", "#9aa3b2"];
+const graph = { data: null, nodes: [], edges: [], byId: new Map(), sel: null, hideDaily: true, query: "", local: false,
+  zoom: 1, ox: 0, oy: 0, alpha: 1, raf: 0, drag: null, colors: new Map() };
+
+async function loadGraph() {
+  try { graph.data = await api("graph"); buildGraph(); } catch (err) { toast(err.message); }
+  if (state.tab === "notes" && state.notesView === "graph" && !state.note) renderGraph();
 }
 
+function buildGraph() {
+  const d = graph.data; if (!d) return;
+  const old = new Map(graph.nodes.map((n) => [n.id, n]));
+  let nodes = d.nodes.filter((n) => !(graph.hideDaily && n.kind === "daily"));
+  let ids = new Set(nodes.map((n) => n.id));
+  let edges = d.edges.filter((e) => ids.has(e.s) && ids.has(e.t));
+  if (graph.local && graph.sel && ids.has(graph.sel)) {  // локальный граф: выбранная + 2 шага
+    const near = new Set([graph.sel]);
+    for (let step = 0; step < 2; step++) edges.forEach((e) => { if (near.has(e.s) || near.has(e.t)) { near.add(e.s); near.add(e.t); } });
+    nodes = nodes.filter((n) => near.has(n.id)); ids = near; edges = edges.filter((e) => near.has(e.s) && near.has(e.t));
+  }
+  graph.colors.clear();
+  const top = (n) => (n.folder || "").split("/")[0] || "·";
+  [...new Set(d.nodes.map(top))].sort().forEach((f, i) => graph.colors.set(f, GRAPH_COLORS[i % GRAPH_COLORS.length]));
+  graph.nodes = nodes.map((n, i) => {
+    const prev = old.get(n.id), a = (i / Math.max(1, nodes.length)) * Math.PI * 2, r = 60 + Math.random() * 120;
+    return { ...n, x: prev ? prev.x : Math.cos(a) * r, y: prev ? prev.y : Math.sin(a) * r, vx: 0, vy: 0,
+      r: 4 + Math.sqrt(n.degree) * 2.6, color: graph.colors.get(top(n)) };
+  });
+  graph.byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  graph.edges = edges.map((e) => ({ s: graph.byId.get(e.s), t: graph.byId.get(e.t) }));
+  graph.alpha = 1; graph.manual = false;
+}
+
+function renderGraph() {
+  const d = graph.data;
+  const sugg = d ? d.suggestions : [], orphans = d ? d.orphans : [], ghosts = d ? d.ghosts : [];
+  const name = (id) => id.split("/").pop().replace(/\.md$/, "");
+  const sel = graph.sel && graph.byId.get(graph.sel);
+  view.innerHTML = `${notesSwitch()}
+    <div class="graph-tools">
+      <input id="g-q" type="search" placeholder="Найти на графе" value="${esc(graph.query)}">
+      <button class="pill${graph.hideDaily ? " on" : ""}" id="g-daily" title="Отчёты дня">📅 ${graph.hideDaily ? "скрыты" : "видны"}</button>
+    </div>
+    <div class="graph-wrap"><canvas id="g-canvas" aria-label="Граф заметок"></canvas>
+      ${sel ? `<div class="graph-card"><div class="grow"><b>${esc(sel.title)}</b><div class="muted small">${esc(sel.folder || "корень")} · связей ${sel.degree}</div></div>
+        <button class="pill" id="g-local">${graph.local ? "Весь граф" : "Рядом"}</button><button class="pill primary" id="g-open">Открыть</button></div>` :
+        `<div class="graph-hint muted small">${d ? `${d.nodes.length} заметок · ${d.edges.length} связей` : "Строю граф…"} · тап — заметка, щипок — масштаб</div>`}
+    </div>
+    ${sugg.length ? `<div class="card"><h3>Арвикс предлагает связать</h3>
+      <p class="muted small">Заметки говорят об одном, но ссылок между ними нет. Связь — строка «Связи: [[…]]» в конце первой.</p>
+      ${sugg.map((s, i) => `<div class="sugg"><div class="grow"><button class="link" data-open="${esc(s.a)}">${esc(name(s.a))}</button> ↔
+        <button class="link" data-open="${esc(s.b)}">${esc(name(s.b))}</button>
+        <div class="muted small">общее: ${esc([...s.tags.map((t) => "#" + t), ...s.why].join(", "))}</div></div>
+        <button class="pill" data-link="${i}">Связать</button></div>`).join("")}</div>` : ""}
+    ${orphans.length ? `<details class="card"><summary><b>Одинокие заметки</b> <span class="muted">· ${orphans.length}</span></summary>
+      <p class="muted small">Ни одной связи — такую мысль потом не найти. Открой и сошлись на неё из близкой заметки.</p>
+      ${orphans.map((o) => `<button class="list-item" data-open="${esc(o)}"><span>📄</span><span class="grow">${esc(name(o))}</span></button>`).join("")}</details>` : ""}
+    ${ghosts.length ? `<details class="card"><summary><b>Ссылки без заметок</b> <span class="muted">· ${ghosts.length}</span></summary>
+      <p class="muted small">На них уже ссылаются, а заметки нет — хороший кандидат на следующую атомарную заметку.</p>
+      ${ghosts.map((g) => `<div class="sugg"><span class="grow">${esc(g.name)} <span class="muted small">· ссылок ${g.refs}</span></span>
+        <button class="pill" data-ghost="${esc(g.name)}">Создать</button></div>`).join("")}</details>` : ""}`;
+  bindNotesSwitch();
+  $("#g-daily").onclick = () => { graph.hideDaily = !graph.hideDaily; buildGraph(); renderGraph(); };
+  $("#g-q").addEventListener("input", (e) => { graph.query = e.target.value.trim().toLowerCase(); graph.alpha = Math.max(graph.alpha, 0.05); kickGraph(); });
+  $("#g-open") && ($("#g-open").onclick = () => openNote(graph.sel));
+  $("#g-local") && ($("#g-local").onclick = () => { graph.local = !graph.local; buildGraph(); renderGraph(); });
+  view.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.open)));
+  view.querySelectorAll("[data-link]").forEach((b) => b.addEventListener("click", async () => {
+    const s = sugg[+b.dataset.link]; b.disabled = true;
+    try { await api("note/link", { json: { a: s.a, b: s.b } }); notify("success"); toast("Связал: " + name(s.a) + " → " + name(s.b)); await loadGraph(); }
+    catch (err) { b.disabled = false; toast(err.message); }
+  }));
+  view.querySelectorAll("[data-ghost]").forEach((b) => b.addEventListener("click", async () => {
+    try { const n = await api("note/new", { json: { dir: state.notesDir, name: b.dataset.ghost } }); await openNote(n.path, { edit: true }); }
+    catch (err) { toast(err.message); }
+  }));
+  setupCanvas();
+  if (!d) loadGraph();
+}
+
+function setupCanvas() {
+  const canvas = $("#g-canvas"); if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  graph.ctx = ctx; graph.w = w; graph.h = h;
+  const css = getComputedStyle(document.documentElement);
+  graph.ink = { text: css.getPropertyValue("--text").trim() || "#ddd", muted: css.getPropertyValue("--muted").trim() || "#888",
+    line: css.getPropertyValue("--line").trim() || "#333", accent: css.getPropertyValue("--obs-accent").trim() || "#8a5cf5" };
+  const toWorld = (px, py) => [(px - w / 2 - graph.ox) / graph.zoom, (py - h / 2 - graph.oy) / graph.zoom];
+  const hit = (px, py) => {
+    const [x, y] = toWorld(px, py);
+    let best = null, bd = 1e9;
+    graph.nodes.forEach((n) => { const dd = (n.x - x) ** 2 + (n.y - y) ** 2; if (dd < bd && dd < (n.r + 10 / graph.zoom) ** 2) { bd = dd; best = n; } });
+    return best;
+  };
+  const pts = new Map();
+  canvas.onpointerdown = (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    const rect = canvas.getBoundingClientRect(), px = e.clientX - rect.left, py = e.clientY - rect.top;
+    pts.set(e.pointerId, { x: px, y: py });
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; graph.manual = true; graph.drag = { pinch: Math.hypot(a.x - b.x, a.y - b.y), zoom: graph.zoom }; return; }
+    const node = hit(px, py);
+    graph.drag = node ? { node, moved: false, px, py } : { pan: true, px, py, ox: graph.ox, oy: graph.oy, moved: false };
+  };
+  canvas.onpointermove = (e) => {
+    const rect = canvas.getBoundingClientRect(), px = e.clientX - rect.left, py = e.clientY - rect.top;
+    if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: px, y: py });
+    const g = graph.drag; if (!g) return;
+    if (g.pinch && pts.size === 2) { const [a, b] = [...pts.values()]; graph.zoom = Math.min(4, Math.max(0.25, g.zoom * Math.hypot(a.x - b.x, a.y - b.y) / g.pinch)); kickGraph(); return; }
+    if (Math.hypot(px - g.px, py - g.py) > 4) g.moved = true;
+    if (g.node && g.moved) { const [x, y] = toWorld(px, py); g.node.x = x; g.node.y = y; g.node.vx = g.node.vy = 0; graph.alpha = Math.max(graph.alpha, 0.3); kickGraph(); }
+    else if (g.pan && g.moved) { graph.manual = true; graph.ox = g.ox + px - g.px; graph.oy = g.oy + py - g.py; kickGraph(); }
+  };
+  canvas.onpointerup = canvas.onpointercancel = (e) => {
+    pts.delete(e.pointerId);
+    const g = graph.drag; graph.drag = null;
+    if (!g || g.pinch) return;
+    if (!g.moved) {  // тап
+      graph.sel = g.node ? g.node.id : null; haptic("soft");
+      if (!graph.sel) graph.local = false;
+      renderGraph();
+    }
+  };
+  canvas.onwheel = (e) => { e.preventDefault(); graph.manual = true; graph.zoom = Math.min(4, Math.max(0.25, graph.zoom * (e.deltaY < 0 ? 1.1 : 0.9))); kickGraph(); };
+  kickGraph();
+}
+
+function kickGraph() { if (!graph.raf) graph.raf = requestAnimationFrame(stepGraph); }
+
+/* Физика: отталкивание всех от всех, пружины по связям, притяжение к центру, затухание.
+ * Когда граф успокоился, кадры не рисуются — батарея не тратится. */
+function stepGraph() {
+  graph.raf = 0;
+  if (!$("#g-canvas") || state.tab !== "notes" || state.notesView !== "graph" || state.note) return;
+  const N = graph.nodes, a = graph.alpha;
+  if (a > 0.004) {
+    for (let i = 0; i < N.length; i++) {
+      const p = N[i];
+      for (let j = i + 1; j < N.length; j++) {
+        const q = N[j]; let dx = p.x - q.x, dy = p.y - q.y, d2 = dx * dx + dy * dy || 0.01;
+        if (d2 > 40000) continue;
+        const f = (700 / d2) * a; dx *= f; dy *= f; p.vx += dx; p.vy += dy; q.vx -= dx; q.vy -= dy;
+      }
+      const pull = p.degree ? 0.012 : 0.03;  // одинокие держатся ближе, как в Obsidian, а не улетают за край
+      p.vx -= p.x * pull * a; p.vy -= p.y * pull * a;
+    }
+    graph.edges.forEach(({ s, t }) => {
+      const dx = t.x - s.x, dy = t.y - s.y, d = Math.hypot(dx, dy) || 1, f = ((d - 70) / d) * 0.05 * a;
+      s.vx += dx * f; s.vy += dy * f; t.vx -= dx * f; t.vy -= dy * f;
+    });
+    N.forEach((n) => { if (graph.drag && graph.drag.node === n) return; n.vx *= 0.82; n.vy *= 0.82; n.x += n.vx; n.y += n.vy; });
+    graph.alpha *= 0.985;
+  }
+  drawGraph();
+  if (graph.alpha > 0.004 || graph.drag) graph.raf = requestAnimationFrame(stepGraph);
+}
+
+function fitGraph() {
+  if (graph.manual || !graph.nodes.length) return;  // человек сам двигал — не мешаем
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  graph.nodes.forEach((n) => { x0 = Math.min(x0, n.x - n.r); y0 = Math.min(y0, n.y - n.r); x1 = Math.max(x1, n.x + n.r); y1 = Math.max(y1, n.y + n.r); });
+  const pad = 36, zoom = Math.min(2, Math.max(0.25, Math.min((graph.w - pad * 2) / (x1 - x0 || 1), (graph.h - pad * 2) / (y1 - y0 || 1))));
+  graph.zoom += (zoom - graph.zoom) * 0.2;  // плавно, а не рывком
+  graph.ox += (-(x0 + x1) / 2 * graph.zoom - graph.ox) * 0.2; graph.oy += (-(y0 + y1) / 2 * graph.zoom - graph.oy) * 0.2;
+}
+
+function drawGraph() {
+  const { ctx, w, h, ink } = graph; if (!ctx) return;
+  fitGraph();
+  ctx.clearRect(0, 0, w, h);
+  ctx.save(); ctx.translate(w / 2 + graph.ox, h / 2 + graph.oy); ctx.scale(graph.zoom, graph.zoom);
+  const sel = graph.sel, q = graph.query;
+  const near = new Set();
+  if (sel) graph.edges.forEach((e) => { if (e.s.id === sel) near.add(e.t.id); if (e.t.id === sel) near.add(e.s.id); });
+  const match = (n) => q && (n.title.toLowerCase().includes(q) || n.name.toLowerCase().includes(q) || n.tags.some((t) => t.includes(q.replace(/^#/, ""))));
+  const dim = (n) => (sel && n.id !== sel && !near.has(n.id)) || (q && !match(n));
+  ctx.lineWidth = 1 / graph.zoom;
+  graph.edges.forEach(({ s, t }) => {
+    const on = sel && (s.id === sel || t.id === sel);
+    ctx.strokeStyle = on ? ink.accent : ink.line; ctx.globalAlpha = on ? 0.9 : (sel || q ? 0.25 : 0.7);
+    ctx.lineWidth = (on ? 2 : 1) / graph.zoom;
+    ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(t.x, t.y); ctx.stroke();
+  });
+  graph.nodes.forEach((n) => {
+    ctx.globalAlpha = dim(n) ? 0.18 : 1;
+    ctx.fillStyle = n.degree ? n.color : ink.muted;
+    ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2); ctx.fill();
+    if (n.id === sel || match(n)) { ctx.strokeStyle = ink.accent; ctx.lineWidth = 3 / graph.zoom; ctx.stroke(); }
+  });
+  ctx.font = `${12 / graph.zoom}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.fillStyle = ink.text;
+  graph.nodes.forEach((n) => {
+    const show = n.id === sel || near.has(n.id) || match(n) || graph.zoom > 1.3 || n.degree >= 4;
+    if (!show) return;
+    ctx.globalAlpha = dim(n) ? 0.25 : 0.95;
+    ctx.fillText(n.title.length > 26 ? n.title.slice(0, 25) + "…" : n.title, n.x, n.y + n.r + 13 / graph.zoom);
+  });
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+
+function notesSwitch() {
+  return `<div class="seg notes-switch"><button type="button" data-view="list" class="${state.notesView !== "graph" ? "on" : ""}">▤ Папки</button>
+    <button type="button" data-view="graph" class="${state.notesView === "graph" ? "on" : ""}">◉ Граф</button></div>`;
+}
+function bindNotesSwitch() {
+  view.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => {
+    state.notesView = b.dataset.view; haptic("soft");
+    try { localStorage.setItem("arvix_notes_view", state.notesView); } catch (_) { /* приватный режим */ }
+    renderNotes();
+  }));
+}
+
+async function openNote(path, opts = {}) {
+  try {
+    state.note = await api("note?path=" + encodeURIComponent(path));
+    state.noteEdit = !!opts.edit;
+    renderNote(); if (!opts.keepScroll) window.scrollTo(0, 0);
+    if (TG) { TG.BackButton.show(); TG.BackButton.offClick(noteBack); TG.BackButton.onClick(noteBack); }
+  } catch (err) { toast(err.message); }
+}
+function noteBack() {
+  if (state.noteEdit) { leaveEditor(); return; }
+  closeNote();
+}
+function closeNote() {
+  state.note = null; state.noteEdit = false;
+  if (TG) { TG.BackButton.offClick(noteBack); TG.BackButton.hide(); }
+  state.notesList = null; renderNotes();
+  api("notes?dir=" + encodeURIComponent(state.notesDir)).then((r) => { state.notesList = r; if (state.tab === "notes" && !state.note) renderNotes(); }).catch(() => {});
+}
+
+const noteName = (path) => String(path || "").split("/").pop().replace(/\.md$/, "");
+const DRAFT_KEY = (path) => "arvix_draft:" + path;
+const draftGet = (path) => { try { return JSON.parse(localStorage.getItem(DRAFT_KEY(path)) || "null"); } catch (_) { return null; } };
+const draftSet = (path, d) => { try { d ? localStorage.setItem(DRAFT_KEY(path), JSON.stringify(d)) : localStorage.removeItem(DRAFT_KEY(path)); } catch (_) { /* приватный режим */ } };
+
 function renderNote() {
+  if (state.noteEdit) { renderEditor(); return; }
   const n = state.note;
-  view.innerHTML = `<div class="crumbs"><button id="n-back">‹ Назад</button> <span>${esc(n.path)}</span></div>
-    <div class="card md">${markdown(n.text)}</div>`;
+  const doc = obsidian(n.text, n.tasks || {});
+  const folder = n.path.includes("/") ? n.path.slice(0, n.path.lastIndexOf("/")) : "Хранилище";
+  view.innerHTML = `<div class="note-bar"><button id="n-back" class="note-back">‹ ${esc(folder.split("/").pop())}</button>
+      <button id="n-edit" class="icon-btn" aria-label="Править">✎</button></div>
+    <article class="obs">
+      <h1 class="obs-title">${esc(noteName(n.path))}</h1>
+      ${doc.props.length ? propsHtml(doc.props) : ""}
+      ${doc.html || `<p class="muted">Пустая заметка. ✎ — написать.</p>`}
+    </article>`;
   $("#n-back").onclick = closeNote;
+  $("#n-edit").onclick = () => { state.noteEdit = true; renderNote(); };
+  bindNote();
+}
+
+function propsHtml(props) {
+  const icon = (p) => (/date|дата/i.test(p.key) || /^\d{4}-\d{2}-\d{2}/.test(p.value) ? "📅" : p.list ? "☰" : /^-?\d+([.,]\d+)?$/.test(p.value) ? "#" : /^(true|false)$/.test(p.value) ? "☑" : "≡");
+  const val = (p) => {
+    if (p.list) return p.list.length ? p.list.map((v) => `<span class="obs-tag">${esc(v)}</span>`).join(" ") : `<span class="obs-empty">Пусто</span>`;
+    return p.value ? esc(p.value) : `<span class="obs-empty">Пусто</span>`;
+  };
+  return `<details class="obs-props" open><summary>Свойства</summary>
+    ${props.map((p) => `<button class="obs-prop" data-prop="${esc(p.key)}" data-line="${p.line}" ${p.list ? "data-list=1" : ""}>
+      <span class="obs-prop-key"><i>${icon(p)}</i>${esc(p.key)}</span><span class="obs-prop-val">${val(p)}</span></button>`).join("")}
+  </details>`;
+}
+
+function bindNote() {
+  const n = state.note;
+  view.querySelectorAll(".obs input[data-line]").forEach((box) => box.addEventListener("click", async (e) => {
+    e.preventDefault(); haptic();
+    try {
+      const r = await api("note/toggle", { json: { path: n.path, line: +box.dataset.line, sha: n.sha } });
+      if (r.task) { await closeTaskFromNote(r.task); return; }
+      state.note = r; renderNote(); notify("success");
+    } catch (err) { await noteError(err); }
+  }));
   view.querySelectorAll("[data-wiki]").forEach((a) => a.addEventListener("click", async (e) => {
     e.preventDefault();
     try {
       const r = await api("notes/search?q=" + encodeURIComponent(a.dataset.wiki));
       const name = a.dataset.wiki.toLowerCase();
       const hit = r.results.find((x) => x.path.toLowerCase().endsWith("/" + name + ".md") || x.path.toLowerCase() === name + ".md") || r.results[0];
-      if (hit) openNote(hit.path); else toast("Заметка не найдена");
+      if (hit) openNote(hit.path); else toast("Заметки «" + a.dataset.wiki + "» ещё нет");
     } catch (err) { toast(err.message); }
   }));
+  view.querySelectorAll("[data-tag]").forEach((t) => t.addEventListener("click", async () => {
+    state.note = null; state.notesQuery = "#" + t.dataset.tag;
+    try { state.notesResults = (await api("notes/search?q=" + encodeURIComponent(t.dataset.tag))).results; } catch (_) { state.notesResults = []; }
+    if (TG) { TG.BackButton.offClick(noteBack); TG.BackButton.hide(); }
+    renderNotes();
+  }));
+  view.querySelectorAll(".obs-prop").forEach((row) => row.addEventListener("click", () => editProp(row)));
+  view.querySelectorAll(".callout.foldable > .callout-title").forEach((t) => t.addEventListener("click", () => t.parentElement.classList.toggle("folded")));
+  hydrateAssets(view);
 }
 
-/* Markdown → HTML. Сначала экранирование, потом разметка: из заметки в страницу не попадёт ни один тег. */
-function markdown(src) {
-  src = String(src || "").replace(/^---\n[\s\S]*?\n---\n?/, "");
-  const blocks = [];
-  src = src.replace(/```[^\n]*\n([\s\S]*?)```/g, (_, code) => { blocks.push(`<pre><code>${esc(code)}</code></pre>`); return `\u0000${blocks.length - 1}\u0000`; });
-  const inline = (s) => esc(s)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/__([^_]+)__/g, "<b>$1</b>")
-    .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<i>$2</i>")
-    .replace(/==([^=]+)==/g, "<mark>$1</mark>")
-    .replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_, name, alias) => `<a href="#" data-wiki="${name.trim()}">${alias || name}</a>`)
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  const out = [];
-  let list = null;
-  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
-  for (const line of src.split("\n")) {
-    let m;
-    if ((m = line.match(/^\u0000(\d+)\u0000$/))) { closeList(); out.push(blocks[+m[1]]); }
-    else if ((m = line.match(/^(#{1,6})\s+(.*)/))) { closeList(); const l = Math.min(4, m[1].length); out.push(`<h${l}>${inline(m[2])}</h${l}>`); }
-    else if ((m = line.match(/^\s*[-*+]\s+\[( |x|X)\]\s+(.*)/))) { if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; } out.push(`<li>${m[1].trim() ? "☑" : "☐"} ${inline(m[2])}</li>`); }
-    else if ((m = line.match(/^\s*[-*+]\s+(.*)/))) { if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; } out.push(`<li>${inline(m[1])}</li>`); }
-    else if ((m = line.match(/^\s*\d+[.)]\s+(.*)/))) { if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; } out.push(`<li>${inline(m[1])}</li>`); }
-    else if ((m = line.match(/^>\s?(.*)/))) { closeList(); out.push(`<blockquote>${inline(m[1].replace(/^\[!\w+\]\s*/, ""))}</blockquote>`); }
-    else if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { closeList(); out.push("<hr>"); }
-    else if (/^\|.*\|\s*$/.test(line)) {
-      if (list !== "table") { closeList(); out.push("<table>"); list = "table"; }
-      if (/^\|[\s:|-]+\|\s*$/.test(line)) continue;
-      out.push(`<tr>${line.trim().slice(1, -1).split("|").map((c) => `<td>${inline(c.trim())}</td>`).join("")}</tr>`);
-    }
-    else if (!line.trim()) { closeList(); }
-    else { closeList(); out.push(`<p>${inline(line)}</p>`); }
+/* Галочка у строки-задачи Арвикса закрывает задачу тем же путём, что ✓ на «Сегодня». */
+async function closeTaskFromNote(t) {
+  const reopen = () => openNote(state.note.path, { keepScroll: true });
+  if (t.proof && t.proof !== "confirm") { openReportSheet(t, reopen); return; }
+  const r = await api(`tasks/${t.id}/done`, { json: {} });
+  notify("success"); toast(`✓ ${t.title} · +${r.xp} XP`);
+  await reopen();
+}
+
+async function noteError(err) {
+  if (err.data && err.data.conflict) {
+    toast("Заметка изменилась на другом устройстве — открыл свежую");
+    state.note = { ...state.note, text: err.data.text, sha: err.data.sha };
+    await openNote(state.note.path, { keepScroll: true });
+    return;
   }
-  closeList();
-  return out.join("\n");
+  notify("error"); toast(err.message);
+}
+
+async function editProp(row) {
+  const n = state.note, line = +row.dataset.line, key = row.dataset.prop;
+  const lines = n.text.split("\n");
+  if (row.dataset.list) { state.noteEdit = true; renderNote(); return; }  // списки — в исходнике
+  const current = lines[line].slice(lines[line].indexOf(":") + 1).trim();
+  const value = prompt(key, current);
+  if (value === null || value.trim() === current) return;
+  lines[line] = `${key}: ${value.trim()}`;
+  try { state.note = await api("note", { json: { path: n.path, text: lines.join("\n"), sha: n.sha } }); renderNote(); notify("success"); }
+  catch (err) { await noteError(err); }
+}
+
+// --- редактор: исходник, как «Режим исходного кода» в Obsidian ---------------------------------
+const TOOLS = [
+  ["☐", "Задача", { line: "- [ ] " }], ["H", "Заголовок", { line: "## " }], ["B", "Жирный", { wrap: "**" }], ["I", "Курсив", { wrap: "*" }],
+  ["•", "Список", { line: "- " }], ["1.", "Нумерация", { line: "1. " }], ["[[ ]]", "Ссылка", { wrap: "[[", end: "]]" }],
+  ["==", "Выделить", { wrap: "==" }], ["❝", "Цитата", { line: "> " }], ["#", "Тег", { insert: "#" }],
+];
+
+function renderEditor() {
+  const n = state.note;
+  const draft = draftGet(n.path);
+  const text = draft && draft.sha === n.sha ? draft.text : n.text;
+  view.innerHTML = `<div class="note-bar editing"><button id="e-cancel" class="note-back">Отмена</button>
+      <span class="note-bar-title">${esc(noteName(n.path))}</span><button id="e-save" class="pill primary">Сохранить</button></div>
+    <div class="md-tools">${TOOLS.map(([label, title], i) => `<button type="button" data-tool="${i}" title="${title}" aria-label="${title}">${esc(label)}</button>`).join("")}</div>
+    <textarea id="e-text" class="md-source" spellcheck="true" autocapitalize="sentences">${esc(text)}</textarea>
+    ${draft && draft.sha === n.sha && draft.text !== n.text ? `<p class="muted small">Восстановлен несохранённый черновик.</p>` : ""}`;
+  const ta = $("#e-text");
+  const grow = () => { ta.style.height = "auto"; ta.style.height = Math.max(ta.scrollHeight + 4, window.innerHeight * 0.6) + "px"; };
+  grow();
+  ta.addEventListener("input", () => { grow(); draftSet(n.path, { sha: n.sha, text: ta.value }); });
+  ta.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const start = ta.selectionStart, before = ta.value.slice(0, start), line = before.slice(before.lastIndexOf("\n") + 1);
+    const m = line.match(/^(\s*)([-*+] \[[ xX]\] |[-*+] |(\d+)[.)] |> )/);
+    if (!m) return;
+    e.preventDefault();
+    if (line.trim() === m[2].trim()) { ta.setRangeText("", start - line.length, start, "end"); return; }  // пустой пункт — выйти из списка
+    const next = m[3] ? m[2].replace(/^\d+/, String(+m[3] + 1)) : m[2].replace(/\[[xX]\]/, "[ ]");
+    ta.setRangeText("\n" + m[1] + next, start, ta.selectionEnd, "end");
+    ta.dispatchEvent(new Event("input"));
+  });
+  view.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("pointerdown", (e) => {
+    e.preventDefault();  // не забирать фокус у текста — клавиатура не прячется
+    applyTool(ta, TOOLS[+b.dataset.tool][2]); haptic("soft");
+  }));
+  $("#e-cancel").onclick = leaveEditor;
+  $("#e-save").onclick = saveEditor;
+}
+
+function applyTool(ta, tool) {
+  const { selectionStart: s, selectionEnd: e, value } = ta;
+  if (tool.line) {
+    const ls = value.lastIndexOf("\n", s - 1) + 1;
+    const cur = value.slice(ls, value.indexOf("\n", ls) === -1 ? value.length : value.indexOf("\n", ls));
+    if (cur.startsWith(tool.line)) ta.setRangeText(cur.slice(tool.line.length), ls, ls + cur.length, "end");
+    else ta.setRangeText(tool.line + cur.replace(/^(#{1,6} |[-*+] \[[ xX]\] |[-*+] |\d+[.)] |> )/, ""), ls, ls + cur.length, "end");
+  } else if (tool.wrap) {
+    const end = tool.end || tool.wrap, sel = value.slice(s, e);
+    ta.setRangeText(tool.wrap + sel + end, s, e, "select");
+    if (!sel) ta.setSelectionRange(s + tool.wrap.length, s + tool.wrap.length);
+    else ta.setSelectionRange(s + tool.wrap.length, e + tool.wrap.length);
+  } else ta.setRangeText(tool.insert, s, e, "end");
+  ta.focus(); ta.dispatchEvent(new Event("input"));
+}
+
+async function saveEditor() {
+  const n = state.note, text = $("#e-text").value;
+  if (text === n.text) { state.noteEdit = false; draftSet(n.path, null); renderNote(); return; }
+  try {
+    state.note = await api("note", { json: { path: n.path, text, sha: n.sha } });
+    draftSet(n.path, null); state.noteEdit = false; renderNote(); notify("success"); toast("Сохранено");
+  } catch (err) {
+    if (!(err.data && err.data.conflict)) { notify("error"); toast(err.message); return; }
+    openSheet(`<h2>Заметка изменилась</h2>
+      <p class="muted small">Пока ты правил, её изменили на другом устройстве (Obsidian на ноутбуке или Арвикс). Выбери версию — вторая не пропадёт молча.</p>
+      <div class="field"><label>Их версия</label><pre class="conflict">${esc(err.data.text.slice(0, 1500))}</pre></div>
+      <div class="sheet-actions">
+        <button class="btn primary" id="c-mine">Оставить мою (их уйдёт)</button>
+        <button class="btn" id="c-theirs">Взять их (моя — в Inbox)</button>
+      </div>`, () => {
+      $("#c-mine").onclick = async () => {
+        try { state.note = await api("note", { json: { path: n.path, text, sha: err.data.sha } }); draftSet(n.path, null); state.noteEdit = false; closeSheet(); renderNote(); toast("Сохранено"); }
+        catch (e2) { toast(e2.message); }
+      };
+      $("#c-theirs").onclick = async () => {
+        try { await api("capture", { json: { text: `Черновик «${noteName(n.path)}» (не сохранён из-за конфликта):\n${text}` } }); } catch (_) { /* Inbox — запасной путь */ }
+        draftSet(n.path, null); state.noteEdit = false; closeSheet(); openNote(n.path); toast("Взял их версию, твою — в Inbox");
+      };
+    });
+  }
+}
+
+function leaveEditor() {
+  const ta = $("#e-text"), n = state.note;
+  if (ta && ta.value !== n.text && !confirm("Выйти без сохранения? Черновик останется на этом устройстве.")) return;
+  state.noteEdit = false; renderNote();
+}
+
+async function newNote() {
+  const name = prompt("Название новой заметки" + (state.notesDir ? ` в «${state.notesDir.split("/").pop()}»` : ""));
+  if (!name || !name.trim()) return;
+  try {
+    const n = await api("note/new", { json: { dir: state.notesDir, name: name.trim() } });
+    await openNote(n.path, { edit: true });
+    setTimeout(() => { const ta = $("#e-text"); if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }, 80);
+  } catch (err) { toast(err.message); }
+}
+
+// --- вложения ![[…]]: картинка грузится с ключом в заголовке, а не в URL -----------------------
+const assetCache = new Map();
+function hydrateAssets(root) {
+  root.querySelectorAll("[data-asset]").forEach(async (el) => {
+    const path = el.dataset.asset;
+    try {
+      if (!assetCache.has(path)) {
+        const res = await fetch("/api/file?path=" + encodeURIComponent(path), { headers: authHeaders() });
+        if (!res.ok) throw new Error();
+        assetCache.set(path, URL.createObjectURL(await res.blob()));
+      }
+      if (el.tagName === "IMG") el.src = assetCache.get(path);
+      else { el.href = assetCache.get(path); el.target = "_blank"; }
+    } catch (_) { el.replaceWith(Object.assign(document.createElement("span"), { className: "obs-missing", textContent: "⚠ " + path })); }
+  });
+}
+
+/* Markdown → HTML в стиле режима чтения Obsidian. Сначала экранирование, потом разметка:
+ * из заметки в страницу не попадёт ни один тег. Номера строк сохраняются — по ним галочка
+ * правит ровно ту строку файла. */
+const CALLOUTS = { note: "✎", info: "ℹ", tip: "💡", hint: "💡", important: "💡", success: "✓", check: "✓", done: "✓", question: "?", help: "?",
+  faq: "?", warning: "⚠", caution: "⚠", attention: "⚠", failure: "✕", fail: "✕", missing: "✕", danger: "⚡", error: "⚡", bug: "🐞",
+  example: "☰", quote: "❝", cite: "❝", abstract: "☰", summary: "☰", tldr: "☰", todo: "☐" };
+const IMG_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
+
+function inlineMd(s) {
+  const keep = [];
+  const hold = (html) => { keep.push(html); return `\u0001${keep.length - 1}\u0001`; };
+  s = esc(s)
+    .replace(/`([^`]+)`/g, (_, c) => hold(`<code>${c}</code>`))
+    .replace(/!\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|(\d+)(?:x\d+)?)?\]\]/g, (_, name, w) => hold(IMG_EXT.test(name.trim())
+      ? `<img class="obs-img" data-asset="${name.trim()}" alt="${name.trim()}"${w ? ` width="${w}"` : ""}>`
+      : /\.pdf$/i.test(name.trim()) ? `<a class="obs-file" data-asset="${name.trim()}" href="#">📄 ${name.trim()}</a>`
+      : `<a href="#" class="obs-link" data-wiki="${name.trim()}">↳ ${name.trim()}</a>`))
+    .replace(/\[\[([^\]|#]+)(?:#([^\]|]*))?(?:\|([^\]]+))?\]\]/g, (_, name, head, alias) =>
+      hold(`<a href="#" class="obs-link" data-wiki="${name.trim()}">${alias || name + (head ? " › " + head : "")}</a>`))
+    .replace(/!\[([^\]]*)\]\((https:\/\/[^)\s]+)\)/g, (_, alt, url) => hold(`<img class="obs-img" src="${url}" alt="${alt}" loading="lazy">`))
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, t, url) => hold(`<a href="${url}" target="_blank" rel="noopener" class="obs-ext">${t}</a>`))
+    .replace(/(^|[\s(])(https?:\/\/[^\s<]+[^\s<.,;:!?)])/g, (_, pre, url) => pre + hold(`<a href="${url}" target="_blank" rel="noopener" class="obs-ext">${url}</a>`))
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/__([^_]+)__/g, "<b>$1</b>")
+    .replace(/(^|[^*\w])\*([^*\n]+)\*/g, "$1<i>$2</i>").replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, "$1<i>$2</i>")
+    .replace(/~~([^~]+)~~/g, "<s>$1</s>")
+    .replace(/==([^=]+)==/g, "<mark>$1</mark>")
+    .replace(/(^|\s)#([\p{L}\d_/-]*[\p{L}_/-][\p{L}\d_/-]*)/gu, (_, pre, tag) => `${pre}<a href="#" class="obs-tag" data-tag="${tag}">#${tag}</a>`);
+  return s.replace(/\u0001(\d+)\u0001/g, (_, i) => keep[+i]);
+}
+
+function frontmatter(lines) {
+  if (lines[0] !== "---") return { props: [], start: 0 };
+  const end = lines.indexOf("---", 1);
+  if (end === -1) return { props: [], start: 0 };
+  const props = [];
+  for (let i = 1; i < end; i++) {
+    const m = lines[i].match(/^([^\s:#][^:]*):\s*(.*)$/);
+    if (m) {
+      let value = m[2].trim().replace(/^["']|["']$/g, "");
+      const p = { key: m[1].trim(), value, line: i };
+      if (/^\[.*\]$/.test(value)) p.list = value.slice(1, -1).split(",").map((v) => v.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+      props.push(p);
+    } else if (props.length && /^\s+-\s*/.test(lines[i])) {
+      const last = props[props.length - 1];
+      last.list = (last.list || []).concat(lines[i].replace(/^\s+-\s*/, "").replace(/^["']|["']$/g, ""));
+    }
+  }
+  return { props, start: end + 1 };
+}
+
+function obsidian(src, tasks = {}, nested = false) {
+  const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
+  const fm = frontmatter(lines);
+  const out = [];
+  const stack = [];  // открытые списки: {tag, indent}
+  let table = null, fence = null, comment = false, para = [];
+  const flushPara = () => { if (para.length) { out.push(`<p>${para.map(inlineMd).join("<br>")}</p>`); para = []; } };
+  const closeLists = (indent = -1) => {
+    while (stack.length && stack[stack.length - 1].indent > indent) out.push(`</li></${stack.pop().tag}>`);
+  };
+  const closeTable = () => { if (table) { out.push(table.join("") + "</tbody></table></div>"); table = null; } };
+  const closeAll = () => { flushPara(); closeLists(); closeTable(); };
+
+  for (let i = fm.start; i < lines.length; i++) {
+    let line = lines[i];
+    if (fence) {
+      if (/^\s*(```|~~~)/.test(line)) { out.push(`<pre class="obs-code"${fence.lang ? ` data-lang="${esc(fence.lang)}"` : ""}><code>${esc(fence.body.join("\n"))}</code></pre>`); fence = null; }
+      else fence.body.push(line);
+      continue;
+    }
+    // комментарии Obsidian %% … %% и HTML <!-- … --> в режиме чтения не видны
+    if (comment) { if (/%%|-->/.test(line)) comment = false; continue; }
+    if (/^\s*(%%|<!--)/.test(line)) { if (!/(%%|-->)\s*$/.test(line.replace(/^\s*(%%|<!--)/, ""))) comment = true; continue; }
+    line = line.replace(/%%.*?%%/g, "").replace(/<!--.*?-->/g, "");
+
+    let m;
+    if ((m = line.match(/^\s*(```|~~~)\s*([\w+-]*)/))) { closeAll(); fence = { lang: m[2], body: [] }; continue; }
+    if (!line.trim()) { flushPara(); closeTable(); if (!(lines[i + 1] || "").match(/^\s*([-*+]|\d+[.)])\s/)) closeLists(); continue; }
+    if ((m = line.match(/^(#{1,6})\s+(.*)/))) { closeAll(); out.push(`<h${m[1].length} class="obs-h">${inlineMd(m[2].replace(/\s+#+\s*$/, ""))}</h${m[1].length}>`); continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { closeAll(); out.push("<hr>"); continue; }
+    if ((m = line.match(/^>\s?(.*)/))) {
+      closeAll();
+      const body = [m[1]];
+      while (i + 1 < lines.length && /^>/.test(lines[i + 1])) body.push(lines[++i].replace(/^>\s?/, ""));
+      const head = body[0].match(/^\[!(\w+)\]([+-]?)\s*(.*)$/);
+      if (head) {
+        const kind = head[1].toLowerCase(), fold = head[2];
+        const title = head[3] || kind.charAt(0).toUpperCase() + kind.slice(1);
+        out.push(`<div class="callout c-${esc(kind)}${fold ? " foldable" : ""}${fold === "-" ? " folded" : ""}">
+          <div class="callout-title"><span>${CALLOUTS[kind] || "✎"}</span> ${inlineMd(title)}${fold ? `<i class="fold">▾</i>` : ""}</div>
+          <div class="callout-body">${obsidian(body.slice(1).join("\n"), {}, true).html}</div></div>`);
+      } else out.push(`<blockquote>${obsidian(body.join("\n"), {}, true).html}</blockquote>`);
+      continue;
+    }
+    if (/^\|.*\|\s*$/.test(line)) {
+      flushPara(); closeLists();
+      const cells = line.trim().slice(1, -1).split("|").map((c) => c.trim());
+      if (!table) {
+        const header = /^\|[\s:|-]+\|\s*$/.test(lines[i + 1] || "");
+        table = [`<div class="obs-table"><table>${header ? `<thead><tr>${cells.map((c) => `<th>${inlineMd(c)}</th>`).join("")}</tr></thead>` : ""}<tbody>`];
+        if (header) { i++; continue; }
+      }
+      table.push(`<tr>${cells.map((c) => `<td>${inlineMd(c)}</td>`).join("")}</tr>`);
+      continue;
+    }
+    if ((m = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/)) || (m = line.match(/^(\s*)([-*+])()$/))) {
+      flushPara(); closeTable();
+      const indent = m[1].replace(/\t/g, "    ").length, tag = /\d/.test(m[2]) ? "ol" : "ul";
+      closeLists(indent);
+      if (stack.length && stack[stack.length - 1].indent === indent && stack[stack.length - 1].tag !== tag) out.push(`</li></${stack.pop().tag}>`);
+      const top = stack[stack.length - 1];
+      if (!top || top.indent < indent) { out.push(`<${tag}${tag === "ol" ? ` start="${parseInt(m[2], 10)}"` : ""}>`); stack.push({ tag, indent }); }
+      else out.push("</li>");
+      const task = m[3].match(/^\[([ xX/-])\]\s?(.*)$/);
+      if (task) {
+        const checked = task[1] !== " ", linked = tasks[String(i)];
+        out.push(`<li class="task-item${checked ? " is-checked" : ""}"><label class="obs-check"><input type="checkbox"${nested ? " disabled" : ` data-line="${i}"`}${checked ? " checked" : ""}
+          aria-label="${checked ? "Снять отметку" : "Отметить"}"></label><span class="task-text">${inlineMd(task[2]) || "&nbsp;"}${linked ? ` <span class="chip accent small">задача${linked.status === "done" ? " ✓" : ""}</span>` : ""}</span>`);
+      } else out.push(`<li>${inlineMd(m[3])}`);
+      continue;
+    }
+    if (stack.length && /^\s+\S/.test(line)) { out.push(`<br>${inlineMd(line.trim())}`); continue; }
+    closeLists(); closeTable();
+    para.push(line);
+  }
+  if (fence) out.push(`<pre class="obs-code"><code>${esc(fence.body.join("\n"))}</code></pre>`);
+  closeAll();
+  return { props: fm.props, html: out.join("\n") };
 }
 
 // --- Прогресс ----------------------------------------------------------------------------------
+/* Год квадратами, как на GitHub: колонка — неделя (пн сверху), справа — сегодня.
+ * Цвет считает код по сделанной работе (web/api.py::heat_level), серия — по выполнению ≥ 70 %. */
+const MONTHS_SHORT = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
+function heatCard(heat) {
+  if (!heat || !heat.days.length) return "";
+  const weeks = [];
+  heat.days.forEach((d, i) => { (weeks[Math.floor(i / 7)] ||= []).push(d); });
+  let lastMonth = -1;
+  const months = weeks.map((w) => {
+    const m = new Date(w[0].date).getMonth();
+    const label = m !== lastMonth && new Date(w[0].date).getDate() <= 7 ? MONTHS_SHORT[m] : "";
+    if (label) lastMonth = m;
+    return `<span>${label}</span>`;
+  }).join("");
+  const today = heat.days[heat.days.length - 1].date;
+  const cells = weeks.map((w) => `<div class="heat-col">${w.map((d) => `<button class="heat-cell l${d.level}${d.rest ? " rest" : ""}${d.date === today ? " today" : ""}"
+    data-heat="${d.date}" aria-label="${esc(d.date)}"></button>`).join("")}</div>`).join("");
+  return `<div class="card heat-card"><div class="heat-head">
+      <div><b class="heat-big">${heat.streak}</b><span class="muted small"> дн подряд</span></div>
+      <div class="muted small">лучшая ${heat.best} · за год ${heat.active} дн с работой</div></div>
+    <div class="heat-scroll" id="heat-scroll"><div class="heat-grid">
+      <div class="heat-days"><span></span><span>пн</span><span></span><span>ср</span><span></span><span>пт</span><span></span></div>
+      <div><div class="heat-months">${months}</div><div class="heat-cols">${cells}</div></div></div></div>
+    <div class="heat-foot"><span class="muted small" id="heat-info">Тап по дню — что в нём было</span>
+      <span class="heat-legend muted small">меньше <i class="heat-cell l0"></i><i class="heat-cell l1"></i><i class="heat-cell l2"></i><i class="heat-cell l3"></i><i class="heat-cell l4"></i> больше</span></div></div>`;
+}
+function bindHeat(heat) {
+  const box = $("#heat-scroll"); if (!box || !heat) return;
+  box.scrollLeft = box.scrollWidth;  // сегодня — справа, как на GitHub
+  const byDate = new Map(heat.days.map((d) => [d.date, d]));
+  box.querySelectorAll("[data-heat]").forEach((c) => c.addEventListener("click", () => {
+    const d = byDate.get(c.dataset.heat); if (!d) return;
+    box.querySelectorAll(".heat-cell.sel").forEach((x) => x.classList.remove("sel")); c.classList.add("sel"); haptic("soft");
+    const date = new Date(d.date).toLocaleDateString("ru-RU", { day: "numeric", month: "long", weekday: "short" });
+    const parts = d.level < 0 ? ["до начала учёта"] : [
+      d.total ? `${d.done} из ${d.total} задач${d.completion != null ? ` (${Math.round(d.completion)} %)` : ""}` : "задач не было",
+      d.deep_min ? `глубокая ${hm(d.deep_min)}` : "", d.focus ? `фокус ×${d.focus}` : "", d.rest ? "день отдыха" : ""].filter(Boolean);
+    $("#heat-info").textContent = `${date}: ${parts.join(" · ")}`;
+  }));
+}
+
 function renderProgress() {
   const h = state.history;
   let html = "";
@@ -555,6 +1374,7 @@ function renderProgress() {
   else if (h.gentle) html = `<div class="card note-card">Сегодня без цифр. Прогресс подождёт — восстановление тоже часть плана.</div>`;
   else {
     const w = h.week;
+    html += heatCard(h.heat);
     html += `<div class="card"><h3>Неделя</h3>
       <div class="row"><span>Сделано</span><b>${hm(w.productive_min)} из ${hm(w.budget_min)}</b></div><div class="bar"><i style="width:${Math.min(100, 100 * w.productive_min / Math.max(1, w.budget_min))}%"></i></div>
       <div class="row" style="margin-top:6px"><span>Глубокая работа</span><b>${hm(w.deep_min)} из ${hm(w.deep_budget_min)}</b></div><div class="bar deep"><i style="width:${Math.min(100, 100 * w.deep_min / Math.max(1, w.deep_budget_min))}%"></i></div>
@@ -573,14 +1393,17 @@ function renderProgress() {
     }
   }
   html += `<div class="card"><h3>Приложение</h3>
-    ${TG ? `<button class="btn" id="install">📲 Установить на телефон</button><p class="muted small">Откроется в браузере. Там — меню ⋮ → «Установить приложение»: появится иконка Арвикса, как у обычного приложения.</p>` :
-    `<p class="muted small">Установлено как приложение? Меню браузера ⋮ → «Установить приложение» / «На экран Домой».</p>
+    ${TG ? `<button class="btn" id="install">📲 Установить на телефон</button><p class="muted small">Откроется Chrome — там кнопка «Установить» (или ⋮ → «Установить приложение»): появится иконка Арвикса, как у обычного приложения. Ссылка одноразовая, живёт 15 минут.</p>` :
+    `${standalone() ? `<p class="muted small">Арвикс установлен как приложение.</p>` : `<button class="btn primary" id="install-pwa">📲 Установить как приложение</button>
+     <p class="muted small">Нет кнопки — меню браузера ⋮ → «Установить приложение» / «На экран Домой».</p>`}
      <button class="btn danger" id="logout">Отвязать это устройство</button>`}
     <p class="muted small">Версия ${esc((state.data && state.data.app_version) || "")}</p></div>`;
   view.innerHTML = html;
   $("#install") && ($("#install").onclick = async () => {
     try { const r = await api("pair"); if (!r.url) { toast("На сервере не задан адрес приложения"); return; } TG.openLink(r.url); } catch (err) { toast(err.message); }
   });
+  $("#install-pwa") && ($("#install-pwa").onclick = installApp);
+  if (h && !h.gentle) bindHeat(h.heat);
   $("#logout") && ($("#logout").onclick = () => { try { localStorage.removeItem(TOKEN_KEY); } catch (_) { /* нет */ } renderLogin(); });
 }
 
@@ -661,9 +1484,28 @@ if (TG) {
 }
 if ("serviceWorker" in navigator && !TG) navigator.serviceWorker.register("sw.js").catch(() => {});
 
-if (!TG && !token()) renderLogin();
-else {
-  const start = (new URLSearchParams(location.search).get("tab")) || (TG && TG.initDataUnsafe && TG.initDataUnsafe.start_param) || "today";
+/* «Поделиться → Арвикс»: service worker сложил файлы и текст в кэш — отправляем их как из 📎. */
+async function sendShared() {
+  if (!("caches" in window)) return;
+  const cache = await caches.open("arvix-share");
+  const files = []; let text = "";
+  for (const req of await cache.keys()) {
+    const res = await cache.match(req);
+    if (req.url.endsWith("/text")) text += (text ? "\n" : "") + await res.text();
+    else files.push(new File([await res.blob()], decodeURIComponent(res.headers.get("X-File-Name") || "файл"), { type: res.headers.get("Content-Type") || "" }));
+    await cache.delete(req);
+  }
+  history.replaceState(null, "", "/?tab=chat");
+  if (files.length) { const ta = $("#msg"); if (ta) ta.value = text; await sendFiles(files); }
+  else if (text) { const ta = $("#msg"); if (ta) { ta.value = text; ta.focus(); } }
+}
+
+(async function boot() {
+  await pairFromHash();
+  if (!TG && !token()) { renderLogin(); return; }
+  const params = new URLSearchParams(location.search);
+  const start = params.get("tab") || (TG && TG.initDataUnsafe && TG.initDataUnsafe.start_param) || "today";
   setTab(["today", "chat", "notes", "progress"].includes(start) ? start : "today");
   stream();
-}
+  if (params.get("shared")) sendShared().catch((err) => toast(err.message));
+})();

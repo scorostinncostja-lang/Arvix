@@ -7,6 +7,7 @@ Long polling: бот сам опрашивает Telegram, поэтому ни �
 from __future__ import annotations
 
 import json
+import secrets
 import urllib.error
 import urllib.request
 from typing import Any
@@ -78,6 +79,46 @@ class TelegramAPI:
         if not body.get("ok"):
             raise TelegramError(str(body.get("description") or body))
         return body["result"]
+
+    def upload(self, method: str, files: dict[str, tuple[str, bytes, str]], **params: Any) -> Any:
+        """multipart/form-data: файлы (имя части → (имя файла, байты, тип)) и обычные поля.
+        Поля-объекты уходят JSON-строкой — так Bot API принимает InputFile через attach://."""
+        boundary = "arvix" + secrets.token_hex(12)
+        parts: list[bytes] = []
+        for key, value in params.items():
+            text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+            parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{text}\r\n'.encode())
+        for key, (filename, data, kind) in files.items():
+            head = (f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"; filename="{filename}"\r\n'
+                    f"Content-Type: {kind}\r\n\r\n").encode()
+            parts.append(head + data + b"\r\n")
+        body = b"".join(parts) + f"--{boundary}--\r\n".encode()
+        request = urllib.request.Request(self.base + method, data=body,
+                                         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        try:
+            with urllib.request.urlopen(request, timeout=max(self.http_timeout, 60)) as response:
+                result = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            try:
+                result = json.loads(exc.read() or b"{}")
+            except ValueError:
+                raise TelegramError(f"HTTP {exc.code}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            raise TelegramError(f"сеть: {exc}") from exc
+        if not result.get("ok"):
+            raise TelegramError(str(result.get("description") or result))
+        return result["result"]
+
+    def set_profile_photo(self, png: bytes) -> None:
+        """Аватар бота (Bot API setMyProfilePhoto) — без BotFather."""
+        self.upload("setMyProfilePhoto", {"avatar": ("avatar.png", png, "image/png")},
+                    photo={"type": "static", "photo": "attach://avatar"})
+
+    def send_voice(self, chat_id: int, ogg: bytes, *, caption: str | None = None) -> int:
+        params: dict[str, Any] = {"chat_id": chat_id}
+        if caption:
+            params["caption"] = caption[:1000]
+        return int(self.upload("sendVoice", {"voice": ("arvix.ogg", ogg, "audio/ogg")}, **params)["message_id"])
 
     def get_updates(self, offset: int, timeout: int = 25) -> list[dict[str, Any]]:
         return self.call("getUpdates", _http_timeout=timeout + 15, offset=offset, timeout=timeout,
