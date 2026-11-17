@@ -1,0 +1,23 @@
+{
+  "name": "Арвикс",
+  "short_name": "Арвикс",
+  "description": "Личный ментор: задачи, фокус, заметки, прогресс и разговор с Арвиксом.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "lang": "ru",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+    {"src": "icon.svg", "sizes": "any", "type": "image/svg+xml"}
+  ],
+  "shortcuts": [
+    {"name": "Чат с Арвиксом", "url": "/?tab=chat"},
+    {"name": "Заметки", "url": "/?tab=notes"}
+  ]
+}

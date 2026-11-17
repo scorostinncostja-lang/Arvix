@@ -33,6 +33,7 @@ daily_template = ""                 # пусто — шаблон из наст�
 brief = "auto"          # auto = время подъёма из профиля + 15 мин
 midday = "15:00"        # чек-ин, если к этому времени выполнено < 40%
 debrief = "22:30"
+curiosity = "18:30"     # Арвикс пишет первым: вопрос про то, что помнит; "" — выключено
 retro_weekday = 6       # 0 = пн … 6 = вс
 retro = "20:00"
 rollover = "04:00"      # вчерашний день закрывается в 04:00
@@ -42,10 +43,20 @@ silent_weekday = -1     # -1 = автоматических тихих дней 
 [brain]
 claude_bin = "claude"
 timeout_sec = 180
-vault_tools = true      # даёт голове Read/Grep/Glob по хранилищу
+vault_tools = true      # даёт голове Read/Grep/Glob по хранилищу и по папке памяти (переписка по дням)
+web_tools = true        # WebSearch/WebFetch: факт, которого нет в заметках и памяти, голова ищет в сети (D24)
 
 [roles.voice]           # L1: всё, что пишется в чат
 model = "sonnet"
+
+[web]                   # приложение: Mini App в Telegram, PWA на телефоне, `arvix` в терминале (05-INTERFACES §7)
+enabled = true          # API внутри службы бота, слушает только 127.0.0.1
+port = 8787
+public_url = ""         # https-адрес снаружи (deploy/web-setup.sh пишет сам); пусто — кнопки приложения нет
+token = ""              # ключ для PWA и терминала; пишет `arvix app token`
+
+[weather]               # погоду код берёт у Open-Meteo по городу из профиля (profile_set city)
+city = ""               # запасной город, если в профиле его нет
 
 [roles.analyst]         # L2: разбор дня и недельное ретро, только в фоне
 model = "sonnet"

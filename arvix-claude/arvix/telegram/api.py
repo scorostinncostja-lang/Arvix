@@ -29,16 +29,31 @@ def split_text(text: str, limit: int = LIMIT) -> list[str]:
     return chunks + [rest] if rest else chunks
 
 
+def inline_button(text: str, data: str) -> dict[str, Any]:
+    """«app:https://…» — кнопка, открывающая Mini App; «url:https://…» — ссылка; иначе callback."""
+    if data.startswith("app:"):
+        return {"text": text, "web_app": {"url": data[4:]}}
+    if data.startswith("url:"):
+        return {"text": text, "url": data[4:]}
+    return {"text": text, "callback_data": data}
+
+
 def inline_markup(buttons: Buttons) -> dict[str, Any]:
-    return {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in row] for row in buttons]}
+    return {"inline_keyboard": [[inline_button(t, d) for t, d in row] for row in buttons]}
 
 
-def reply_markup(keyboard: list[list[str]]) -> dict[str, Any]:
-    """Постоянная клавиатура под полем ввода: кнопки шлют свой текст как сообщение."""
-    return {"keyboard": [[{"text": t} for t in row] for row in keyboard], "resize_keyboard": True, "is_persistent": True}
+def reply_markup(keyboard: list[list[str]], app_url: str = "") -> dict[str, Any]:
+    """Постоянная клавиатура под полем ввода: кнопки шлют свой текст как сообщение.
+    Кнопка «📱 …» при заданном app_url открывает приложение внутри Telegram."""
+    rows = []
+    for row in keyboard:
+        rows.append([{"text": t, "web_app": {"url": app_url}} if app_url and t.startswith("📱") else {"text": t} for t in row])
+    return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
 
 
 class TelegramAPI:
+    app_url = ""  # публичный адрес Mini App ([web] public_url); пусто — кнопки приложения нет
+
     def __init__(self, token: str, http_timeout: int = 40):
         self.base = f"https://api.telegram.org/bot{token}/"
         self.file_base = f"https://api.telegram.org/file/bot{token}/"
@@ -68,21 +83,35 @@ class TelegramAPI:
         return self.call("getUpdates", _http_timeout=timeout + 15, offset=offset, timeout=timeout,
                          allowed_updates=["message", "callback_query"])
 
-    def send(self, chat_id: int, text: str, buttons: Buttons | None = None, keyboard: list[list[str]] | None = None) -> int | None:
+    def send(self, chat_id: int, text: str, buttons: Buttons | None = None, keyboard: list[list[str]] | None = None,
+             *, html: str | None = None) -> int | None:
         """Отправка; возвращает message_id последнего куска (им потом можно править панель).
-        У сообщения одна разметка: либо inline-кнопки под текстом, либо постоянная клавиатура."""
+        У сообщения одна разметка: либо inline-кнопки под текстом, либо постоянная клавиатура.
+        html — тот же текст в разметке Telegram (fmt.render); не принят — уходит text как есть."""
+        if html is not None and len(html) <= LIMIT:
+            try:
+                return self._send_one(chat_id, html, buttons, keyboard, parse_mode="HTML")
+            except TelegramError as exc:
+                if "parse" not in str(exc).lower() and "entit" not in str(exc).lower():
+                    raise
         chunks = split_text(text) or ["…"]
         message_id = None
         for i, chunk in enumerate(chunks):
-            params: dict[str, Any] = {"chat_id": chat_id, "text": chunk, "link_preview_options": {"is_disabled": True}}
-            if i == len(chunks) - 1:
-                if buttons:
-                    params["reply_markup"] = inline_markup(buttons)
-                elif keyboard:
-                    params["reply_markup"] = reply_markup(keyboard)
-            result = self.call("sendMessage", **params)
-            message_id = (result or {}).get("message_id")
+            last = i == len(chunks) - 1
+            message_id = self._send_one(chat_id, chunk, buttons if last else None, keyboard if last else None)
         return message_id
+
+    def _send_one(self, chat_id: int, text: str, buttons: Buttons | None, keyboard: list[list[str]] | None,
+                  parse_mode: str | None = None) -> int | None:
+        params: dict[str, Any] = {"chat_id": chat_id, "text": text, "link_preview_options": {"is_disabled": True}}
+        if parse_mode:
+            params["parse_mode"] = parse_mode
+        if buttons:
+            params["reply_markup"] = inline_markup(buttons)
+        elif keyboard:
+            params["reply_markup"] = reply_markup(keyboard, self.app_url)
+        result = self.call("sendMessage", **params)
+        return (result or {}).get("message_id")
 
     def edit(self, chat_id: int, message_id: int, text: str, buttons: Buttons | None = None) -> None:
         """Правка сообщения на месте — так живёт панель дня и обратный отсчёт фокуса."""
@@ -98,8 +127,17 @@ class TelegramAPI:
         self.call("unpinChatMessage", chat_id=chat_id, message_id=message_id)
 
     def set_commands(self, commands: list[tuple[str, str]]) -> None:
-        """Меню команд в клиенте Telegram (кнопка «/» слева от поля ввода)."""
+        """Меню команд в клиенте Telegram (кнопка «/» слева от поля ввода). Пустой список —
+        меню убирается: с Арвиксом говорят словами (D23)."""
+        if not commands:
+            self.call("deleteMyCommands")
+            return
         self.call("setMyCommands", commands=[{"command": c, "description": d[:256]} for c, d in commands])
+
+    def set_menu_button(self, url: str, text: str = "Арвикс") -> None:
+        """Кнопка слева от поля ввода: с url — открывает Mini App, без — стандартная."""
+        button = {"type": "web_app", "text": text, "web_app": {"url": url}} if url else {"type": "default"}
+        self.call("setChatMenuButton", menu_button=button)
 
     def download(self, file_id: str, max_bytes: int = 20 * 1024 * 1024) -> bytes:
         """Файл из Telegram (голосовое, фото): getFile → загрузка. Боту доступны файлы до 20 МБ."""

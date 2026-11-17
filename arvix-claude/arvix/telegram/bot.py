@@ -13,18 +13,22 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import threading
 import time
+from contextlib import contextmanager
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
-from arvix import interview, load, rules, safety
+from arvix import interview, load, rules, safety, weather
 from arvix import lesson as lesson_mod
+from arvix.memory import Memory, export_transcripts
 from arvix.brain import (
     DEBRIEF_SCHEMA,
     EXTRACT_SCHEMA,
     RETRO_SCHEMA,
     TEMPLATES_SCHEMA,
+    UI_ACTIONS,
     VOICE_SCHEMA,
     Brain,
     apply_actions,
@@ -36,6 +40,7 @@ from arvix.context import build_context, end_time, hm, task_line
 from arvix.core import ArvixError, Core, parse_duration
 from arvix.prompt import constitution, system_prompt
 from arvix.stt import STT, STTError
+from arvix.telegram import fmt
 from arvix.telegram import templates as tpl
 from arvix.telegram.api import TelegramAPI, TelegramError
 
@@ -45,7 +50,10 @@ LAST_TEXT = "tg_last_text"
 PANEL = "tg_panel"
 FOCUS = "focus"
 LESSON = "lesson"
-HISTORY = 10
+HISTORY = 14
+DIALOG_DAY = "dialog_day"
+TYPING_EVERY = 4.0  # «печатает…» в Telegram гаснет через 5 с — обновляем чуть чаще
+NOTES_ASK = re.compile(r"заметк|обсидиан|obsidian|хранилищ|конспект|роадмап|роудмап|в моих|найди|поищи|записано|файл", re.IGNORECASE)
 ANALYST_RULES = """<analyst>
 Ты — аналитик Арвикса. Ты не пересказываешь события — их видно и так.
 Ты ищешь связь, которую человек сам не замечает.
@@ -166,7 +174,8 @@ class Bot:
     def __init__(self, core: Core, api: TelegramAPI, brain: Brain, owner_id: int, stt: STT | None = None,
                  sleep: Callable[[float], None] | None = None):
         self.core = core
-        self.api = api
+        self.api = api   # канал текущего разговора: Telegram или приложение (via)
+        self.tg = api    # всегда Telegram: панель и таймер живут там, где бы их ни запустили
         self.brain = brain
         self.owner = int(owner_id)
         self.stt = stt if stt is not None else STT(core.cfg)
@@ -176,20 +185,44 @@ class Bot:
         self.pause_per_char = float(tg.get("bubble_pause_per_char", 0.012) or 0)
         self.pause_max = float(tg.get("bubble_pause_max_sec", 2.5) or 0)
         self.bubbles_max = int(tg.get("bubbles_max", 4) or 1)
+        self.channel = "telegram"  # приложение (arvix/web) создаёт свой Bot с channel="web"
+        self.memory = Memory(core)
+        self.first_today = False
 
     # --- отправка и ожидание ответа ------------------------------------------
 
     def send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None, *, key: str | None = None,
              keyboard: list[list[str]] | None = None) -> int | None:
         message_id = self.api.send(self.owner, text, buttons, keyboard=keyboard)
-        self.core.message_out(text, key=key)
+        self.core.message_out(text, key=key, channel=self.channel, buttons=buttons)
         return message_id
 
-    def reply(self, text: str, receipt: str = "", *, keyboard: list[list[str]] | None = None) -> None:
+    @contextmanager
+    def via(self, channel: str, api: Any) -> Any:
+        """Обработать сообщение из приложения тем же кодом, что и из Telegram: ответы идут
+        в журнал (приложение их видит), а не в чат. Пауз «печатает…» в приложении нет."""
+        saved = (self.channel, self.api, self.sleep)
+        self.channel, self.api, self.sleep = channel, api, (lambda _seconds: None)
+        try:
+            yield
+        finally:
+            self.channel, self.api, self.sleep = saved
+
+    def tg_send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None, *, key: str | None = None) -> int | None:
+        """Сообщение, которое живёт в Telegram независимо от канала (таймер, панель)."""
+        message_id = self.tg.send(self.owner, text, buttons)
+        self.core.message_out(text, key=key, channel="telegram", buttons=buttons)
+        return message_id
+
+    def log_in(self, text: str) -> None:
+        self.core.message_in(text, channel=self.channel)
+        self.core.store.kv_set("last_in_at", self.core.now().timestamp())
+
+    def reply(self, text: str, receipt: str = "", *, keyboard: list[list[str]] | None = None, key: str | None = None) -> None:
         """Ответ головы: абзацы — отдельными сообщениями с паузой «набирает…», квитанция
         кода — последним. В журнале — одно message_out с полным текстом (для истории)."""
         parts = bubbles(text, self.bubbles_max) if self.pause_base > 0 else [text.strip()]
-        parts = [p for p in parts if p]
+        parts = [fmt.sentence_lines(p) for p in parts if p.strip()]
         if receipt.strip():
             parts.append(receipt.strip())
         if not parts:
@@ -201,8 +234,9 @@ class Bot:
                 except TelegramError:
                     pass
                 self.sleep(min(self.pause_max, self.pause_base + len(part) * self.pause_per_char))
-            self.api.send(self.owner, part, keyboard=keyboard if i == len(parts) - 1 else None)
-        self.core.message_out("\n\n".join(parts))
+            self.api.send(self.owner, fmt.strip_markup(part), keyboard=keyboard if i == len(parts) - 1 else None,
+                          html=fmt.to_html(part))
+        self.core.message_out("\n\n".join(parts), channel=self.channel, key=key)
 
     def await_set(self, kind: str, **data: Any) -> None:
         # asked_at: сообщение, отправленное раньше вопроса (очередь после обрыва сети),
@@ -231,7 +265,7 @@ class Bot:
         elif msg.get("photo"):
             self.on_photo(text)
         elif text in tpl.MENU:
-            self.core.message_in(text)
+            self.log_in(text)
             self.on_menu(tpl.MENU[text])
         elif text.startswith("/"):
             self.on_command(text)
@@ -241,7 +275,10 @@ class Bot:
     def on_text(self, text: str, sent_at: float | None = None, *, voice: bool = False) -> None:
         previous = self.core.store.kv_get(LAST_TEXT)
         self.core.store.kv_set(LAST_TEXT, text)
-        self.core.message_in(("🎙 " if voice else "") + text)
+        today = self.core.today().isoformat()
+        self.first_today = self.core.store.kv_get(DIALOG_DAY) != today
+        self.core.store.kv_set(DIALOG_DAY, today)
+        self.log_in(("🎙 " if voice else "") + text)
         if safety.detect(text):
             self.safety_protocol(text)
             return
@@ -260,11 +297,11 @@ class Bot:
         Расшифровку бот по умолчанию не показывает — отвечает по делу; что он понял, видно по
         квитанции (что записано). Показ «🎙 «…»» — [stt] show_transcript = true."""
         if not self.stt.enabled:
-            self.core.message_in("[голосовое — распознавание не настроено]")
+            self.log_in("[голосовое — распознавание не настроено]")
             self.send(tpl.VOICE_OFF)
             return
         if int(media.get("duration") or 0) > self.stt.max_seconds:
-            self.core.message_in("[голосовое — слишком длинное]")
+            self.log_in("[голосовое — слишком длинное]")
             self.send(f"Голосовое длиннее {self.stt.max_seconds // 60} мин. Разбей на части или напиши текстом.")
             return
         try:
@@ -275,11 +312,11 @@ class Bot:
             audio = self.api.download(media["file_id"])
             text = self.stt.transcribe(audio, filename=media.get("file_name") or "voice.ogg")
         except (TelegramError, STTError, KeyError) as exc:
-            self.core.message_in("[голосовое — не распознано]")
+            self.log_in("[голосовое — не распознано]")
             self.send(f"Голосовое не распознал: {exc}. Напиши текстом.")
             return
         if not text.strip():
-            self.core.message_in("[голосовое — пусто]")
+            self.log_in("[голосовое — пусто]")
             self.send("В голосовом не разобрал слов. Повтори или напиши текстом.")
             return
         if getattr(self.stt, "show_transcript", False):
@@ -340,7 +377,7 @@ class Bot:
         return True
 
     def on_photo(self, caption: str) -> None:
-        self.core.message_in(f"[фото] {caption}")
+        self.log_in(f"[фото] {caption}")
         waiting = self.await_get()
         if waiting and waiting.get("kind") == "report":
             self.await_clear()
@@ -348,7 +385,7 @@ class Bot:
             self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
             self.refresh_panel()
         else:
-            self.send("Фото принимаю как отчёт, когда жду его: кнопка «✅ Да» у задачи или /done <задача>.")
+            self.send("Фото принимаю как отчёт, когда жду его: нажми ✅ у задачи или напиши, что за задача.")
 
     # --- клавиатура (L0) ------------------------------------------------------------
 
@@ -366,12 +403,14 @@ class Bot:
                     self.start_focus(tpl.FOCUS_DEFAULT_MIN)
             elif action == "sleep":
                 self.await_set("sleep")
-                self.send("Сколько спал? Числом: 7:20. Можно и отбой: /sleep 7:20 00:30")
+                self.send("Сколько спал? Числом: 7:20. Можно с отбоем: 7:20 00:30")
             elif action == "add":
                 self.await_set("add")
                 self.send("Что и когда? Например: «Физика 18:00 60м !4». Без времени — подберу окно сам.")
             elif action == "done":
                 self.report_current()
+            elif action == "app":
+                self.send_app_link()
         except ArvixError as exc:
             self.send(f"Отказ: {exc}")
 
@@ -411,7 +450,7 @@ class Bot:
             except (TelegramError, KeyError):
                 pass
         self.core.refresh()
-        self.core.message_in(f"[кнопка {data}]")
+        self.log_in(f"[кнопка {data}]")
         try:
             if kind == "t":
                 task_id, _, op = rest.partition(":")
@@ -496,7 +535,7 @@ class Bot:
             self.await_set("schedule_edit")
             self.send("Напиши, что поменять: «в среду тренировка в 18:00», «английский утром перед школой», «меньше часов».")
         elif op == "save":
-            self.send("Предложение устарело — /schedule соберёт новое.")
+            self.send("Предложение устарело. Опиши неделю ещё раз — соберу новое.")
 
     # --- панель дня ---------------------------------------------------------------------
 
@@ -513,6 +552,9 @@ class Bot:
         text, buttons = self.panel_view()
         if hint:
             text += f"\n\n{hint}"
+        if self.channel != "telegram":  # в приложении панель — это экран «Сегодня», здесь только текст
+            self.send(text, buttons)
+            return
         previous = self.core.store.kv_get(PANEL) or {}
         message_id = self.send(text, buttons, key=None)
         self.core.store.kv_set(PANEL, {"message_id": message_id, "date": self.core.today().isoformat(), "hash": _digest(text, buttons)})
@@ -520,8 +562,8 @@ class Bot:
             return
         try:
             if previous.get("message_id"):
-                self.api.unpin(self.owner, previous["message_id"])
-            self.api.pin(self.owner, message_id)
+                self.tg.unpin(self.owner, previous["message_id"])
+            self.tg.pin(self.owner, message_id)
         except TelegramError as exc:
             log.info("панель не закреплена: %s", exc)
 
@@ -536,7 +578,7 @@ class Bot:
         if digest == panel.get("hash") and not force:
             return
         try:
-            self.api.edit(self.owner, panel["message_id"], text, buttons)
+            self.tg.edit(self.owner, panel["message_id"], text, buttons)
         except TelegramError as exc:
             if "not modified" not in str(exc):
                 log.info("панель не обновилась: %s", exc)
@@ -585,7 +627,7 @@ class Bot:
         now = self.core.now()
         until = now + timedelta(minutes=minutes)
         text = tpl.focus_text(minutes, f"{until:%H:%M}", task.title if task else None)
-        message_id = self.send(text, [[("⏹ Стоп", "f:stop")]])
+        message_id = self.tg_send(text, [[("⏹ Стоп", "f:stop")]])  # в журнале — его видит и приложение
         self.core.store.kv_set(FOCUS, {"until": until.isoformat(), "started": now.isoformat(), "minutes": minutes,
                                        "task_id": task.id if task else None, "message_id": message_id, "left": minutes})
         self.refresh_panel()
@@ -612,7 +654,7 @@ class Bot:
     def stop_focus(self) -> None:
         state = self.core.store.kv_get(FOCUS)
         if not state:
-            self.send("Фокус не идёт. Запустить — 🎯 или /focus 25.")
+            self.send("Фокус не идёт. Запустить — 🎯 внизу или «засеки 25 минут».")
             return
         self.core.store.kv_del(FOCUS)
         elapsed = int((self.core.now() - datetime.fromisoformat(state["started"])).total_seconds() // 60)
@@ -630,7 +672,7 @@ class Bot:
             return
         title = self.core.state.tasks[state["task_id"]].title if state.get("task_id") in self.core.state.tasks else None
         try:
-            self.api.edit(self.owner, state["message_id"], tpl.focus_text(minutes, state["until"][11:16], title, 0))
+            self.tg.edit(self.owner, state["message_id"], tpl.focus_text(minutes, state["until"][11:16], title, 0))
         except TelegramError:
             pass
 
@@ -646,7 +688,7 @@ class Bot:
             if left != state.get("left") and state.get("message_id"):
                 title = self.core.state.tasks[state["task_id"]].title if state.get("task_id") in self.core.state.tasks else None
                 try:
-                    self.api.edit(self.owner, state["message_id"], tpl.focus_text(int(state["minutes"]), state["until"][11:16], title, left),
+                    self.tg.edit(self.owner, state["message_id"], tpl.focus_text(int(state["minutes"]), state["until"][11:16], title, left),
                                   [[("⏹ Стоп", "f:stop")]])
                 except TelegramError:
                     pass
@@ -700,12 +742,9 @@ class Bot:
             constitution(core.state.profile, gentle=True, sections=("identity", "mission", "autonomy_rule", "honesty")),
             rules_text, "<context>\n" + build_context(core) + "\n</context>",
         ])
-        try:
-            self.api.typing(self.owner)
-        except TelegramError:
-            pass
-        result = self.brain.ask(system=system, prompt=f"Подготовь учебный блок: {task.title}, {task.duration_min} минут.",
-                                schema=lesson_mod.LESSON_SCHEMA, role="voice", vault_tools=True)
+        with self.typing_kept():
+            result = self.brain.ask(system=system, prompt=f"Подготовь учебный блок: {task.title}, {task.duration_min} минут.",
+                                    schema=lesson_mod.LESSON_SCHEMA, role="voice", vault_tools=True)
         if not result or not result.get("plan"):
             result = {"topic": task.title, "why": "", "roadmap_node": "", "plan": lesson_mod.fallback_plan(task.duration_min),
                       "sources": [], "check": [], "fallback": True}
@@ -743,6 +782,17 @@ class Bot:
             self.begin_lesson(task)
         elif op == "check" and self.lesson_pending(task.id):
             self.send_lesson_check()
+        elif op == "plan":
+            if self.lesson_pending(task.id):
+                self.send("План уже есть — выше. ▶️ Начать — там же.")
+            else:
+                self.prepare_lesson(task)
+        elif op == "timer":
+            if task.status == "planned":
+                self.core.start_task(task.id, source=self.channel)
+            self.start_focus(task.duration_min, task.id)
+        elif op == "later":
+            self.send("Хорошо, блок остаётся в плане. Скажешь — начнём.")
 
     def send_lesson_check(self, *, key: str | None = None) -> None:
         lesson = self.core.store.kv_get(LESSON) or {}
@@ -818,10 +868,10 @@ class Bot:
         st = core.state
         answers = [f"В: {q['text']}\nО: {st.interview[q['id']]}" for q in interview.QUESTIONS
                    if q["id"] in st.interview and q["block"] not in ("inner", "money", "people")]
-        if not answers:
-            self.send("Сначала нужны ответы про неделю и распорядок — /onboard.")
+        if not answers and not wishes:
+            self.send("Опиши неделю словами: учёба или работа по дням, когда свободен, подъём и отбой. Соберу распорядок.")
             return
-        prompt = "Ответы человека:\n\n" + "\n\n".join(answers)
+        prompt = ("Ответы человека:\n\n" + "\n\n".join(answers)) if answers else "Ответов интервью нет — только его слова ниже."
         previous = core.store.kv_get(PENDING)
         if previous:
             prompt += "\n\nПрежний вариант распорядка:\n" + render_templates(previous)
@@ -829,13 +879,10 @@ class Bot:
             prompt += f"\n\nПожелания человека: {wishes}"
         system = "\n\n".join([constitution(st.profile, gentle=True, sections=("identity", "honesty")), SCHEDULE_RULES,
                                 "<context>\n" + build_context(core) + "\n</context>"])
-        try:
-            self.api.typing(self.owner)
-        except TelegramError:
-            pass
-        result = self.brain.ask(system=system, prompt=prompt, schema=TEMPLATES_SCHEMA, role="voice", vault_tools=True)
+        with self.typing_kept():
+            result = self.brain.ask(system=system, prompt=prompt, schema=TEMPLATES_SCHEMA, role="voice", vault_tools=True)
         if not result or not result.get("templates"):
-            self.send("Не вышло собрать распорядок. " + (self.brain_down_hint() or "Попробуй /schedule ещё раз."))
+            self.send("Не вышло собрать распорядок. " + (self.brain_down_hint() or "Опиши неделю ещё раз чуть позже."))
             return
         core.store.kv_set(PENDING, result["templates"])
         self.send(clip(result.get("summary", ""), 500) + "\n\n" + render_templates(result["templates"], load.factors_of(core.state.budget)),
@@ -902,50 +949,252 @@ class Bot:
             lines.pop()
         return lines[-HISTORY:]
 
-    def converse(self, text: str, extra: str = "", *, voice: bool = False) -> None:
-        core = self.core
+    @contextmanager
+    def typing_kept(self) -> Any:
+        """«печатает…» всё время, пока думает голова: Telegram гасит индикатор через 5 с,
+        а ответ идёт 5–30 с. Поток трогает только HTTP, базу — нет."""
+        stop = threading.Event()
+
+        def loop() -> None:
+            while not stop.wait(TYPING_EVERY):
+                try:
+                    self.api.typing(self.owner)
+                except TelegramError:
+                    pass
+
         try:
             self.api.typing(self.owner)
         except TelegramError:
             pass
+        worker = threading.Thread(target=loop, daemon=True)
+        worker.start()
+        try:
+            yield
+        finally:
+            stop.set()
+
+    def dialog_block(self, text: str) -> str:
+        """Человеческий ритм разговора считает код: первое сообщение дня — привет,
+        поздний вечер — пора прощаться. Модель это не угадывает, а получает фактом."""
+        now = self.core.now()
+        lines = []
+        if self.first_today:
+            part = "Доброе утро" if 5 <= now.hour < 12 else "Добрый вечер" if now.hour >= 18 else "Привет"
+            lines.append(f"Первое сообщение человека за сегодня: начни с короткого приветствия отдельным сообщением "
+                         f"(«{part}» или «Привет», по-своему, без вопросов «как дела?»), потом — ответ.")
+        bedtime = self.core.state.profile.get("bedtime_target") or "23:00"
+        try:
+            bed = self.core.at(now.date(), bedtime)
+        except ValueError:
+            bed = self.core.at(now.date(), "23:00")
+        if bed.hour < 5:  # отбой после полуночи
+            bed += timedelta(days=1)
+        if now >= bed - timedelta(minutes=45) or now.hour < 4:
+            lines.append(f"Поздно: отбой по плану в {bedtime}. Если разговор закругляется — коротко попрощайся и "
+                         "пожелай спокойной ночи. Новых дел на вечер не предлагай.")
+        return "<dialog>\n" + "\n".join(lines) + "\n</dialog>" if lines else ""
+
+    def notes_block(self, text: str) -> str:
+        """Человек спрашивает про свои заметки — код сам ищет в хранилище и кладёт находки
+        в промпт. Модели не нужно три хода Grep/Read (это 20–40 с ожидания)."""
+        if not self.core.cfg.vault or not NOTES_ASK.search(text):
+            return ""
+        from arvix.vault import Vault
+
+        try:
+            found = Vault(self.core.cfg.vault, self.core.cfg.vault_paths).search(text, 5)
+        except OSError:
+            return ""
+        if not found:
+            return ""
+        rows = [f"{r['path']}" + (f" — «{r['heading']}»" if r["heading"] else "") + f": {r['snippet']}" for r in found]
+        return ("<vault_hits>\nНайдено кодом в хранилище по словам сообщения. Если этого мало — открой файл (Read).\n"
+                + "\n".join(rows) + "\n</vault_hits>")
+
+    def recall_block(self, text: str) -> str:
+        try:
+            self.memory.sync()
+            window = self.history_start_id()
+            return self.memory.recall_block(text, before_id=window)
+        except Exception:  # noqa: BLE001 — память не должна ронять ответ
+            log.exception("память недоступна")
+            return ""
+
+    def history_start_id(self) -> int | None:
+        """Первое событие, которое уже лежит в промпте как свежая история (+ текущее сообщение).
+        Всё, что новее, в <recall> не повторяется."""
+        start = max(0, self.core.state.last_event_id - 400)
+        ids = [e.id for e in self.core.store.read(start) if e.kind in ("message_in", "message_out")]
+        return ids[-(HISTORY + 1):][0] if ids else None
+
+    def converse(self, text: str, extra: str = "", *, voice: bool = False) -> None:
+        core = self.core
         if core.store.kv_get("answer_mode"):
             core.store.kv_del("answer_mode")
-            extra += "\n<answer_mode>Человек запросил готовый ответ (/answer). Дай полный ответ с источниками и action learning_question с direct=true.</answer_mode>"
+            extra += "\n<answer_mode>Человек запросил готовый ответ. Дай полный ответ с источниками и action learning_question с direct=true.</answer_mode>"
         silent_days = core.state.ignore_streak(core.today() - timedelta(days=1))
         today = core.state.days.get(core.today())
         if silent_days >= 2 and today and today.user_actions <= 2:
             extra += "\n" + tpl.RETURN_HINT.format(days=silent_days)
         if lesson := self.lesson_context():
             extra += "\n" + lesson
-        system = system_prompt(core, message=text, history=self.history(exclude_last=text), extra=extra.strip())
-        result = self.brain.ask(system=system, prompt=text, schema=VOICE_SCHEMA, vault_tools=True)
-        if result is None:
-            heard = f"🎙 «{clip(text, 300)}»\n" if voice else ""  # голова молчит — пусть хотя бы видно, что услышано
-            self.send(heard + " ".join(x for x in (tpl.FALLBACK, self.brain_down_hint()) if x))
-            return
-        reply = (result.get("reply") or "").strip()
-        if core.effective_mode() == "red" and gentle_violation(reply):
-            retry = self.brain.ask(
-                system=system + "\n\n<validator>В ответе были слова про дисциплину, задачи или метрики. В мягком режиме это запрещено. Перепиши по-человечески.</validator>",
-                prompt=text, schema=VOICE_SCHEMA,
-            )
-            ok = retry is not None and not gentle_violation(retry.get("reply", ""))
-            result = retry if ok else {"actions": []}
-            reply = retry["reply"].strip() if ok else tpl.GENTLE_FALLBACK
-        if result.get("learning") and not has_source(reply):
-            retry = self.brain.ask(
-                system=system + "\n\n<validator>Ответ обучающий, но первоисточник не назван. Назови его: учебник и параграф, "
-                "официальная документация или спецификация. Ссылку давай только настоящую; не уверен — без ссылки. Не выдумывай URL.</validator>",
-                prompt=text, schema=VOICE_SCHEMA, vault_tools=True,
-            )
-            if retry and has_source(retry.get("reply", "")):
-                result, reply = retry, retry["reply"].strip()
-            else:
-                reply += "\n\n(Первоисточник не назван — сверь тему с учебником или официальной документацией.)"
-        done, failed, warnings = apply_actions(core, result.get("actions") or [], source="telegram", fallback_report=text)
+        if dialog := self.dialog_block(text):
+            extra += "\n" + dialog
+        if weather.asks_weather(text):
+            extra += "\n" + weather.weather_block(core)
+        for block in (self.recall_block(text), self.notes_block(text)):
+            if block:
+                extra += "\n" + block
+        try:
+            export_transcripts(core)
+        except OSError as exc:
+            log.warning("папка памяти: %s", exc)
+        system = system_prompt(core, channel=self.channel if self.channel == "telegram" else "telegram",
+                               message=text, history=self.history(exclude_last=text), extra=extra.strip())
+        with self.typing_kept():
+            result = self.brain.ask(system=system, prompt=text, schema=VOICE_SCHEMA, vault_tools=True, web=True)
+            if result is None:
+                heard = f"🎙 «{clip(text, 300)}»\n" if voice else ""  # голова молчит — пусть хотя бы видно, что услышано
+                self.send(heard + " ".join(x for x in (tpl.FALLBACK, self.brain_down_hint()) if x))
+                return
+            reply = (result.get("reply") or "").strip()
+            if core.effective_mode() == "red" and gentle_violation(reply):
+                retry = self.brain.ask(
+                    system=system + "\n\n<validator>В ответе были слова про дисциплину, задачи или метрики. В мягком режиме это запрещено. Перепиши по-человечески.</validator>",
+                    prompt=text, schema=VOICE_SCHEMA,
+                )
+                ok = retry is not None and not gentle_violation(retry.get("reply", ""))
+                result = retry if ok else {"actions": []}
+                reply = retry["reply"].strip() if ok else tpl.GENTLE_FALLBACK
+            if result.get("learning") and not has_source(reply):
+                retry = self.brain.ask(
+                    system=system + "\n\n<validator>Ответ обучающий, но первоисточник не назван. Назови его: учебник и параграф, "
+                    "официальная документация или спецификация. Ссылку давай только настоящую; не уверен — без ссылки. Не выдумывай URL.</validator>",
+                    prompt=text, schema=VOICE_SCHEMA, vault_tools=True, web=True,
+                )
+                if retry and has_source(retry.get("reply", "")):
+                    result, reply = retry, retry["reply"].strip()
+                else:
+                    reply += "\n\n(Первоисточник не назван — сверь тему с учебником или официальной документацией.)"
+        actions = result.get("actions") or []
+        done, failed, warnings = apply_actions(core, actions, source=self.channel, fallback_report=text)
         self.reply(reply, self.receipt(done, failed, warnings))
         if done:
             self.refresh_panel()
+        self.run_ui_actions([a for a in actions if a.get("type") in UI_ACTIONS], text)
+
+    # --- действия интерфейса по словам человека (05-INTERFACES §2.1) -------------------
+
+    def run_ui_actions(self, actions: list[dict[str, Any]], text: str) -> None:
+        """Человек говорит словами — бот делает то, что раньше требовало команды.
+        Модель выбирает действие, код исполняет. Ошибка одного не мешает остальным."""
+        for action in actions[:3]:
+            kind = action.get("type")
+            try:
+                if kind == "plan_schedule":
+                    self.propose_schedule(action.get("wishes") or action.get("text") or text)
+                elif kind == "show_schedule":
+                    self.cmd_schedule("show")
+                elif kind == "start_lesson":
+                    self.offer_lesson(action, text)
+                elif kind == "start_focus":
+                    self.start_focus(int(action.get("minutes") or tpl.FOCUS_DEFAULT_MIN), action.get("task") or action.get("title") or None)
+                elif kind == "stop_focus":
+                    self.stop_focus()
+                elif kind == "show_day":
+                    self.send_panel(pin=True)
+                elif kind == "show_status":
+                    self.send(tpl.status(self.core))
+                elif kind == "show_week":
+                    self.send(tpl.week(self.core))
+                elif kind == "show_goals":
+                    self.cmd_goals("")
+                elif kind == "debrief_now":
+                    self.send_debrief(manual=True)
+                elif kind == "rest_day":
+                    self.cmd_sos("")
+                elif kind == "silent_day":
+                    self.cmd_silent("")
+                elif kind == "open_app":
+                    self.send_app_link()
+            except ArvixError as exc:
+                self.send(f"Не вышло: {exc}")
+            except Exception:  # noqa: BLE001 — сбой действия не должен ронять уже отправленный ответ
+                log.exception("действие %s", kind)
+
+    def offer_lesson(self, action: dict[str, Any], text: str) -> None:
+        """«Давай позанимаемся физикой» → карточка: какой блок, какая задача, сколько длится.
+        Подтверждение — кнопкой: план урока стоит отдельного вызова головы, зря его не тратим."""
+        core = self.core
+        minutes = int(action.get("minutes") or 0) or None
+        topic = (action.get("topic") or action.get("title") or "").strip()
+        task = None
+        if ref := action.get("task"):
+            try:
+                task = core.resolve_task(ref)
+            except ArvixError:
+                task = None
+        if task is None:
+            today = [t for t in core.state.tasks_on(core.today()) if t.is_open and t.sphere == "learning"]
+            if topic:
+                today = [t for t in today if topic.lower()[:5] in t.title.lower()] or today
+            task = next((t for t in today if t.status == "active"), None) or (today[0] if today else None)
+        if task is None:
+            if not topic:
+                self.send("Учебных блоков сегодня нет. Скажи предмет и сколько минут — поставлю блок прямо сейчас.")
+                return
+            task = core.add_task(topic, sphere="learning", importance=3, deep_work=True, start=core.now().strftime("%H:%M"),
+                                 duration_min=minutes or lesson_mod.DEFAULT_MINUTES, source=self.channel)
+        when = f"{task.start}–{end_time(task.start, task.duration_min)}" if task.start else "сейчас"
+        lines = [f"📚 **{task.title}**", f"⏱ {task.duration_min} мин · {when}"]
+        history = core.lesson_history(lesson_mod.subject_of(task.title), 1)
+        if history:
+            lines.append(f"Прошлый урок: {history[-1]}")
+        lines.append("Тему возьму из роадмапа, план — по минутам, в конце 3 вопроса.")
+        self.send_rich("\n".join(lines), [[("📚 План урока", f"l:{task.id}:plan"), ("🎯 Просто таймер", f"l:{task.id}:timer")],
+                                          [("✖️ Не сейчас", f"l:{task.id}:later")]])
+
+    def send_rich(self, text: str, buttons: list[list[tuple[str, str]]] | None = None, *, key: str | None = None) -> int | None:
+        """Сообщение кода с разметкой (жирный, строки) — как ответ головы, но одним пузырём."""
+        message_id = self.api.send(self.owner, fmt.strip_markup(text), buttons, html=fmt.to_html(text))
+        self.core.message_out(fmt.strip_markup(text), key=key, channel=self.channel, buttons=buttons)
+        return message_id
+
+    def app_url(self) -> str:
+        return str(self.core.cfg.section("web").get("public_url") or "").rstrip("/")
+
+    def send_app_link(self) -> None:
+        url = self.app_url()
+        if not url:
+            self.send("Приложение ещё не включено на сервере: нужен HTTPS-адрес (deploy/web-setup.sh).")
+            return
+        self.send_rich("📱 **Арвикс** — задачи, фокус, заметки и прогресс. Обновляется сам.",
+                       [[("Открыть", f"app:{url}/")]])
+
+    def send_curiosity(self) -> bool:
+        """Раз в день Арвикс сам пишет первым — не «как дела», а про то, что помнит:
+        пробник, разговор, обещание. Вызывает планировщик ([schedule] curiosity)."""
+        core = self.core
+        st = core.state
+        if core.effective_mode() == "red" or not st.mentor_enabled:
+            return False
+        recent = [f for f in list(st.facts.values())[-25:]]
+        facts = "\n".join(f"- {f['fact']}" for f in recent) or "—"
+        system = "\n\n".join([
+            constitution(st.profile, gentle=False, sections=("identity", "voice", "honesty")),
+            "<context>\n" + build_context(core) + "\n</context>",
+            "<history>\n" + "\n".join(self.history()) + "\n</history>",
+            "<curiosity>\nНапиши человеку первым — одно короткое сообщение, 1–2 предложения. Как наставник, которому "
+            "правда интересно: спроси про конкретное из памяти (событие, пробник, разговор, решение, проект) или "
+            "поделись одной мыслью по его цели. Не «как дела?», не про задачи из списка, не напоминание. "
+            "Если спросить нечего — reply пустой.\n</curiosity>",
+        ])
+        result = self.brain.ask(system=system, prompt="Факты о человеке:\n" + facts, schema=VOICE_SCHEMA)
+        reply = ((result or {}).get("reply") or "").strip()
+        if not reply:
+            return False
+        self.reply(reply, key=f"curiosity:{core.today().isoformat()}")
+        return True
 
     def brain_down_hint(self) -> str:
         """Почему голова молчит — человеку нужен следующий шаг, а не «ошибка»."""
@@ -969,7 +1218,7 @@ class Bot:
                 text += f"\n📝 Отчёт дня: {rel}"
         except ArvixError as exc:
             log.warning("ежедневный отчёт не создан: %s", exc)
-        self.send(f"{prefix}\n\n{text}" if prefix else text, key=f"brief:{self.core.today().isoformat()}", keyboard=tpl.KEYBOARD)
+        self.send(f"{prefix}\n\n{text}" if prefix else text, key=f"brief:{self.core.today().isoformat()}", keyboard=tpl.keyboard(self.app_url()))
         day = self.core.state.days.get(self.core.today())
         if not (day and day.sleep_min):
             self.await_set("sleep")
@@ -1049,12 +1298,12 @@ class Bot:
     # --- команды -------------------------------------------------------------------
 
     def on_command(self, text: str) -> None:
-        self.core.message_in(text)
+        self.log_in(text)
         head, _, rest = text.partition(" ")
         name = head[1:].split("@")[0].lower()
         handler = getattr(self, f"cmd_{name}", None)
         if handler is None:
-            self.send("Не знаю такой команды. /help")
+            self.send("Команды не нужны — напиши словами, что сделать.")
             return
         try:
             handler(rest.strip())
@@ -1065,13 +1314,13 @@ class Bot:
         status = self.core.interview_status()
         core_block = next(b for b in status["blocks"] if b["block"] == "core")
         if core_block["done"] < core_block["total"]:
-            self.send("Я Арвикс. Не ассистент и не друг по переписке — внешний контур дисциплины, пока не выстроится свой.", keyboard=tpl.KEYBOARD)
+            self.send("Я Арвикс. Не ассистент и не друг по переписке — внешний контур дисциплины, пока не выстроится свой.", keyboard=tpl.keyboard(self.app_url()))
             self.cmd_onboard("")
         else:
             self.send_brief()
 
     def cmd_menu(self, rest: str) -> None:
-        self.send("Кнопки внизу: панель дня, отчёт, фокус, сон, задача, статус.", keyboard=tpl.KEYBOARD)
+        self.send("Кнопки внизу: панель дня, отчёт, фокус, сон, задача, статус.", keyboard=tpl.keyboard(self.app_url()))
 
     def cmd_schedule(self, rest: str) -> None:
         if rest.strip() == "show" and self.core.state.templates:
@@ -1087,7 +1336,7 @@ class Bot:
         self.send("🎯 Цели\n\n" + "\n".join(rows) if rows else "Целей пока нет. Разложить цель на этапы — в Claude Code: «хочу …, разложи».")
 
     def cmd_help(self, rest: str) -> None:
-        self.send(tpl.HELP, keyboard=tpl.KEYBOARD)
+        self.send(tpl.HELP, keyboard=tpl.keyboard(self.app_url()))
 
     def cmd_onboard(self, rest: str) -> None:
         question = self.core.interview_next()
@@ -1107,7 +1356,7 @@ class Bot:
 
     def cmd_pause(self, rest: str) -> None:
         self.await_clear()
-        self.send("Пауза. Продолжить — /onboard.")
+        self.send("Пауза. Продолжить — «продолжим знакомство».")
 
     def cmd_day(self, rest: str) -> None:
         target = self.core.parse_day(rest or None)
@@ -1224,7 +1473,7 @@ class Bot:
         task = next((t for t in today if t.status == "active"), None) or (today[0] if today else None)
         if task is None:
             if not topic:
-                self.send("Учебных задач на сегодня нет. /learn 30 физика — начну блок на 30 минут прямо сейчас.")
+                self.send("Учебных задач на сегодня нет. Скажи «физика 30 минут» — начну блок прямо сейчас.")
                 return
             task = self.core.add_task(topic, sphere="learning", importance=3, deep_work=True, start=self.core.now().strftime("%H:%M"),
                                       duration_min=minutes or lesson_mod.DEFAULT_MINUTES, source="telegram")

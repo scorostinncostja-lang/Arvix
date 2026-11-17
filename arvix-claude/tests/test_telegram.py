@@ -4,6 +4,7 @@ import unittest
 from datetime import timedelta
 from typing import Any
 
+from arvix.telegram import fmt
 from arvix.telegram import templates as tpl
 from arvix.telegram.bot import Bot, parse_quick_task
 from arvix.telegram.scheduler import Scheduler
@@ -21,10 +22,12 @@ class FakeAPI:
         self.pinned: list[int] = []
         self.unpinned: list[int] = []
         self.typing_calls = 0
+        self.html: list[str | None] = []
 
-    def send(self, chat_id: int, text: str, buttons: Any = None, keyboard: Any = None) -> int:
+    def send(self, chat_id: int, text: str, buttons: Any = None, keyboard: Any = None, *, html: str | None = None) -> int:
         assert chat_id == OWNER
         self.sent.append((text, buttons))
+        self.html.append(html)
         if keyboard:
             self.keyboards.append(keyboard)
         return len(self.sent)  # message_id
@@ -216,7 +219,7 @@ class InboxTest(BotCase):
         self.core.sos(True)
         self.brain.answers += [{"reply": "Дисциплина важнее, выполнение 0%.", "actions": []}, {"reply": "Опять про продуктивность.", "actions": []}]
         self.text("мне тяжело сегодня")
-        self.assertEqual(self.api.last, tpl.GENTLE_FALLBACK)
+        self.assertEqual(self.api.last, fmt.sentence_lines(tpl.GENTLE_FALLBACK))
 
     def test_stale_duplicate_after_outage_is_not_next_answer(self) -> None:
         self.text("/start")
