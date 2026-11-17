@@ -46,5 +46,7 @@ cat <<EOF
 Потом один раз на сервере под $USER_NAME — токен подписки для головы:
   ssh $USER_NAME@HOST
   claude setup-token      # вставить вывод в ~/.config/arvix/claude.env как CLAUDE_CODE_OAUTH_TOKEN=…  (chmod 600)
-  systemctl --user enable --now arvix-telegram syncthing
+  systemctl --user enable --now arvix-telegram
+Хранилище ⇄ ноутбук (Syncthing, после sync-server.sh --init), с ноутбука:
+  bash arvix-claude/deploy/syncthing-setup.sh $USER_NAME@HOST
 EOF

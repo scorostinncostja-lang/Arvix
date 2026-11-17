@@ -97,3 +97,9 @@ sport = 3
 social = 2
 novelty = 1
 offscreen = 3
+
+# Синхронизация хранилища ноутбук ⇄ сервер (07-OPERATIONS §4). "rsync" — таймер arvix-vault-sync раз в 10 минут;
+# "syncthing" пишет deploy/syncthing-setup.sh: rsync выключен, `arvix doctor` проверяет Syncthing и конфликты.
+[sync]
+vault = "rsync"
+folder = "arvix-vault"   # id папки Syncthing; скрипт берёт уже существующую папку на это хранилище

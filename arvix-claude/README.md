@@ -91,7 +91,8 @@ bash arvix-claude/deploy/sync-server.sh arvix@HOST --init     # код + кон�
 ssh -t arvix@HOST bash ~/.local/share/arvix/app/deploy/server-claude-token.sh   # токен подписки для головы
 arvix remote set arvix@HOST                                    # ноутбук ходит за журналом по SSH
 systemctl --user disable --now arvix-telegram                  # бот теперь там
-systemctl --user enable --now arvix-vault-sync.timer arvix-backup.timer   # хранилище ⇄ сервер, копия журнала
+systemctl --user enable --now arvix-backup.timer              # копия журнала на ноутбук
+bash arvix-claude/deploy/syncthing-setup.sh arvix@HOST        # хранилище ⇄ сервер через Syncthing
 ```
 Подробно — GUIDE, раздел 10.
 

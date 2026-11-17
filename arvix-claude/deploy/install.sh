@@ -65,6 +65,14 @@ cp "$SRC/deploy/arvix-backup.timer" "$UNIT_DIR/arvix-backup.timer"
 sed -e "s|@APP@|$APP|g" "$SRC/deploy/arvix-vault-sync.service" > "$UNIT_DIR/arvix-vault-sync.service"
 cp "$SRC/deploy/arvix-vault-sync.timer" "$UNIT_DIR/arvix-vault-sync.timer"
 systemctl --user daemon-reload 2>/dev/null || true
+# Хранилище синхронизирует Syncthing ([sync] vault = "syncthing", deploy/syncthing-setup.sh) — rsync-таймер
+# остаётся выключенным, даже если его включили руками: два синхронизатора на одних файлах плодят конфликты.
+CFG="${XDG_CONFIG_HOME:-$HOME/.config}/arvix/config.toml"
+SYNC_MODE="$("$PYTHON" -c 'import sys, tomllib; print((tomllib.load(open(sys.argv[1], "rb")).get("sync") or {}).get("vault", "rsync"))' "$CFG" 2>/dev/null || echo rsync)"
+if [[ "$SYNC_MODE" == "syncthing" ]]; then
+  systemctl --user disable --now arvix-vault-sync.timer >/dev/null 2>&1 || true
+  echo "хранилище: Syncthing — arvix-vault-sync.timer выключен"
+fi
 if systemctl --user is-active --quiet arvix-telegram 2>/dev/null; then
   systemctl --user restart arvix-telegram && echo "бот перезапущен на новой версии"
 fi
@@ -74,7 +82,7 @@ if [[ "${1:-}" == "--desktop" ]]; then
   "$PYTHON" "$APP/scripts/arvix_cli.py" desktop-mcp
 fi
 
-if [[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/arvix/config.toml" ]]; then
+if [[ -f "$CFG" ]]; then
   step "Дом Арвикса"
   "$PYTHON" "$APP/scripts/arvix_cli.py" init-home || true
 fi
