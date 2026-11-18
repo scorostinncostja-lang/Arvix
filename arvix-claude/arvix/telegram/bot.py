@@ -542,6 +542,9 @@ class Bot:
                 self.on_lesson_button(task_id, op)
             elif kind == "r":
                 self.on_return_button(rest)
+            elif kind == "j":
+                project_id, _, op = rest.partition(":")
+                self.on_project_button(project_id, op)
         except ArvixError as exc:
             self.send(f"Отказ: {exc}")
 
@@ -1684,6 +1687,21 @@ class Bot:
             self.send("Ментор выключен safety-контуром — включить его можешь только ты сам: /mentor on")
             return
         self.send("Вернуть план? Мягко: без разгона, первым — самое короткое дело.", tpl.red_buttons(refresh=False))
+
+    def on_project_button(self, project_id: str, op: str) -> None:
+        """Кнопки напоминания о застое проекта (D43): блок в план или честная пауза — решает человек."""
+        from arvix import projects
+
+        project = projects.resolve(self.core, project_id)
+        if op in ("b30", "t60"):
+            task = projects.plan_block(self.core, project["id"], minutes=int(op[1:]), day="tomorrow" if op[0] == "t" else None,
+                                       source="telegram")
+            when = "завтра " if task.local_date > self.core.today() else ""
+            self.send(f"+ «{task.title}» — {when}{task.start}, {task.duration_min} мин. Напомню за 5 минут.")
+            self.refresh_panel()
+        elif op == "pause":
+            projects.set_project(self.core, project_id=project["id"], status="paused", source="telegram")
+            self.send(f"⏸ «{project['title']}» на паузе. Это решение, а не провал: вернуть — во вкладке «Проекты» или словами.")
 
     def on_return_button(self, op: str) -> None:
         core = self.core

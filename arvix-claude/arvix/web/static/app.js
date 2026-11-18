@@ -100,6 +100,7 @@ const ICON_PATHS = {
   list: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>',
   calendar: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+  projects: '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
 };
 const icon = (name, cls = "") => `<svg class="ic${cls ? " " + cls : ""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ""}</svg>`;
 
@@ -122,6 +123,7 @@ function setTab(tab) {
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   if (tab === "chat") { $("#chat-dot").classList.add("hidden"); }
   state.note = tab === "notes" ? state.note : null;
+  if (tab !== "projects" && state.project) { state.project = null; if (TG) { TG.BackButton.offClick(projectBack); TG.BackButton.hide(); } }
   render();
   load(tab);
   window.scrollTo(0, tab === "chat" ? document.body.scrollHeight : 0);
@@ -142,6 +144,7 @@ async function load(tab = state.tab) {
       state.seen = Math.max(state.seen, last);
     }
     if (tab === "progress") state.history = await api("history?days=30");
+    if (tab === "projects") await loadProjects();
     if (tab === "notes" && !state.note && !state.notesList) state.notesList = await api("notes?dir=" + encodeURIComponent(state.notesDir));
     renderTop(); render();
   } catch (err) {
@@ -165,6 +168,7 @@ function render() {
   if (state.tab === "today") renderToday();
   else if (state.tab === "chat") renderChat();
   else if (state.tab === "notes") renderNotes();
+  else if (state.tab === "projects") renderProjects();
   else renderProgress();
   $(".fab") && $(".fab").remove();
   $(".composer") && state.tab !== "chat" && $(".composer").remove();
@@ -392,7 +396,7 @@ function openSheet(html, bind) {
 }
 function closeSheet() {
   $("#sheet").classList.add("hidden"); $("#sheet-back").classList.add("hidden");
-  if (TG) { TG.BackButton.offClick(closeSheet); if (!state.note) TG.BackButton.hide(); }
+  if (TG) { TG.BackButton.offClick(closeSheet); if (!state.note && !state.project) TG.BackButton.hide(); }
 }
 
 function seg(name, values, current, fmt = (v) => v) {
@@ -1571,6 +1575,377 @@ function chartCard(title, days, pick, max, color, target) {
     <div class="legend"><span>${days[0].date.slice(8, 10)}.${days[0].date.slice(5, 7)}</span><span>сегодня</span></div></div>`;
 }
 
+// --- Проекты (D43) -----------------------------------------------------------------------------
+/* Всё, что здесь в цифрах — время, темп, прогноз, застой, деньги, цена клиента, — считает код
+ * (arvix/projects.py). Приложение только показывает и отправляет операции в /api/projects/…
+ * В 🟥 вкладка без цифр (правило №5). */
+const rub = (v) => Math.round(v || 0).toLocaleString("ru-RU") + " ₽";
+const ddmm = (iso) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}` : "");
+const PROJ_ICON = { learning: "🎓", portfolio: "🗂", income: "💸", community: "🤝" };
+const LOG_ICON = { update: "✓", decision: "⚖", lesson: "💡", blocker: "⛔", release: "🚀", feedback: "💬" };
+
+async function loadProjects() {
+  state.projects = await api("projects");
+  if (state.project && !state.projects.gentle) {
+    try { state.project = await api("project?id=" + encodeURIComponent(state.project.id)); } catch (_) { state.project = null; }
+  }
+  if (state.projects.gentle) state.project = null;
+}
+
+function renderProjects() {
+  const P = state.projects;
+  if (!P) { view.innerHTML = `<div class="empty">Загружаю…</div>`; return; }
+  if (P.gentle) { view.innerHTML = `<div class="card note-card">${esc(P.note)}</div>`; return; }
+  if (state.project) { renderProject(); return; }
+  const s = P.summary;
+  let html = `<div class="proj-top"><div class="stats">
+      <div class="stat"><b>${s.active}/${P.max_active}</b><span>в работе</span><div class="bar"><i style="width:${(100 * s.active) / Math.max(1, P.max_active)}%"></i></div></div>
+      <div class="stat"><b>${hm(s.week_min)}</b><span>неделя${s.weekly_min ? " из " + hm(s.weekly_min) : ""}</span><div class="bar deep"><i style="width:${s.weekly_min ? Math.min(100, (100 * s.week_min) / s.weekly_min) : 0}%"></i></div></div>
+      <div class="stat"><b class="${s.net < 0 ? "neg" : ""}">${rub(s.net)}</b><span>итог денег</span></div></div>
+    <button class="btn primary" data-pact="new">${icon("plus")} Новый проект</button></div>`;
+  if (P.load_issue) html += `<div class="card warn-card">⚠️ ${esc(P.load_issue)}</div>`;
+  if (!P.projects.length) {
+    html += `<div class="card"><h3>Как это работает</h3><div class="proj-how">
+      <p><b>1. Зачем и ожидание.</b> Навык, портфолио, доход или люди — и результат, который можно проверить: «бот работает у 10 человек».</p>
+      <p><b>2. Этапы с критерием.</b> Каждый этап закрывается не «поработал», а фактом: ссылка, число, отзыв.</p>
+      <p><b>3. Часы в неделю.</b> Арвикс ставит блоки в свободные окна и считает, сколько реально вложено.</p>
+      <p><b>4. Не бросать.</b> Неделя без движения — Арвикс пишет сам: 30 минут сегодня или честная пауза.</p>
+      <p><b>5. Деньги и клиенты.</b> Доходы, расходы, каналы привлечения как эксперименты: гипотеза → заявки → клиенты → цена клиента.</p>
+      <p><b>6. Портфолио.</b> Карточка проекта из фактов журнала — в <code>01_Projects</code> в Obsidian.</p>
+      <p class="muted small">В работе — не больше ${P.max_active}: распыление убивает все проекты сразу. Остальное — идеями.</p></div></div>`;
+  }
+  const active = P.projects.filter((p) => p.status === "active");
+  const waiting = P.projects.filter((p) => p.status === "idea" || p.status === "paused");
+  const closed = P.projects.filter((p) => p.status === "done" || p.status === "dropped");
+  if (active.length) html += `<div class="section-title"><span>В работе</span><span>${active.length}</span></div><div class="proj-list">${active.map(projectCard).join("")}</div>`;
+  if (waiting.length) html += `<div class="section-title"><span>Идеи и пауза</span><span>${waiting.length}</span></div><div class="proj-list">${waiting.map(projectCard).join("")}</div>`;
+  if (closed.length) html += `<details class="card"><summary><b>Завершённые</b> <span class="muted">· ${closed.length}</span></summary>
+    <div class="proj-list" style="margin-top:10px">${closed.map(projectCard).join("")}</div></details>`;
+  view.innerHTML = html;
+  bindProjects();
+}
+
+function projectCard(p) {
+  const ms = p.milestones_total ? Math.round((100 * p.milestones_done) / p.milestones_total) : 0;
+  const week = p.weekly_min ? Math.min(100, (100 * p.week_min) / p.weekly_min) : 0;
+  const chips = [`<span class="chip">${esc(p.kind_ru)}</span>`];
+  if (p.status !== "active") chips.push(`<span class="chip ${p.status === "done" ? "green" : ""}">${esc(p.status_ru)}</span>`);
+  if (p.deadline) chips.push(`<span class="chip">до ${ddmm(p.deadline)}</span>`);
+  if (p.status === "active" && p.idle_days >= 7) chips.push(`<span class="chip yellow">${p.idle_days} дн без движения</span>`);
+  if (p.pace && p.pace.behind) chips.push(`<span class="chip red">отстаёт</span>`);
+  if (p.income || p.expense) chips.push(`<span class="chip ${p.net >= 0 ? "green" : "red"}">${p.net >= 0 ? "+" : ""}${rub(p.net)}</span>`);
+  const next = p.next ? `<div class="proj-next">${icon("chevron")}<span>${esc(p.next.title)}</span></div>`
+    : `<div class="proj-next muted">${p.milestones_total ? "все этапы пройдены" : "этапов нет — разложи на шаги"}</div>`;
+  return `<div class="card proj-card" role="button" tabindex="0" data-proj="${esc(p.id)}">
+    <div class="proj-title"><span class="proj-ico">${PROJ_ICON[p.kind] || "📁"}</span><b>${esc(p.title)}</b></div>
+    <div class="meta">${chips.join("")}</div>${p.status === "active" || p.status === "paused" ? next : ""}
+    ${p.status === "active" ? `<div class="proj-bars"><div><span class="muted small">этапы ${p.milestones_done}/${p.milestones_total}</span><div class="bar"><i style="width:${ms}%"></i></div></div>
+      <div><span class="muted small">неделя ${hm(p.week_min)}${p.weekly_min ? " / " + hm(p.weekly_min) : ""}</span><div class="bar deep"><i style="width:${week}%"></i></div></div></div>` : ""}</div>`;
+}
+
+function renderProject() {
+  const p = state.project;
+  const today = (state.data && state.data.date) || new Date().toLocaleDateString("sv-SE");
+  const left = p.deadline ? Math.round((new Date(p.deadline) - new Date(today)) / 86400000) : null;
+  const chips = [`<span class="chip">${PROJ_ICON[p.kind] || "📁"} ${esc(p.kind_ru)}</span>`, `<span class="chip ${p.status === "active" ? "accent" : p.status === "done" ? "green" : ""}">${esc(p.status_ru)}</span>`];
+  if (p.deadline) chips.push(`<span class="chip ${left < 0 ? "red" : left <= 7 ? "yellow" : ""}">до ${ddmm(p.deadline)} · ${left < 0 ? "срок прошёл" : left + " дн"}</span>`);
+  if (p.forecast) chips.push(`<span class="chip ${p.deadline && p.forecast > p.deadline ? "red" : ""}">прогноз ${ddmm(p.forecast)}</span>`);
+  if (p.pace) chips.push(`<span class="chip ${p.pace.behind ? "red" : "green"}">${p.pace.behind ? "отстаёт" : "по графику"}: этапы ${Math.round(100 * p.pace.done_share)}% · время ${Math.round(100 * p.pace.time_share)}%</span>`);
+  const live = p.status === "active" || p.status === "paused" || p.status === "idea";
+  let html = `<div class="proj-bar"><button class="pill" data-pact="back">${icon("back")} Проекты</button></div>
+    <div class="card proj-hero"><h2>${esc(p.title)}</h2><div class="meta">${chips.join("")}</div>
+      <div class="proj-why"><span class="muted small">Зачем</span><div>${esc(p.why)}</div></div>
+      ${p.expectation ? `<div class="proj-why"><span class="muted small">Ожидание</span><div>${esc(p.expectation)}</div></div>` : ""}
+      ${p.skills.length ? `<div class="meta" style="margin-top:8px">${p.skills.map((x) => `<span class="chip accent">${esc(x)}</span>`).join("")}</div>` : ""}
+      ${p.link ? `<div class="small" style="margin-top:8px"><a href="${esc(p.link)}" target="_blank" rel="noopener">${esc(p.link)}</a></div>` : ""}
+      <div class="pills">
+        ${live ? `<button class="pill primary" data-pact="block">${icon("play")} Блок в план</button>
+        <button class="pill" data-pact="analyze">${icon("chat")} Разобрать с Арвиксом</button>
+        <button class="pill" data-pact="log">${icon("pencil")} Записать</button>` : ""}
+        <button class="pill" data-pact="edit">Изменить</button>
+        <button class="pill" data-pact="status">Статус…</button>
+        <button class="pill" data-pact="export">${icon("notes")} В Obsidian</button></div></div>`;
+  if (p.issues.length) html += `<div class="card warn-card"><h3>Арвикс видит</h3>${p.issues.map((x) => `<div>⚠️ ${esc(x)}</div>`).join("")}</div>`;
+  html += `<div class="proj-grid"><div class="proj-main">`;
+  // этапы
+  html += `<div class="card"><h3>Этапы · ${p.milestones_done}/${p.milestones_total}</h3>
+    ${p.milestones.length ? p.milestones.map((m) => `<div class="ms ${m.status}">
+      <button class="ms-check" data-ms="${esc(m.id)}" aria-label="${m.status === "done" ? "Вернуть в работу" : "Этап пройден"}">${m.status === "done" ? icon("check") : ""}</button>
+      <div class="ms-body" data-ms-edit="${esc(m.id)}"><div class="ms-title">${esc(m.title)}</div>
+        <div class="muted small">готово, когда: ${esc(m.dod)}${m.due ? ` · до ${ddmm(m.due)}` : ""}${m.done_date ? ` · пройден ${ddmm(m.done_date)}` : ""}</div></div></div>`).join("")
+      : `<div class="muted small">Этапов нет. Разложи проект на 3–7 шагов, у каждого — проверяемый результат.</div>`}
+    <button class="btn" data-pact="milestone">${icon("plus")} Этап</button></div>`;
+  // план
+  const open = p.tasks.filter((t) => t.open), past = p.tasks.filter((t) => !t.open).slice(0, 8);
+  html += `<div class="card"><h3>Блоки в плане</h3>${open.length ? open.map(projTaskRow).join("") : `<div class="muted small">Ни одного блока впереди — проект стоит. «Блок в план» поставит его в свободное окно.</div>`}
+    ${past.length ? `<details style="margin-top:8px"><summary class="muted small">Прошлые · ${past.length}</summary>${past.map(projTaskRow).join("")}</details>` : ""}</div>`;
+  // журнал
+  html += `<div class="card"><h3>Журнал</h3>${p.log.length ? p.log.slice(0, 25).map((x) => `<div class="log-row">
+      <span class="log-ico" title="${esc((state.projects.log_kinds || {})[x.kind] || "")}">${LOG_ICON[x.kind] || "•"}</span>
+      <div class="grow"><div>${esc(x.text)}</div><div class="muted small">${ddmm(x.date)} · ${esc((state.projects.log_kinds || {})[x.kind] || x.kind)}${x.minutes ? " · " + hm(x.minutes) + " со слов" : ""}</div></div></div>`).join("")
+    : `<div class="muted small">Решения, уроки, стопоры, релизы. Из этого Арвикс соберёт карточку портфолио и разбор.</div>`}
+    ${live ? `<button class="btn" data-pact="log">${icon("plus")} Запись</button>` : ""}</div>`;
+  html += `</div><div class="proj-side">`;
+  // время
+  html += `<div class="card"><h3>Время</h3>
+    <div class="row"><span>Неделя</span><b>${hm(p.week_min)}${p.weekly_min ? " из " + hm(p.weekly_min) : ""}</b></div>
+    ${p.weekly_min ? `<div class="bar deep"><i style="width:${Math.min(100, (100 * p.week_min) / p.weekly_min)}%"></i></div>` : ""}
+    <div class="row" style="margin-top:6px"><span>Всего</span><b>${hm(p.minutes)}</b></div>
+    <div class="muted small">задачи и таймер ${hm(p.task_min)}${p.said_min ? ` · со слов ${hm(p.said_min)}` : ""} · начат ${ddmm(p.started)}${p.last_move ? ` · движение ${ddmm(p.last_move)}` : ""}</div></div>`;
+  // деньги
+  html += `<div class="card"><h3>Деньги</h3>
+    <div class="money-sum"><div><span class="muted small">доход</span><b class="pos">${rub(p.income)}</b></div><div><span class="muted small">расход</span><b class="neg">${rub(p.expense)}</b></div>
+      <div><span class="muted small">итог</span><b class="${p.net < 0 ? "neg" : ""}">${rub(p.net)}</b></div></div>
+    ${p.month_income || p.month_expense ? `<div class="muted small">Этот месяц: +${rub(p.month_income)} / −${rub(p.month_expense)}</div>` : ""}
+    ${p.per_hour != null ? `<div class="muted small">${rub(p.per_hour)} за час вложенного времени</div>` : ""}
+    ${p.money.slice(0, 8).map((x) => `<div class="row small"><span>${ddmm(x.date)} · ${esc(x.category)}${x.note ? ` — ${esc(x.note)}` : ""}</span>
+      <b class="${x.direction === "in" ? "pos" : "neg"}">${x.direction === "in" ? "+" : "−"}${rub(x.amount)}</b></div>`).join("")}
+    <div class="pills"><button class="pill" data-pact="money" data-dir="in">+ Доход</button><button class="pill" data-pact="money" data-dir="out">− Расход</button></div></div>`;
+  // каналы
+  html += `<div class="card"><h3>Клиенты и трафик</h3>${p.channels.length ? p.channels.map((c) => `<div class="chan" data-ch="${esc(c.id)}" role="button" tabindex="0">
+      <div class="row"><b>${esc(c.name)}</b><span class="chip ${c.status === "works" ? "green" : c.status === "dropped" ? "red" : "yellow"}">${esc(state.projects.channel_statuses[c.status] || c.status)}</span></div>
+      <div class="muted small">${esc(state.projects.channel_types[c.type] || c.type)} · ${esc(c.hypothesis)}</div>
+      <div class="chan-nums"><span>затраты <b>${rub(c.cost)}</b></span><span>заявки <b>${c.leads}</b></span><span>клиенты <b>${c.clients}</b></span><span>выручка <b>${rub(c.revenue)}</b></span></div>
+      <div class="chan-nums muted">${[c.cpl != null ? `заявка ${rub(c.cpl)}` : "", c.cpc != null ? `клиент ${rub(c.cpc)}` : "", c.conversion != null ? `конверсия ${c.conversion}%` : "", c.roi != null ? `ROI ${c.roi}%` : ""].filter(Boolean).join(" · ")}</div></div>`).join("")
+    : `<div class="muted small">Канал — эксперимент: гипотеза с числом и сроком → затраты → заявки → клиенты. Бесплатные: контент, сарафан, сообщества; условно бесплатные: бартер, взаимопиар, своё время; платные — реклама.</div>`}
+    <button class="btn" data-pact="channel">${icon("plus")} Канал</button></div>`;
+  html += `</div></div>`;
+  view.innerHTML = html;
+  bindProjects();
+  if (TG) { TG.BackButton.show(); TG.BackButton.offClick(projectBack); TG.BackButton.onClick(projectBack); }
+}
+
+function projTaskRow(t) {
+  const status = t.status === "done" ? `<span class="chip green">✓ ${t.done_pct < 100 ? t.done_pct + "%" : ""}</span>` : t.status === "failed" || t.status === "debt"
+    ? `<span class="chip red">не сделано</span>` : t.status === "active" ? `<span class="chip accent">идёт</span>` : "";
+  return `<div class="row small"><span>${ddmm(t.date)} ${esc(t.start || "")} · ${esc(t.title)}</span><span>${hm(t.duration_min)} ${status}</span></div>`;
+}
+
+function projectBack() {
+  state.project = null;
+  if (TG) { TG.BackButton.offClick(projectBack); TG.BackButton.hide(); }
+  renderProjects(); window.scrollTo(0, 0);
+}
+
+async function openProject(id) {
+  try { state.project = await api("project?id=" + encodeURIComponent(id)); renderProjects(); window.scrollTo(0, 0); }
+  catch (err) { toast(err.message); }
+}
+
+async function projectOp(op, body, msg) {
+  const p = state.project;
+  const r = await api(`projects/${p.id}/${op}`, { json: body });
+  state.project = r.project; notify("success");
+  if (msg) toast(typeof msg === "function" ? msg(r) : msg);
+  state.projects = await api("projects");
+  renderProjects();
+  return r;
+}
+
+function bindProjects() {
+  view.querySelectorAll("[data-proj]").forEach((el) => {
+    const go = () => { haptic(); openProject(el.dataset.proj); };
+    el.addEventListener("click", go);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+  });
+  view.querySelectorAll("[data-ms]").forEach((el) => el.addEventListener("click", async () => {
+    const m = state.project.milestones.find((x) => x.id === el.dataset.ms); if (!m) return;
+    haptic();
+    if (m.status !== "done" && !confirm(`Этап «${m.title}» пройден?\nКритерий: ${m.dod}`)) return;
+    try { await projectOp("milestone", { milestone: m.id, status: m.status === "done" ? "open" : "done" }, m.status === "done" ? "Этап снова в работе" : "✓ Этап пройден"); }
+    catch (err) { toast(err.message); }
+  }));
+  view.querySelectorAll("[data-ms-edit]").forEach((el) => el.addEventListener("click", () => {
+    const m = state.project.milestones.find((x) => x.id === el.dataset.msEdit); if (m) openMilestoneSheet(m);
+  }));
+  view.querySelectorAll("[data-ch]").forEach((el) => el.addEventListener("click", () => {
+    const c = state.project.channels.find((x) => x.id === el.dataset.ch); if (c) openChannelSheet(c);
+  }));
+  view.querySelectorAll("[data-pact]").forEach((el) => el.addEventListener("click", async () => {
+    const act = el.dataset.pact, p = state.project;
+    haptic();
+    try {
+      if (act === "new") openProjectSheet();
+      else if (act === "back") projectBack();
+      else if (act === "edit") openProjectSheet(p);
+      else if (act === "block") openBlockSheet();
+      else if (act === "milestone") openMilestoneSheet();
+      else if (act === "log") openLogSheet();
+      else if (act === "money") openMoneySheet(el.dataset.dir);
+      else if (act === "channel") openChannelSheet();
+      else if (act === "status") openStatusSheet();
+      else if (act === "analyze") {
+        await api("message", { json: { text: `Разбери со мной проект «${p.title}» [${p.id}]: где я по цифрам, что тормозит и какой один следующий шаг. Если нужно — поставь блок в план.` } });
+        toast("Арвикс разбирает — ответ в чате"); setTab("chat");
+      } else if (act === "export") {
+        const r = await projectOp("export", {}, (x) => "Карточка в " + x.path);
+        if (r.path && confirm("Открыть заметку проекта?")) { setTab("notes"); openNote(r.path); }
+      }
+    } catch (err) { notify("error"); toast(err.message); }
+  }));
+}
+
+function openProjectSheet(p = null) {
+  const P = state.projects;
+  const form = { kind: p ? p.kind : "learning", weekly_min: String(p ? p.weekly_min : 180), status: "active" };
+  const kinds = Object.keys(P.kinds);
+  const goals = P.goals || [];
+  openSheet(`<h2>${p ? "Проект" : "Новый проект"}</h2>
+    <div class="field"><input id="pj-title" placeholder="Название: бот для расписания, канал про ОГЭ…" value="${esc(p ? p.title : "")}" maxlength="120"></div>
+    <div class="field"><label>Зачем — что хочешь получить</label><textarea id="pj-why" rows="2" placeholder="Навык Python, первый кейс в портфолио, 10 000 ₽ в месяц, единомышленники">${esc(p ? p.why : "")}</textarea></div>
+    <div class="field"><label>Тип</label>${seg("kind", kinds, form.kind, (v) => (PROJ_ICON[v] || "") + " " + P.kinds[v])}</div>
+    <div class="field"><label>Ожидание — что будет в конце, проверяемо</label><textarea id="pj-exp" rows="2" placeholder="Бот работает у 10 одноклассников; 3 платных заказа; 100 подписчиков">${esc(p ? p.expectation : "")}</textarea></div>
+    <div class="field"><label>Срок</label><input id="pj-deadline" type="date" value="${esc(p && p.deadline ? p.deadline : "")}"></div>
+    <div class="field"><label>Часов в неделю</label>${seg("weekly_min", ["60", "120", "180", "300", "480"], form.weekly_min, (v) => hm(+v))}</div>
+    <div class="field"><label>Навыки, которые даст проект</label><input id="pj-skills" placeholder="Python, монтаж, продажи — через запятую" value="${esc(p ? p.skills.join(", ") : "")}"></div>
+    <div class="field"><label>Ссылка (репозиторий, канал, сайт)</label><input id="pj-link" placeholder="https://…" value="${esc(p ? p.link : "")}"></div>
+    ${goals.length ? `<div class="field"><label>Работает на цель</label><select id="pj-goal" class="input"><option value="">— нет —</option>${goals.map((g) => `<option value="${esc(g.id)}" ${p && p.goal_id === g.id ? "selected" : ""}>${esc(g.title)}</option>`).join("")}</select></div>` : ""}
+    ${p ? "" : `<div class="field"><label>Сразу в работу?</label>${seg("status", ["active", "idea"], "active", (v) => (v === "active" ? "в работу" : "пока идея"))}</div>
+    <div class="field"><label>Первый этап</label><input id="pj-ms" placeholder="Например: MVP — бот отвечает на /today"><input id="pj-ms-dod" placeholder="Готово, когда… (ссылка, число, отзыв)" style="margin-top:6px"></div>`}
+    <button class="btn primary" id="pj-save">${p ? "Сохранить" : "Создать"}</button>
+    <p class="muted small">Можно и словами в чате: «хочу сделать бота для расписания к Новому году, 3 часа в неделю».</p>`, (root) => {
+    bindSeg(root, form);
+    if (!p) setTimeout(() => $("#pj-title").focus(), 50);
+    $("#pj-save").onclick = async () => {
+      const body = { title: $("#pj-title").value.trim(), why: $("#pj-why").value.trim(), kind: form.kind, expectation: $("#pj-exp").value.trim(),
+        deadline: $("#pj-deadline").value || null, weekly_min: +form.weekly_min, skills: $("#pj-skills").value, link: $("#pj-link").value.trim(),
+        goal_id: $("#pj-goal") ? $("#pj-goal").value || null : null };
+      if (p) body.id = p.id; else body.status = form.status;
+      const msTitle = !p && $("#pj-ms").value.trim(), msDod = !p && $("#pj-ms-dod").value.trim();
+      if (msTitle && !msDod) { toast("У этапа нужен критерий: как проверить, что он сделан"); return; }
+      try {
+        const r = await api("projects", { json: body });
+        if (msTitle) await api(`projects/${r.project.id}/milestone`, { json: { title: msTitle, dod: msDod } });
+        notify("success"); closeSheet();
+        state.projects = await api("projects");
+        await openProject(r.project.id);  // проверки — уже с первым этапом
+        const found = (state.project && state.project.issues) || [];
+        toast(p ? "Сохранил" : "+ " + r.project.title + (found.length ? "\n⚠️ " + found.slice(0, 2).join("\n⚠️ ") : ""));
+      } catch (err) { toast(err.message); }
+    };
+  });
+}
+
+function openMilestoneSheet(m = null) {
+  openSheet(`<h2>${m ? "Этап" : "Новый этап"}</h2><p class="muted small">${esc(state.project.title)}</p>
+    <div class="field"><input id="ms-title" placeholder="Что сделать: лендинг, первая версия, 10 роликов" value="${esc(m ? m.title : "")}"></div>
+    <div class="field"><label>Готово, когда…</label><textarea id="ms-dod" rows="2" placeholder="Проверяемо: страница открывается по ссылке и 3 человека оставили контакт">${esc(m ? m.dod : "")}</textarea></div>
+    <div class="field"><label>Срок этапа</label><input id="ms-due" type="date" value="${esc(m && m.due ? m.due : "")}"></div>
+    <button class="btn primary" id="ms-save">${m ? "Сохранить" : "Добавить"}</button>
+    ${m && m.status !== "dropped" ? `<button class="btn danger" id="ms-drop">Убрать этап</button>` : ""}`, () => {
+    if (!m) setTimeout(() => $("#ms-title").focus(), 50);
+    $("#ms-save").onclick = async () => {
+      try {
+        await projectOp("milestone", { milestone: m ? m.id : null, title: $("#ms-title").value.trim(), dod: $("#ms-dod").value.trim(), due: $("#ms-due").value || null }, m ? "Сохранил" : "+ этап");
+        closeSheet();
+      } catch (err) { toast(err.message); }
+    };
+    $("#ms-drop") && ($("#ms-drop").onclick = async () => {
+      if (!confirm("Убрать этап из проекта?")) return;
+      try { await projectOp("milestone", { milestone: m.id, status: "dropped" }, "Этап убран"); closeSheet(); } catch (err) { toast(err.message); }
+    });
+  });
+}
+
+function openBlockSheet() {
+  const p = state.project, form = { minutes: "60", day: "today" };
+  openSheet(`<h2>Блок в план</h2><p class="muted small">${esc(p.title)}${p.next ? " → " + esc(p.next.title) : ""}</p>
+    <div class="field"><label>Сколько</label>${seg("minutes", ["30", "45", "60", "90", "120"], "60", (v) => hm(+v))}</div>
+    <div class="field"><label>Когда</label><div style="display:flex;gap:8px">${seg("day", ["today", "tomorrow"], "today", (v) => (v === "today" ? "сегодня" : "завтра"))}
+      <input id="bk-start" type="time" style="flex:1"></div></div>
+    <button class="btn primary" id="bk-save">${icon("play")} Поставить</button>
+    <p class="muted small">Время пустое — Арвикс найдёт первое свободное окно: мимо задач, школы и не позже чем за час до отбоя. Блок — глубокая работа, за 5 минут придёт напоминание.</p>`, (root) => {
+    bindSeg(root, form);
+    $("#bk-save").onclick = async () => {
+      try {  // «today»/«tomorrow» — по часам сервера, а не телефона
+        await projectOp("block", { minutes: +form.minutes, date: form.day, start: $("#bk-start").value || null },
+          (r) => `+ ${r.task.title} · ${r.task.start}` + (r.warnings && r.warnings.length ? "\n⚠️ " + r.warnings.join("\n⚠️ ") : ""));
+        closeSheet(); state.data = await api("state");
+      } catch (err) { toast(err.message); }
+    };
+  });
+}
+
+function openLogSheet() {
+  const kinds = state.projects.log_kinds, form = { kind: "update", minutes: "0" };
+  openSheet(`<h2>Запись в журнал</h2><p class="muted small">${esc(state.project.title)}</p>
+    <div class="field">${seg("kind", Object.keys(kinds), "update", (v) => LOG_ICON[v] + " " + kinds[v])}</div>
+    <div class="field"><textarea id="lg-text" rows="3" placeholder="Что сделал, что решил, чему научился, что мешает"></textarea></div>
+    <div class="field"><label>Сколько работал вне плана</label>${seg("minutes", ["0", "15", "30", "60", "90", "120"], "0", (v) => (v === "0" ? "не считать" : hm(+v)))}</div>
+    <button class="btn primary" id="lg-save">Записать</button>
+    <p class="muted small">Минуты «со слов» идут во время проекта отдельной строкой — таймер и блоки в плане надёжнее.</p>`, (root) => {
+    bindSeg(root, form);
+    setTimeout(() => $("#lg-text").focus(), 50);
+    $("#lg-save").onclick = async () => {
+      try { await projectOp("log", { kind: form.kind, text: $("#lg-text").value.trim(), minutes: +form.minutes }, "Записал"); closeSheet(); }
+      catch (err) { toast(err.message); }
+    };
+  });
+}
+
+function openMoneySheet(dir = "out") {
+  const p = state.project, form = { direction: dir };
+  const cats = dir === "in" ? ["продажи", "заказ", "донат", "реклама у меня"] : ["реклама", "сервисы", "домен и хостинг", "материалы", "обучение"];
+  openSheet(`<h2>${dir === "in" ? "Доход" : "Расход"}</h2><p class="muted small">${esc(p.title)}</p>
+    <div class="field">${seg("direction", ["in", "out"], dir, (v) => (v === "in" ? "+ доход" : "− расход"))}</div>
+    <div class="field"><input id="mn-amount" type="number" inputmode="decimal" min="1" step="any" placeholder="Сумма, ₽"></div>
+    <div class="field"><label>Категория</label><input id="mn-cat" list="mn-cats" placeholder="${esc(cats[0])}"><datalist id="mn-cats">${cats.map((c) => `<option value="${esc(c)}">`).join("")}</datalist></div>
+    <div class="field"><input id="mn-note" placeholder="Заметка: за что, от кого"></div>
+    ${p.channels.length ? `<div class="field"><label>Канал</label><select id="mn-ch" class="input"><option value="">—</option>${p.channels.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("")}</select></div>` : ""}
+    <button class="btn primary" id="mn-save">Записать</button>
+    <p class="muted small">Деньги проекта — отдельно от личных трат недели. Арвикс считает итог и доход за час, но не даёт инвестиционных советов.</p>`, (root) => {
+    bindSeg(root, form);
+    setTimeout(() => $("#mn-amount").focus(), 50);
+    $("#mn-save").onclick = async () => {
+      try {
+        await projectOp("money", { amount: $("#mn-amount").value, direction: form.direction, category: $("#mn-cat").value.trim(), note: $("#mn-note").value.trim(),
+          channel: $("#mn-ch") ? $("#mn-ch").value || null : null }, "Записал");
+        closeSheet();
+      } catch (err) { toast(err.message); }
+    };
+  });
+}
+
+function openChannelSheet(c = null) {
+  const P = state.projects, form = { type: c ? c.type : "free", status: c ? c.status : "test" };
+  const num = (id, label, v) => `<div><label class="muted small">${label}</label><input id="${id}" type="number" inputmode="decimal" min="0" step="any" value="${c ? v : ""}" placeholder="0"></div>`;
+  openSheet(`<h2>${c ? esc(c.name) : "Канал привлечения"}</h2><p class="muted small">${esc(state.project.title)}</p>
+    ${c ? "" : `<div class="field"><input id="ch-name" placeholder="Reels, Telegram-канал, Авито, сарафан, школьный чат"></div>`}
+    <div class="field"><label>Тип</label>${seg("type", Object.keys(P.channel_types), form.type, (v) => P.channel_types[v])}</div>
+    <div class="field"><label>Гипотеза — число и срок</label><textarea id="ch-hyp" rows="2" placeholder="5 роликов за 2 недели → 20 заявок, 3 клиента">${esc(c ? c.hypothesis : "")}</textarea></div>
+    <div class="field"><label>Итоги накопленно — всего с начала</label><div class="num-grid">
+      ${num("ch-cost", "затраты, ₽", c && c.cost)}${num("ch-leads", "заявки", c && c.leads)}${num("ch-clients", "клиенты", c && c.clients)}${num("ch-rev", "выручка, ₽", c && c.revenue)}</div></div>
+    <div class="field"><label>Вывод</label>${seg("status", Object.keys(P.channel_statuses), form.status, (v) => P.channel_statuses[v])}</div>
+    <button class="btn primary" id="ch-save">${c ? "Обновить" : "Добавить"}</button>
+    <p class="muted small">Условно бесплатный — платишь не деньгами: бартер, взаимопиар, своё время. Время тоже цена: смотри часы проекта.</p>`, (root) => {
+    bindSeg(root, form);
+    $("#ch-save").onclick = async () => {
+      const v = (id) => ($("#" + id).value === "" ? null : $("#" + id).value);
+      try {
+        await projectOp("channel", { channel: c ? c.id : null, name: c ? "" : $("#ch-name").value.trim(), type: form.type, hypothesis: $("#ch-hyp").value.trim(),
+          cost: v("ch-cost"), leads: v("ch-leads"), clients: v("ch-clients"), revenue: v("ch-rev"), status: form.status }, c ? "Обновил" : "+ канал");
+        closeSheet();
+      } catch (err) { toast(err.message); }
+    };
+  });
+}
+
+function openStatusSheet() {
+  const p = state.project, form = { status: p.status };
+  const S = state.projects.statuses;
+  openSheet(`<h2>Статус</h2><p class="muted small">${esc(p.title)} · сейчас ${esc(p.status_ru)}</p>
+    <div class="field">${seg("status", Object.keys(S), p.status, (v) => S[v])}</div>
+    <div class="field"><label>Итог — для «готов» и «закрыт» обязателен</label><textarea id="st-reason" rows="3" placeholder="Что получилось, что нет и почему. Это попадёт в портфолио и разбор."></textarea></div>
+    <button class="btn primary" id="st-save">Сохранить</button>
+    <p class="muted small">Пауза и закрытие — решения, а не провал. Плохо только, когда проект умирает молча. В работе — не больше ${state.projects.max_active}.</p>`, (root) => {
+    bindSeg(root, form);
+    $("#st-save").onclick = async () => {
+      try { await projectOp("status", { status: form.status, reason: $("#st-reason").value.trim() }, "Статус: " + S[form.status]); closeSheet(); }
+      catch (err) { toast(err.message); }
+    };
+  });
+}
+
 // --- живые обновления --------------------------------------------------------------------------
 async function stream() {
   let delay = 1000;
@@ -1620,16 +1995,17 @@ function onChange(ev) {
         if (last && last.id > state.seen && last.who === "arvix") $("#chat-dot").classList.remove("hidden");
         if (state.tab === "today") renderToday();
         if (state.tab === "progress") { state.history = await api("history?days=30"); renderProgress(); }
+        if (state.tab === "projects") { await loadProjects(); renderProjects(); }
       }
     } catch (err) { if (err.auth) renderLogin(); }
   }, 250);
 }
 
 // --- клавиатура (ноутбук) ----------------------------------------------------------------------
-/* Ctrl/Alt+1…4 — вкладки, Alt+N — новая задача, / — поиск или поле сообщения, E — править заметку
+/* Ctrl/Alt+1…5 — вкладки, Alt+N — новая задача, / — поиск или поле сообщения, E — править заметку
  * (клавиши — по e.code, чтобы работали и на русской раскладке),
  * Ctrl+S — сохранить, Esc — закрыть окно, заметку или разговор. На телефоне клавиатуры нет — ничего не мешает. */
-const TABS = ["today", "chat", "notes", "progress"];
+const TABS = ["today", "chat", "notes", "projects", "progress"];
 document.addEventListener("keydown", (e) => {
   const typing = e.target instanceof Element && !!e.target.closest("input, textarea, select, [contenteditable]");
   if ((e.ctrlKey || e.metaKey) && e.code === "KeyS" && $("#e-text")) { e.preventDefault(); saveEditor(); return; }
@@ -1637,10 +2013,11 @@ document.addEventListener("keydown", (e) => {
     if (!$("#sheet").classList.contains("hidden")) { closeSheet(); return; }
     if (talk.on) { closeTalk(); return; }
     if (state.tab === "notes" && state.note) { e.preventDefault(); noteBack(); return; }
+    if (state.tab === "projects" && state.project) { e.preventDefault(); projectBack(); return; }
     if (typing) e.target.blur();
     return;
   }
-  if ((e.altKey || e.ctrlKey) && !e.shiftKey && /^Digit[1-4]$/.test(e.code)) {
+  if ((e.altKey || e.ctrlKey) && !e.shiftKey && /^Digit[1-5]$/.test(e.code)) {
     e.preventDefault();
     const tab = TABS[+e.code.slice(5) - 1];
     if (tab !== state.tab && !(state.noteEdit && !confirmLeaveEditor())) setTab(tab);
@@ -1687,7 +2064,7 @@ async function sendShared() {
   if (!TG && !token()) { renderLogin(); return; }
   const params = new URLSearchParams(location.search);
   const start = params.get("tab") || (TG && TG.initDataUnsafe && TG.initDataUnsafe.start_param) || "today";
-  setTab(["today", "chat", "notes", "progress"].includes(start) ? start : "today");
+  setTab(TABS.includes(start) ? start : "today");
   stream();
   if (params.get("shared")) sendShared().catch((err) => toast(err.message));
 })();

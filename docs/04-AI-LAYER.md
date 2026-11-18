@@ -162,9 +162,12 @@ claude -p <сообщение> --system-prompt <слои 1–8> --output-format 
 ### 5.2. Actions — руки модели
 Модель ничего не меняет сама. Она возвращает список действий, код исполняет каждое через `Core` с проверками и
 дописывает к ответу, что **реально** записано («✅ Английский») и что отказано («⚠️ Не выполнено: …»).
-18 типов (`brain.ACTION_TYPES`): `add_task`, `complete_task`, `fail_task`, `defer_task`, `cancel_task`, `start_task`,
+24 типа (`brain.ACTION_TYPES`): `add_task`, `complete_task`, `fail_task`, `defer_task`, `cancel_task`, `start_task`,
 `log_sleep`, `log_expense`, `log_social`, `remember`, `note`, `profile_set`, `set_goal`, `add_trait`,
-`declare_reason`, `learning_question`, `safety_flag`, `set_template`. Плюс действия интерфейса (`brain.UI_ACTIONS`,
+`declare_reason`, `learning_question`, `safety_flag`, `set_template` и шесть проектных (D43): `set_project`,
+`set_milestone` (этап только с `dod`), `plan_project` (блок в первое свободное окно — время ищет код), `project_log`,
+`project_money`, `project_channel`; у `add_task` — поле `project`. Цифры проекта модель видит в блоке ПРОЕКТЫ
+контекста вместе с ⚠️ несостыковками, которые обязана поднять сама. Плюс действия интерфейса (`brain.UI_ACTIONS`,
 их исполняет бот, [05-INTERFACES.md §2.1](05-INTERFACES.md#21-без-команд--намерение-из-текста--d23)), среди них
 `offer_return` — показать в 🟥 кнопку «Вернуться к плану»: режим меняет кнопка человека, не модель (D38).
 `log_sleep` принимает `duration` или `bedtime` + `wake` — длительность через полночь считает код.
@@ -247,7 +250,7 @@ quota_push), `text`, `voice_hint` (когда напомнить), `priority` 1�
 | Конституция без `decision_rule`, правила инструментов, мягкие примеры | стиль `output-styles/arvix.md` (генерируется) | всегда, в доме `~/Arvix` |
 | Обращение, тон-блок, `decision_rule` и жёсткие примеры (вне мягкого режима), контекст, блок первой встречи | хук `SessionStart` → `prompt.hook_context` | старт, resume, clear, compact |
 | Строка «сейчас · режим · день» и новый тон-блок при смене режима | хук `UserPromptSubmit` | каждое сообщение |
-| Руки | 12 MCP-инструментов (`context`, `day`, `task`, `log`, `profile`, `interview`, `check_request`, `debrief`, `analyst`, `notes`, `mode`, `export`) | по требованию модели |
+| Руки | 13 MCP-инструментов (`context`, `day`, `task`, `log`, `profile`, `interview`, `check_request`, `debrief`, `analyst`, `notes`, `mode`, `export`, `project`) | по требованию модели |
 | Порядок действий | 9 скиллов | по описанию или `/arvix:<имя>` |
 
 Хуки срабатывают только в доме Арвикса (маркер `.arvix-home`) — обычные кодинг-сессии не платят токенами.

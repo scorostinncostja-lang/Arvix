@@ -43,6 +43,10 @@
     {
       "name": "Заметки",
       "url": "/?tab=notes"
+    },
+    {
+      "name": "Проекты",
+      "url": "/?tab=projects"
     }
   ],
   "share_target": {
