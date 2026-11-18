@@ -15,7 +15,7 @@ arvix doctor                                  # проверка
 1. копирует плагин в `~/.local/share/arvix/app` — путь без пробелов и кириллицы, его видят systemd, Claude Code и
    Claude Desktop, и он не исчезает вместе с git-worktree; тесты не копируются;
 2. ставит CLI `~/.local/bin/arvix` (предупреждает, если папки нет в `PATH`); на машине в удалённом режиме
-   (`[remote] host`) — не ставит и удаляет прежнюю обёртку: там интерфейс — приложение (D38), запасной путь —
+   (`[remote] host`) — не ставит и удаляет прежнюю обёртку: там интерфейс — приложение (D42), запасной путь —
    `python3 ~/.local/share/arvix/app/scripts/arvix_cli.py <команда>`;
 3. проверяет плагин `claude plugin validate`, регистрирует маркетплейс `arvix` и плагин `arvix@arvix` (scope user);
 4. кладёт systemd-юниты пользователя: `arvix-telegram.service`, `arvix-backup.service/.timer`,
@@ -68,7 +68,6 @@ arvix setup --telegram --yes        # только привязать бота: 
 | `[mechanics] sleep_target_min` | `450` | норма сна, если распорядок не задан ([02-MECHANICS.md §7.1](02-MECHANICS.md#71-норма-сна--coresleep_target)) |
 | `[mechanics] deep_target_min` | `120` | норма глубокой работы, если в плане дня её нет |
 | `[mechanics] week_budget_min · week_deep_budget_min` | `1560` · `480` | бюджет недели без шаблонов |
-| `[mechanics] shields_per_month` | `2` | щиты |
 | `[mechanics.quotas]` | спорт 3 · социум 2 · новое 1 · отдых без экрана 3 | недельные минимумы |
 | `[remote] host · app` | — | удалённый режим (§3) |
 

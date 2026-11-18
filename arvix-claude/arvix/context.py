@@ -95,6 +95,8 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     mode_label = rules.MODE_LABELS[core.effective_mode()]
     if not st.mentor_enabled:
         mode_label += " (ментор выключен safety-контуром)"
+    elif gentle:
+        mode_label += " — день восстановления"  # причина с цифрами (%, часы) в мягкий контекст не идёт — правило №5
     elif st.mode_trigger:
         mode_label += f" ({st.mode_trigger})"
     day_type = DAY_TYPES_RU.get(day.day_type) if day and day.day_type else None
@@ -102,7 +104,7 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     if day_type:
         head += f" Тип дня: {day_type}."
     if day and day.silent:
-        head += " ТИХИЙ ДЕНЬ: проактивных сообщений нет, разбор без штрафов."
+        head += " ТИХИЙ ДЕНЬ: проактивных сообщений нет, долга за сегодня нет."
     lines.append(head)
 
     profile = st.profile
@@ -117,19 +119,17 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     if gentle:
         if sleep:
             lines.append("СЕГОДНЯ:" + sleep.lstrip(" ·"))
+        else:
+            lines.append("СОН СЕГОДНЯ: не записан. Спроси между делом, во сколько лёг и встал, и запиши: log_sleep с bedtime и wake.")
         open_tasks = [t for t in tasks if t.is_open]
         if open_tasks:
             small = min(open_tasks, key=lambda t: (t.duration_min or 999, t.importance))
-            lines.append(f"ОДНА МАЛЕНЬКАЯ ВЕЩЬ НА ВЫБОР: {small.title}")
+            lines.append(f"ОДНА МАЛЕНЬКАЯ ВЕЩЬ НА ВЫБОР: {small.title} ({small.duration_min} мин) [{small.id}]")
+        if st.mentor_enabled and st.mode == "red":
+            lines.append(f"ВЫХОД ИЗ 🟥 (считает код): {core.red_exit()}. Готов вернуться — action offer_return, решает он кнопкой.")
         return "\n".join(lines)
 
     status = core.status()
-    season = status["season"]
-    lines.append(
-        f"СОСТОЯНИЕ: ур.{status['level']} ({status['xp_into']}/{status['xp_need']} XP) · HP {st.hp}"
-        f" · стрик {status['streak']} дн · сезон S{season['number']} нед.{season['week']} {season['rank']} (SP {season['sp_avg']})"
-        + (" · ПРОТОКОЛ НОЛЬ" if status["protocol_zero"] else "")
-    )
     done = sum(1 for t in tasks if t.status == "done")
     completion = st.completion(today)
     deep_target = core.deep_target(today)

@@ -33,12 +33,14 @@ from arvix.brain import (
     Brain,
     apply_actions,
     clip,
+    effort_for,
     gentle_violation,
     has_source,
+    mode_shift,
 )
 from arvix.context import build_context, end_time, hm, task_line
-from arvix.core import ArvixError, Core, parse_duration
-from arvix.prompt import constitution, system_prompt
+from arvix.core import ArvixError, Core, parse_sleep_text
+from arvix.prompt import constitution, voice_prompt
 from arvix.stt import STT, STTError
 from arvix.tts import TTS, TTSError
 from arvix.telegram import fmt
@@ -346,13 +348,13 @@ class Bot:
             elif kind == "report":
                 self.await_clear()
                 result = self.core.complete_task(waiting["task"], report=text, source="telegram")
-                self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
+                self.send(tpl.completed(result["task"].title, result["debt_closed"]) + tpl.warn(result["warnings"]))
                 self.refresh_panel()
             elif kind == "partial":
                 self.await_clear()
                 pct = int(m.group(1)) if (m := re.search(r"\b(\d{1,2})\b", text)) else 50
                 result = self.core.complete_task(waiting["task"], done_pct=pct, report=text, source="telegram")
-                self.send(tpl.completed(result["task"].title, result["xp"]) + f" · {pct}%" + tpl.warn(result["warnings"]))
+                self.send(tpl.completed(result["task"].title) + f" · {pct}%" + tpl.warn(result["warnings"]))
                 self.refresh_panel()
             elif kind == "fail_reason":
                 self.await_clear()
@@ -365,9 +367,7 @@ class Bot:
                 self.await_clear()
                 self.propose_schedule(text)
             elif kind == "sleep":
-                self.await_clear()
-                result = self.core.log_sleep(parse_duration(text.split()[0]), source="telegram")
-                self.send(f"Сон {hm(result['duration_min'])}. Режим: {rules.MODE_LABELS[result['mode']]}" + tpl.warn(result["warnings"]))
+                self.sleep_answer(text, waiting)
             elif kind == "add":
                 self.await_clear()
                 fields = parse_quick_task(text)
@@ -389,9 +389,32 @@ class Bot:
                 return False
         except ArvixError as exc:
             if kind == "sleep":
+                self.await_clear()
                 return False  # это был не ответ про сон — отдаём голове
             self.send(f"Отказ: {exc}")
         return True
+
+    def sleep_answer(self, text: str, waiting: dict[str, Any] | None = None) -> None:
+        """Сон словами без модели (02-MECHANICS §7.2). «8:30 утра» — это подъём, а не 8,5 часа сна:
+        код спросит отбой и посчитает сам. Половина ответа ждёт вторую в том же ожидании."""
+        waiting = waiting or {}
+        expect = "bedtime" if waiting.get("wake") else "wake" if waiting.get("bedtime") else None
+        parsed = parse_sleep_text(text, expect=expect)
+        bed = parsed["bedtime"] or waiting.get("bedtime")
+        wake = parsed["wake"] or waiting.get("wake")
+        if parsed["duration"] is None and not (bed and wake):
+            if waiting.get("bedtime") or waiting.get("wake"):  # второй раз половина — дальше голова
+                raise ArvixError("сон не дособран")
+            self.await_set("sleep", bedtime=bed, wake=wake)
+            self.send(f"Подъём {wake}. Во сколько уснул?" if wake else f"Отбой {bed}. Во сколько встал?")
+            return
+        self.await_clear()
+        result = self.core.log_sleep(parsed["duration"], bedtime=bed, wake=wake, source="telegram")
+        self.send(tpl.sleep_logged(result) + tpl.warn(result["warnings"]))
+        if result["mode_before"] == "red" and result["mode"] != "red":
+            self.send_panel(pin=True, hint="Возвращаемся без разгона: первым — самое короткое дело.")
+        elif result["mode"] == "red":
+            self.refresh_panel()
 
     @staticmethod
     def file_media(msg: dict[str, Any]) -> dict[str, Any] | None:
@@ -436,7 +459,7 @@ class Bot:
         if waiting and waiting.get("kind") == "report":
             self.await_clear()
             result = self.core.complete_task(waiting["task"], report=caption or "фото-отчёт", proof_kind="photo", source="telegram")
-            self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
+            self.send(tpl.completed(result["task"].title, result["debt_closed"]) + tpl.warn(result["warnings"]))
             self.refresh_panel()
         else:
             self.send("Фото принимаю как отчёт, когда жду его: нажми ✅ у задачи или напиши, что за задача.")
@@ -454,7 +477,7 @@ class Bot:
                 self.offer_focus()
             elif action == "sleep":
                 self.await_set("sleep")
-                self.send("Сколько спал? Числом: 7:20. Можно с отбоем: 7:20 00:30")
+                self.send("Как спал? «7:20» — или словами: «лёг в час, встал в 8:30».")
             elif action == "add":
                 self.await_set("add")
                 self.send("Что и когда? Например: «Физика 18:00 60м !4». Без времени — подберу окно сам.")
@@ -517,6 +540,8 @@ class Bot:
             elif kind == "l":
                 task_id, _, op = rest.partition(":")
                 self.on_lesson_button(task_id, op)
+            elif kind == "r":
+                self.on_return_button(rest)
         except ArvixError as exc:
             self.send(f"Отказ: {exc}")
 
@@ -537,7 +562,7 @@ class Bot:
         elif op == "yes":
             if task.proof == "confirm":
                 result = core.complete_task(task.id, source="telegram")
-                self.send(tpl.completed(task.title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
+                self.send(tpl.completed(task.title, result["debt_closed"]) + tpl.warn(result["warnings"]))
             else:
                 self.await_set("report", task=task.id)
                 self.send((tpl.ASK_PHOTO if task.proof == "photo" else tpl.ASK_REPORT).replace("?", f" — «{task.title}»?", 1))
@@ -547,7 +572,7 @@ class Bot:
         elif op == "no":
             result = core.fail_task(task.id, reason="отмечено кнопкой", source="telegram")
             self.await_set("fail_reason", task=task.id)
-            self.send(tpl.failed(task.title, result["hp"], result["debt"]) + "\n" + tpl.ASK_FAIL_REASON)
+            self.send(tpl.failed(task.title, result["debt"]) + "\n" + tpl.ASK_FAIL_REASON)
         self.refresh_panel()
 
     def on_panel_button(self, op: str) -> None:
@@ -592,8 +617,10 @@ class Bot:
 
     def panel_view(self) -> tuple[str, list[list[tuple[str, str]]]]:
         core = self.core
-        if core.effective_mode() == "red":  # в 🟥 — без задач и цифр (правило №5)
-            return "📋 Сегодня без плана и без цифр. Одна маленькая вещь — любая.", [[("🔄", "p:refresh")]]
+        if core.effective_mode() == "red":  # в 🟥 — без задач и цифр (правило №5), но с выходом (D38)
+            if not core.state.mentor_enabled:
+                return "📋 Сегодня без плана и без цифр. Одна маленькая вещь — любая.", [[("🔄", "p:refresh")]]
+            return tpl.RED_PANEL, tpl.red_buttons()
         text = tpl.day_panel(core)
         open_tasks = [t for t in core.state.tasks_on(core.today()) if t.is_open]
         return text, tpl.panel_buttons(open_tasks, focus_running=bool(core.store.kv_get(FOCUS)))
@@ -1001,7 +1028,7 @@ class Bot:
         if task.is_open or task.status == "debt":
             pct = 100 if score is None else max(30, score)
             done = core.complete_task(task.id, done_pct=pct, report=f"проверка {score}%: {answers}" if score is not None else answers, source="telegram")
-            receipt_lines.append(tpl.completed(task.title, done["xp"]) + (f" · проверка {score}%" if score is not None else ""))
+            receipt_lines.append(tpl.completed(task.title) + (f" · проверка {score}%" if score is not None else ""))
             receipt_lines += [f"⚠️ Проверь: {w}" for w in done["warnings"]]
         if gaps:
             receipt_lines.append("В карточки и журнал ошибок: " + "; ".join(gaps[:4]))
@@ -1229,34 +1256,33 @@ class Bot:
         for block in (self.recall_block(text), self.notes_block(text)):
             if block:
                 extra += "\n" + block
-        try:
-            export_transcripts(core)
-        except OSError as exc:
-            log.warning("папка памяти: %s", exc)
-        system = system_prompt(core, channel=self.channel if self.channel == "telegram" else "telegram",
-                               message=text, history=self.history(exclude_last=text), extra=extra.strip())
+        # Статичная часть — системный промпт (из кэша), всё живое — в запросе (D40).
+        system, prompt = voice_prompt(core, channel=self.channel if self.channel == "telegram" else "telegram",
+                                      message=text, history=self.history(exclude_last=text), extra=extra.strip())
+        # Навыки (D33): в 🟥 и при выключенном менторе — только мягкие (разговор, тревога), правило №5.
+        skills = "gentle" if core.effective_mode() == "red" or not core.state.mentor_enabled else "full"
+        ask = {"system": system, "schema": VOICE_SCHEMA, "vault_tools": True, "web": True, "skills": skills, "effort": effort_for(text)}
         with self.typing_kept():
-            # Навыки (D33): в 🟥 и при выключенном менторе — только мягкие (разговор, тревога), правило №5.
-            skills = "gentle" if core.effective_mode() == "red" or not core.state.mentor_enabled else "full"
-            result = self.brain.ask(system=system, prompt=text, schema=VOICE_SCHEMA, vault_tools=True, web=True, skills=skills)
+            result = self.brain.ask(prompt=prompt, **ask)
             if result is None:
                 heard = f"🎙 «{clip(text, 300)}»\n" if voice else ""  # голова молчит — пусть хотя бы видно, что услышано
                 self.send(heard + " ".join(x for x in (tpl.FALLBACK, self.brain_down_hint()) if x))
                 return
             reply = (result.get("reply") or "").strip()
+            # Перегенерация — с пометкой в запросе, а не в системном промпте: кэш системного остаётся.
             if core.effective_mode() == "red" and gentle_violation(reply):
                 retry = self.brain.ask(
-                    system=system + "\n\n<validator>В ответе были слова про дисциплину, задачи или метрики. В мягком режиме это запрещено. Перепиши по-человечески.</validator>",
-                    prompt=text, schema=VOICE_SCHEMA,
+                    prompt=prompt + "\n\n<validator>В ответе были слова про дисциплину, задачи или метрики. В мягком режиме это запрещено. Перепиши по-человечески.</validator>",
+                    **ask,
                 )
                 ok = retry is not None and not gentle_violation(retry.get("reply", ""))
                 result = retry if ok else {"actions": []}
                 reply = retry["reply"].strip() if ok else tpl.GENTLE_FALLBACK
             if result.get("learning") and not has_source(reply):
                 retry = self.brain.ask(
-                    system=system + "\n\n<validator>Ответ обучающий, но первоисточник не назван. Назови его: учебник и параграф, "
+                    prompt=prompt + "\n\n<validator>Ответ обучающий, но первоисточник не назван. Назови его: учебник и параграф, "
                     "официальная документация или спецификация. Ссылку давай только настоящую; не уверен — без ссылки. Не выдумывай URL.</validator>",
-                    prompt=text, schema=VOICE_SCHEMA, vault_tools=True, web=True,
+                    **ask,
                 )
                 if retry and has_source(retry.get("reply", "")):
                     result, reply = retry, retry["reply"].strip()
@@ -1268,6 +1294,10 @@ class Bot:
         if done:
             self.refresh_panel()
         self.run_ui_actions([a for a in actions if a.get("type") in UI_ACTIONS], text)
+        try:  # папка памяти для поиска головы — после ответа: человек не ждёт записи файлов
+            export_transcripts(core)
+        except OSError as exc:
+            log.warning("папка памяти: %s", exc)
 
     # --- действия интерфейса по словам человека (05-INTERFACES §2.1) -------------------
 
@@ -1299,6 +1329,8 @@ class Bot:
                     self.send_debrief(manual=True)
                 elif kind == "rest_day":
                     self.cmd_sos("")
+                elif kind == "offer_return":
+                    self.offer_return()
                 elif kind == "silent_day":
                     self.cmd_silent("")
                 elif kind == "open_app":
@@ -1431,8 +1463,9 @@ class Bot:
         day = self.core.state.days.get(self.core.today())
         if not (day and day.sleep_min):
             self.await_set("sleep")
-        if self.core.effective_mode() != "red" and self.core.state.tasks_on(self.core.today()):
-            self.send_panel(pin=True)
+        red = self.core.effective_mode() == "red"
+        if (red and self.core.state.mentor_enabled) or (not red and self.core.state.tasks_on(self.core.today())):
+            self.send_panel(pin=True)  # в 🟥 — панель восстановления с кнопкой «Вернуться к плану»
 
     def send_debrief(self, *, manual: bool = False) -> None:
         core = self.core
@@ -1451,7 +1484,7 @@ class Bot:
             if result and result.get("assessment"):
                 text += "\n\n" + clip(result["assessment"], 300)
             if day.silent:
-                text += "\nТихий день — разбор без штрафов, только выводы."
+                text += "\nТихий день — разбор без долга, только выводы."
             text += "\n\nДва вопроса:\n" + "\n".join(f"{i}. {q}" for i, q in enumerate(questions[:2], 1))
             text += "\nОтветь одним сообщением."
         if not manual and not day.user_actions:
@@ -1462,7 +1495,8 @@ class Bot:
     def debrief_answer(self, text: str) -> None:
         core = self.core
         extra = "<debrief>Человек ответил на вопросы вечернего разбора. Один вывод — что меняем завтра — и коротко про план завтра (блок ЗАВТРА в контексте). До 5 строк.</debrief>"
-        result = self.brain.ask(system=system_prompt(core, message=text, extra=extra), prompt=text, schema=VOICE_SCHEMA)
+        system, prompt = voice_prompt(core, message=text, extra=extra)
+        result = self.brain.ask(system=system, prompt=prompt, schema=VOICE_SCHEMA, effort="medium")
         conclusion = (result or {}).get("reply", "").strip()
         receipt = ""
         if result:
@@ -1589,7 +1623,7 @@ class Bot:
             self.report_current()
             return
         result = self.core.complete_task(ref, report=report or None, source="telegram")
-        self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
+        self.send(tpl.completed(result["task"].title, result["debt_closed"]) + tpl.warn(result["warnings"]))
         self.refresh_panel()
 
     def cmd_add(self, rest: str) -> None:
@@ -1627,22 +1661,50 @@ class Bot:
         self.send(f"Трата {result['amount']:.0f} {result['currency']}" + (" (импульсивная)" if impulse else "") + f" · за неделю {result['week_total']:.0f}")
 
     def cmd_sleep(self, rest: str) -> None:
-        parts = rest.split()
-        if not parts:
+        if not rest.strip():
             self.on_menu("sleep")
             return
-        result = self.core.log_sleep(parts[0], bedtime=parts[1] if len(parts) > 1 else None, source="telegram")
-        self.await_clear()
-        self.send(f"Сон {hm(result['duration_min'])}. Режим: {rules.MODE_LABELS[result['mode']]}" + tpl.warn(result["warnings"]))
+        self.sleep_answer(rest)
 
     def cmd_sos(self, rest: str) -> None:
         mode = self.core.sos(rest.strip().lower() != "off", source="telegram")
-        self.send(f"Режим: {rules.MODE_LABELS[mode]}" + ("" if mode != "red" else "\nСегодня без задач и цифр. Сон, еда, движение."))
+        if mode == "red":
+            self.send(f"Режим: {rules.MODE_LABELS[mode]}\nСегодня без задач и цифр. Сон, еда, движение. Отдохнёшь — вернёшь план кнопкой.",
+                      tpl.red_buttons(refresh=False))
+        else:
+            self.send(f"Режим: {rules.MODE_LABELS[mode]}")
         self.refresh_panel()
+
+    def offer_return(self) -> None:
+        """Голова услышала «отдохнул, готов» — но режим меняет не она: кнопку жмёт человек (D38)."""
+        core = self.core
+        if core.effective_mode() != "red":
+            return  # и так в плане — лишняя кнопка только путает
+        if not core.state.mentor_enabled:
+            self.send("Ментор выключен safety-контуром — включить его можешь только ты сам: /mentor on")
+            return
+        self.send("Вернуть план? Мягко: без разгона, первым — самое короткое дело.", tpl.red_buttons(refresh=False))
+
+    def on_return_button(self, op: str) -> None:
+        core = self.core
+        if op == "rest":
+            self.send("Отдыхай. Я рядом — вернуть план можно в любой момент кнопкой на панели.")
+            return
+        if core.effective_mode() != "red":
+            self.send("План уже на месте.")
+            self.send_panel(pin=True)
+            return
+        mode = core.resume_plan(source=self.channel)
+        today = [t for t in core.state.tasks_on(core.today()) if t.is_open]
+        first = min(today, key=lambda t: (t.duration_min or 999, t.start or "")) if today else None
+        hint = (f"Первым — «{first.title}», {first.duration_min} мин: ▶️ у задачи или 🎯."
+                if first else "Задач на сегодня нет. 🎯 — засеку 25 минут на самое важное; или напиши, чем займёшься, — поставлю.")
+        self.send(f"Возвращаемся. Режим {rules.MODE_LABELS[mode]} — без разгона и без новых обязательств.")
+        self.send_panel(pin=True, hint=hint)
 
     def cmd_silent(self, rest: str) -> None:
         self.core.silent_today(source="telegram")
-        self.send("Тихий день. Я молчу до вечера, разбор — без штрафов. Ведёшь день сам.")
+        self.send("Тихий день. Я молчу до вечера, долга за сегодня нет. Ведёшь день сам.")
 
     def cmd_export(self, rest: str) -> None:
         from arvix.export import export_all
@@ -1669,7 +1731,7 @@ class Bot:
 
     def cmd_reason(self, rest: str) -> None:
         result = self.core.declare_reason(rest, source="telegram")
-        self.send(f"Причина записана. Щитов осталось: {result['shields_left']} — снимет самый крупный урон при закрытии дня.")
+        self.send(f"Причина записана: «{result['reason']}». Невыполненное важное сегодня в долг не уйдёт, причина — в разбор.")
 
     def cmd_learn(self, rest: str) -> None:
         """/learn — урок по ближайшей учебной задаче дня; /learn 30 физика — новый блок на 30 минут прямо сейчас."""

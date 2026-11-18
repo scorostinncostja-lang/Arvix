@@ -155,7 +155,7 @@ function renderTop() {
   const date = new Date(d.now);
   $("#top-day").textContent = d.weekday + ", " + date.toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
   const s = d.stats;
-  $("#top-sub").textContent = d.gentle ? "Мягкий день" : s ? `${s.done} из ${s.total} · серия ${s.streak} дн` : "";
+  $("#top-sub").textContent = d.gentle ? "Мягкий день" : s ? `${s.done} из ${s.total}` : "";
   const mode = $("#top-mode");
   mode.textContent = d.mode_label;
   mode.className = "chip mode " + (MODE_CLASS[d.mode] || "");
@@ -193,12 +193,13 @@ function renderToday() {
     html += `<div class="card note-card">${esc(d.note)}</div>`;
   } else if (d.stats) {
     const s = d.stats;
-    const hpLow = s.hp < 40 ? " low" : "";
+    // Только факты дня (D41): задачи, глубокая работа, сон. Ни очков, ни здоровья, ни уровня.
+    const sleep = s.sleep_min == null ? `<b>—</b><span>сон не записан</span>`
+      : `<b>${hm(s.sleep_min)}</b><span>сон, норма ${hm(s.sleep_target)}</span>`;
     html += `<div class="stats">
       <div class="stat"><b>${s.done}/${s.total}</b><span>задач</span><div class="bar"><i style="width:${s.total ? (100 * s.done / s.total) : 0}%"></i></div></div>
-      <div class="stat"><b>${s.hp}</b><span>HP</span><div class="bar hp${hpLow}"><i style="width:${s.hp}%"></i></div></div>
-      <div class="stat"><b>ур. ${s.level}</b><span>${s.xp_into}/${s.xp_need} XP</span><div class="bar"><i style="width:${100 * s.xp_into / Math.max(1, s.xp_need)}%"></i></div></div>
       <div class="stat"><b>${hm(s.deep_min)}</b><span>глубокая из ${hm(s.deep_target)}</span><div class="bar deep"><i style="width:${Math.min(100, 100 * s.deep_min / Math.max(1, s.deep_target))}%"></i></div></div>
+      <div class="stat">${sleep}<div class="bar"><i style="width:${s.sleep_min == null ? 0 : Math.min(100, 100 * s.sleep_min / Math.max(1, s.sleep_target))}%"></i></div></div>
     </div>`;
   }
   if (installPrompt && !TG && !standalone()) {
@@ -290,7 +291,7 @@ function taskRow(t, debt = false) {
   const chips = [`<span class="chip">${esc(t.sphere_ru)}</span>`, `<span class="chip">${hm(t.duration_min)}</span>`];
   if (t.deep_work) chips.push(`<span class="chip accent">глубокая</span>`);
   if (t.importance >= 4) chips.push(`<span class="chip yellow">★${t.importance}</span>`);
-  if (t.status === "done") chips.push(`<span class="chip green">✓ ${t.done_pct < 100 ? t.done_pct + "% · " : ""}+${t.xp} XP</span>`);
+  if (t.status === "done") chips.push(`<span class="chip green">✓ ${t.done_pct < 100 ? t.done_pct + "%" : "сделано"}</span>`);
   if (t.status === "failed") chips.push(`<span class="chip red">не сделано</span>`);
   if (t.focus_min) chips.push(`<span class="chip">🎯 ${hm(t.focus_min)}</span>`);
   let acts = "";
@@ -342,7 +343,7 @@ function bindToday() {
         const t = findTask(id);
         if (t && t.proof && t.proof !== "confirm") { openReportSheet(t); return; }
         const r = await api(`tasks/${id}/done`, { json: {} });
-        notify("success"); toast(`✓ +${r.xp} XP` + (r.warnings && r.warnings.length ? "\n" + r.warnings.join("\n") : ""));
+        notify("success"); toast("✓ Записал" + (r.debt_closed ? " · долг закрыт" : "") + (r.warnings && r.warnings.length ? "\n" + r.warnings.join("\n") : ""));
       } else if (act === "more") { openTaskSheet(findTask(id)); return; }
       else if (act === "focus-go") {
         const f = state.focusForm, topic = f.target === "topic" ? ($("#focus-topic") ? $("#focus-topic").value.trim() : f.topic) : "";
@@ -465,7 +466,7 @@ function openTaskSheet(t) {
           const reason = prompt(op === "fail" ? "Что помешало? Честно, одной фразой" : "Почему отменяешь?");
           if (reason === null) return;
           const r = await api(`tasks/${t.id}/${op}`, { json: { reason } });
-          toast(op === "fail" ? `${r.hp} HP${r.debt ? " · в долг" : ""}` : "Отменено");
+          toast(op === "fail" ? `Не сделано${r.debt ? " · в долг" : ""}` : "Отменено");
         }
         closeSheet(); load("today");
       } catch (err) { toast(err.message); }
@@ -483,7 +484,7 @@ function openPartSheet(t) {
     $("#p-save").onclick = async () => {
       try {
         const r = await api(`tasks/${t.id}/done`, { json: { pct: +form.pct, report: $("#p-report").value.trim() || null } });
-        notify("success"); closeSheet(); toast(`✓ ${form.pct}% · +${r.xp} XP`); load("today");
+        notify("success"); closeSheet(); toast(`✓ ${form.pct}% — записал`); load("today");
       } catch (err) { toast(err.message); }
     };
   });
@@ -499,7 +500,7 @@ function openReportSheet(t, after = null) {
       if (!report) { toast("Пара слов о сделанном"); return; }
       try {
         const r = await api(`tasks/${t.id}/done`, { json: { report } });
-        notify("success"); closeSheet(); toast(`✓ +${r.xp} XP`);
+        notify("success"); closeSheet(); toast("✓ Записал");
         if (after) after(); else load("today");
       } catch (err) { toast(err.message); }
     };
@@ -1199,7 +1200,7 @@ async function closeTaskFromNote(t) {
   const reopen = () => openNote(state.note.path, { keepScroll: true });
   if (t.proof && t.proof !== "confirm") { openReportSheet(t, reopen); return; }
   const r = await api(`tasks/${t.id}/done`, { json: {} });
-  notify("success"); toast(`✓ ${t.title} · +${r.xp} XP`);
+  notify("success"); toast(`✓ ${t.title} — записал`);
   await reopen();
 }
 
@@ -1476,7 +1477,7 @@ function obsidian(src, tasks = {}, nested = false) {
 
 // --- Прогресс ----------------------------------------------------------------------------------
 /* Год квадратами, как на GitHub: колонка — неделя (пн сверху), справа — сегодня.
- * Цвет считает код по сделанной работе (web/api.py::heat_level), серия — по выполнению ≥ 70 %. */
+ * Цвет считает код по сделанной работе (web/api.py::heat_level). Это история, а не игра: серий нет (D41). */
 const MONTHS_SHORT = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 function heatCard(heat) {
   if (!heat || !heat.days.length) return "";
@@ -1493,8 +1494,7 @@ function heatCard(heat) {
   const cells = weeks.map((w) => `<div class="heat-col">${w.map((d) => `<button class="heat-cell l${d.level}${d.rest ? " rest" : ""}${d.date === today ? " today" : ""}"
     data-heat="${d.date}" aria-label="${esc(d.date)}"></button>`).join("")}</div>`).join("");
   return `<div class="card heat-card"><div class="heat-head">
-      <div><b class="heat-big">${heat.streak}</b><span class="muted small"> дн подряд</span></div>
-      <div class="muted small">лучшая ${heat.best} · за год ${heat.active} дн с работой</div></div>
+      <div><b class="heat-big">${heat.active}</b><span class="muted small"> дн с работой за год</span></div></div>
     <div class="heat-scroll" id="heat-scroll"><div class="heat-grid">
       <div class="heat-days"><span></span><span>пн</span><span></span><span>ср</span><span></span><span>пт</span><span></span></div>
       <div><div class="heat-months">${months}</div><div class="heat-cols">${cells}</div></div></div></div>
@@ -1530,7 +1530,7 @@ function renderProgress() {
       <div class="pills" style="margin-top:10px">${w.quotas.map((q) => `<span class="chip ${q.done >= q.need ? "green" : ""}">${esc(q.label)} ${q.done}/${q.need}</span>`).join("")}</div></div>`;
     html += chartCard("Выполнение, %", h.days, (d) => d.completion, 100, "var(--accent)");
     html += chartCard("Сон, часы", h.days, (d) => (d.sleep_min == null ? null : d.sleep_min / 60), 10, "var(--accent-2)", 7.5);
-    html += chartCard("XP за день", h.days, (d) => d.xp, null, "var(--warn)");
+    html += chartCard("Глубокая работа, мин", h.days, (d) => d.deep_min, null, "var(--warn)");
     if (h.goals.length) {
       html += `<div class="card"><h3>Цели</h3>${h.goals.map((g) => `<div class="goal" style="padding-left:${g.depth * 14}px">
         <div class="t">${g.status === "done" ? "●" : "○"} ${esc(g.title)}</div>

@@ -24,7 +24,7 @@ from arvix.vault import Vault, VaultError
 log = logging.getLogger("arvix.mcp")
 SUPPORTED_PROTOCOLS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 INSTRUCTIONS = (
-    "Arvix — личный ментор: журнал событий, задачи, XP/HP, Burnout Guard, интервью, Obsidian. "
+    "Arvix — личный ментор: журнал событий, задачи, долг, Burnout Guard, интервью, Obsidian. "
     "Числа считает этот сервер; модель их только читает. Начинай с инструмента context."
 )
 
@@ -47,7 +47,7 @@ def _enum(*values: str) -> dict[str, Any]:
 
 TOOLS: dict[str, dict[str, Any]] = {
     "context": {
-        "description": "Текущее состояние Арвикса: время, режим Burnout Guard, уровень/HP, задачи дня с id, долг, неделя, директивы, цели, память. Вызывай первым.",
+        "description": "Текущее состояние Арвикса: время, режим Burnout Guard, задачи дня с id, долг, неделя, директивы, цели, память. Вызывай первым.",
         "inputSchema": _obj({"message": {**STR, "description": "текст сообщения человека — для подбора фактов памяти"}}),
     },
     "day": {
@@ -55,7 +55,7 @@ TOOLS: dict[str, dict[str, Any]] = {
         "inputSchema": _obj({"date": {**STR, "description": "ГГГГ-ММ-ДД, today, tomorrow, yesterday"}}),
     },
     "task": {
-        "description": "Задачи: add (новая), complete (отчёт о выполнении, done_pct для частичного), fail (провал с причиной; importance ≥ 4 уходит в долг), defer (сдвиг на minutes), cancel (с причиной), start, write_off (списать долг с обоснованием). XP/HP считает код.",
+        "description": "Задачи: add (новая), complete (отчёт о выполнении, done_pct для частичного), fail (провал с причиной; importance ≥ 4 уходит в долг), defer (сдвиг на minutes), cancel (с причиной), start, write_off (списать долг с обоснованием). Долг и режим решает код; очков и здоровья нет.",
         "inputSchema": _obj({
             "action": _enum("add", "complete", "fail", "defer", "cancel", "start", "write_off"),
             "task": {**STR, "description": "id задачи (8 символов) или часть названия"},
@@ -67,10 +67,10 @@ TOOLS: dict[str, dict[str, Any]] = {
         }, ["action"]),
     },
     "log": {
-        "description": "Записи дня: sleep (duration вроде 7:30, bedtime ЧЧ:ММ), expense (amount, category, impulse), social (живой контакт для квоты), focus (minutes фокус-сессии), reason (причина плохого дня — для щита).",
+        "description": "Записи дня: sleep (duration вроде 7:30 или bedtime + wake ЧЧ:ММ — длительность посчитает код), expense (amount, category, impulse), social (живой контакт для квоты), focus (minutes фокус-сессии), reason (причина плохого дня — важное сегодня не уйдёт в долг).",
         "inputSchema": _obj({
             "kind": _enum("sleep", "expense", "social", "focus", "reason"),
-            "duration": STR, "bedtime": STR, "date": STR, "amount": {"type": "number"}, "category": STR,
+            "duration": STR, "bedtime": STR, "wake": STR, "date": STR, "amount": {"type": "number"}, "category": STR,
             "impulse": BOOL, "note": STR, "who": STR, "minutes": INT, "task": STR, "reason": STR,
         }, ["kind"]),
     },
@@ -127,8 +127,8 @@ TOOLS: dict[str, dict[str, Any]] = {
         }, ["action"]),
     },
     "mode": {
-        "description": "Режимы: status, sos_on / sos_off (ручной 🟥 на 24 ч), silent (тихий день сегодня), safety_flag (признаки настоящей беды, level high|critical — выключает ментора до ручного включения человеком; контакт поддержки или «бывает тяжело» — не сюда, а в profile remember).",
-        "inputSchema": _obj({"action": _enum("status", "sos_on", "sos_off", "silent", "safety_flag"), "note": STR, "level": STR}, ["action"]),
+        "description": "Режимы: status, sos_on / sos_off (ручной 🟥 на 24 ч), resume (человек сам сказал, что отдохнул и возвращается после 🟥: до утра режим не выше 🟨), silent (тихий день сегодня), safety_flag (признаки настоящей беды, level high|critical — выключает ментора до ручного включения человеком; контакт поддержки или «бывает тяжело» — не сюда, а в profile remember).",
+        "inputSchema": _obj({"action": _enum("status", "sos_on", "sos_off", "resume", "silent", "safety_flag"), "note": STR, "level": STR}, ["action"]),
     },
     "export": {
         "description": "Полный экспорт в Obsidian по местам из notes paths: профиль, выводы, журнал событий, итоги в ежедневных отчётах (только в блоках Арвикса).",
@@ -170,10 +170,10 @@ def t_task(core: Core, a: dict[str, Any]) -> str:
         return f"Создана: {task_line(t)} · {t.local_date}" + _doubts(core.task_warnings(t))
     if action == "complete":
         r = core.complete_task(a["task"], done_pct=a.get("done_pct") or 100, report=a.get("report"))
-        return f"Закрыта: {r['task'].title} · +{r['xp']} XP" + (" · долг закрыт" if r["debt_closed"] else "") + _doubts(r["warnings"])
+        return f"Закрыта: {r['task'].title}" + (" · долг закрыт" if r["debt_closed"] else "") + _doubts(r["warnings"])
     if action == "fail":
         r = core.fail_task(a["task"], reason=a.get("reason", ""))
-        return f"Провал: {r['task'].title} · {r['hp']} HP" + (" · ушла в долг" if r["debt"] else "")
+        return f"Не сделано: {r['task'].title}" + (" · ушла в долг" if r["debt"] else "")
     if action == "defer":
         t = core.defer_task(a["task"], int(a.get("minutes") or 15))
         return f"Отложена: {t.title} → {t.local_date} {t.start}"
@@ -189,7 +189,7 @@ def t_task(core: Core, a: dict[str, Any]) -> str:
 def t_log(core: Core, a: dict[str, Any]) -> str:
     kind = a["kind"]
     if kind == "sleep":
-        r = core.log_sleep(a.get("duration") or a.get("minutes"), bedtime=a.get("bedtime"), day=a.get("date"))
+        r = core.log_sleep(a.get("duration") or a.get("minutes"), bedtime=a.get("bedtime"), wake=a.get("wake"), day=a.get("date"))
         return f"Сон {hm(r['duration_min'])} за {r['date']}. Режим: {rules.MODE_LABELS[r['mode']]}" + _doubts(r["warnings"])
     if kind == "expense":
         r = core.log_expense(a.get("amount"), a.get("category", "прочее"), impulse=bool(a.get("impulse")), note=a.get("note", ""))
@@ -202,7 +202,7 @@ def t_log(core: Core, a: dict[str, Any]) -> str:
         return f"Фокус-сессия {a.get('minutes')} мин записана."
     if kind == "reason":
         r = core.declare_reason(a.get("reason") or a.get("note", ""))
-        return f"Причина записана. Щитов в этом месяце осталось: {r['shields_left']} — сработает при закрытии дня."
+        return "Причина записана: важное, не сделанное сегодня, в долг не уйдёт; причина — в разбор."
     raise ArvixError(f"Неизвестный kind {kind}")
 
 
@@ -278,7 +278,7 @@ def t_check_request(core: Core, a: dict[str, Any]) -> str:
     lines = [f"ПРОСЬБА: {a.get('description', '')}"]
     pct = f"{facts['completion']:.0f}%" if facts["completion"] is not None else "—"
     lines.append(f"ВЫПОЛНЕНИЕ {d:%d.%m}: {facts['done']}/{facts['total']} ({pct}) · глубокая {hm(facts['deep_min'])} из {hm(core.deep_target(d))} · сон {hm(facts['sleep_min'])}")
-    lines.append(f"РЕЖИМ: {rules.MODE_LABELS[core.effective_mode()]} · HP {st.hp}")
+    lines.append(f"РЕЖИМ: {rules.MODE_LABELS[core.effective_mode()]}")
     if facts["debts"]:
         lines.append(f"ДОЛГ: {len(facts['debts'])} — " + ", ".join(t.title for t in facts["debts"]) + (" · необязательные дела заблокированы" if len(facts["debts"]) >= 2 else ""))
     if a.get("start"):
@@ -299,7 +299,7 @@ def t_check_request(core: Core, a: dict[str, Any]) -> str:
 def t_debrief(core: Core, a: dict[str, Any]) -> str:
     if a["action"] == "complete":
         core.complete_debrief(a.get("answers", ""), conclusion=a.get("conclusion", ""), day=a.get("date"))
-        return "Разбор записан. Пропуска не будет (−8 HP снимается только за непройденный разбор)."
+        return "Разбор записан."
     d = core.parse_day(a.get("date"))
     facts = core.day_facts(d)
     lines = [t_day(core, {"date": d.isoformat()})]
@@ -382,6 +382,8 @@ def t_mode(core: Core, a: dict[str, Any]) -> str:
         core.sos(True, note=a.get("note", ""))
     elif action == "sos_off":
         core.sos(False)
+    elif action == "resume":
+        core.resume_plan(source="claude")
     elif action == "silent":
         core.silent_today()
     elif action == "safety_flag":
@@ -389,7 +391,7 @@ def t_mode(core: Core, a: dict[str, Any]) -> str:
             return f"Уровень «{a.get('level')}» — не беда: записано фактом о человеке, ментор не выключен."
         return "Ментор выключен до ручного включения человеком. Дальше — только человеческий тон, без задач и цифр."
     s = core.status()
-    return f"Режим: {rules.MODE_LABELS[s['effective_mode']]} ({s['mode_trigger'] or 'без триггера'}) · ментор {'вкл' if s['mentor_enabled'] else 'ВЫКЛ'} · HP {s['hp']}"
+    return f"Режим: {rules.MODE_LABELS[s['effective_mode']]} ({s['mode_trigger'] or 'без триггера'}) · ментор {'вкл' if s['mentor_enabled'] else 'ВЫКЛ'}"
 
 
 def t_export(core: Core, a: dict[str, Any]) -> str:

@@ -33,7 +33,7 @@ BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 -- Транспортное состояние (offset Telegram, чего бот ждёт от пользователя).
--- Не доменное: ни XP, ни HP, ни задач здесь нет.
+-- Не доменное: ни задач, ни режима здесь нет.
 CREATE TABLE IF NOT EXISTS runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 

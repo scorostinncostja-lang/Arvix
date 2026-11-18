@@ -164,9 +164,8 @@ class TUI:
         def run() -> None:
             try:
                 result = self.client.call(path, body)
-                extra = f" +{result['xp']} XP" if result.get("xp") else ""
                 warn = " ⚠ " + "; ".join(result["warnings"]) if result.get("warnings") else ""
-                self.say(ok + extra + warn)
+                self.say(ok + warn)
             except (RuntimeError, OSError) as exc:
                 self.say(f"✗ {exc}")
             self.wanted.set()
@@ -242,7 +241,7 @@ class TUI:
         head = f" Арвикс · {state.get('weekday', '')} {now:%d.%m} · {plain(state.get('mode_label', ''))}"
         stats = state.get("stats")
         if stats:
-            head += f" · {stats['done']}/{stats['total']} · HP {stats['hp']} · ур.{stats['level']} {stats['xp_into']}/{stats['xp_need']} XP · серия {stats['streak']}"
+            head += f" · {stats['done']}/{stats['total']}" + (f" · глубокая {stats['deep_min']}м" if stats.get("deep_min") else "")
         focus = state.get("focus")
         if focus:
             left = max(0, int((datetime.fromisoformat(focus["until"]) - datetime.now().astimezone()).total_seconds()))
