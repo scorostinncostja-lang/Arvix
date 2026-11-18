@@ -111,6 +111,25 @@ def completed(title: str, xp: int, debt_closed: bool = False) -> str:
     return f"✅ {title} · +{xp} XP" + (" · долг закрыт" if debt_closed else "")
 
 
+RED_PANEL = "📋 День восстановления: без плана и без цифр. Одна маленькая вещь — любая.\nОтдохнул — верни план кнопкой."
+
+
+def red_buttons(refresh: bool = True) -> list[list[tuple[str, str]]]:
+    """Из 🟥 есть выход, и он у человека в руках, а не у модели (D38)."""
+    rows = [[("▶️ Вернуться к плану", "r:back"), ("🌿 Ещё отдыхаю", "r:rest")]]
+    if refresh:
+        rows.append([("🎯 15 мин", "f:go:15"), ("🔄", "p:refresh")])
+    return rows
+
+
+def sleep_logged(result: dict[str, Any]) -> str:
+    """«Сон 7ч30м (01:00–08:30). Режим: 🟥 → 🟨 ЖЁЛТЫЙ» — смена режима видна сразу."""
+    span = f" ({result['bedtime']}–{result['wake']})" if result.get("bedtime") and result.get("wake") else ""
+    before, after = result.get("mode_before"), result["mode"]
+    shift = f"{rules.MODE_LABELS[before].split()[0]} → " if before and before != after else ""
+    return f"Сон {hm(result['duration_min'])}{span}. Режим: {shift}{rules.MODE_LABELS[after]}"
+
+
 def warn(lines: list[str] | tuple[str, ...] | None) -> str:
     """Сомнения кода (checks.py) — отдельными строками под ответом: их видно, их нельзя пропустить."""
     return "".join(f"\n⚠️ Проверь: {line}" for line in lines or ())
@@ -210,7 +229,10 @@ def brief(core: Any) -> str:
     if day and day.day_type:
         head += f" · {DAY_TYPES_RU.get(day.day_type, day.day_type)} день"
     if core.effective_mode() == "red":
-        return head + "\n\nСегодня без плана и без цифр. Сон, еда, движение и одна маленькая вещь — любая. Я рядом."
+        text = head + "\n\nСегодня без плана и без цифр. Сон, еда, движение и одна маленькая вещь — любая. Я рядом."
+        if not (day and day.sleep_min):  # сон — главный выход из 🟥: без него режим не узнает, что ты отдохнул
+            text += "\nКак спалось? Напиши, во сколько лёг и встал — например «лёг в час, встал в 8:30»."
+        return text
     lines = [head, ""]
     mode = rules.MODE_LABELS[st.mode] + (f" — {st.mode_trigger}" if st.mode_trigger else "")
     lines.append(f"Режим {mode}.")
@@ -235,7 +257,7 @@ def brief(core: Any) -> str:
         if missing:
             lines.append("Квоты недели: " + " · ".join(missing))
     if not (day and day.sleep_min):
-        lines.append("\nСон не записан: ответь числом, например 7:20, или /sleep 7:20 00:30.")
+        lines.append("\nСон не записан: ответь «7:20» или словами — «лёг в час, встал в 8:30».")
     if st.profile.get("bedtime_target"):
         lines.append(f"Отбой сегодня в {st.profile['bedtime_target']}. Не обсуждается.")
     if not st.templates:

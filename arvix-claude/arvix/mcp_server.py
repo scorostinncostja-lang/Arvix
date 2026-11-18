@@ -127,8 +127,8 @@ TOOLS: dict[str, dict[str, Any]] = {
         }, ["action"]),
     },
     "mode": {
-        "description": "Режимы: status, sos_on / sos_off (ручной 🟥 на 24 ч), silent (тихий день сегодня), safety_flag (признаки настоящей беды, level high|critical — выключает ментора до ручного включения человеком; контакт поддержки или «бывает тяжело» — не сюда, а в profile remember).",
-        "inputSchema": _obj({"action": _enum("status", "sos_on", "sos_off", "silent", "safety_flag"), "note": STR, "level": STR}, ["action"]),
+        "description": "Режимы: status, sos_on / sos_off (ручной 🟥 на 24 ч), resume (человек сам сказал, что отдохнул и возвращается после 🟥: до утра режим не выше 🟨), silent (тихий день сегодня), safety_flag (признаки настоящей беды, level high|critical — выключает ментора до ручного включения человеком; контакт поддержки или «бывает тяжело» — не сюда, а в profile remember).",
+        "inputSchema": _obj({"action": _enum("status", "sos_on", "sos_off", "resume", "silent", "safety_flag"), "note": STR, "level": STR}, ["action"]),
     },
     "export": {
         "description": "Полный экспорт в Obsidian по местам из notes paths: профиль, выводы, журнал событий, итоги в ежедневных отчётах (только в блоках Арвикса).",
@@ -382,6 +382,8 @@ def t_mode(core: Core, a: dict[str, Any]) -> str:
         core.sos(True, note=a.get("note", ""))
     elif action == "sos_off":
         core.sos(False)
+    elif action == "resume":
+        core.resume_plan(source="claude")
     elif action == "silent":
         core.silent_today()
     elif action == "safety_flag":

@@ -88,6 +88,7 @@ class State:
     mode_trigger: str = ""
     mentor_enabled: bool = True
     sos_until: str | None = None
+    recovery_until: str | None = None  # «Вернуться к плану» после 🟥: до этого момента режим не выше 🟨 (D38)
     zero_until: str | None = None
     shields: list[date] = field(default_factory=list)
     expenses: list[dict[str, Any]] = field(default_factory=list)
@@ -321,6 +322,11 @@ class State:
 
     def _on_sos(self, ev: Event, p: dict, day: Day) -> None:
         self.sos_until = p.get("until") if p.get("on") else None
+        if p.get("on"):
+            self.recovery_until = None  # новый SOS отменяет возвращение: человек снова просит отдых
+
+    def _on_recovery_started(self, ev: Event, p: dict, day: Day) -> None:
+        self.recovery_until = p.get("until")
 
     def _on_protocol_zero(self, ev: Event, p: dict, day: Day) -> None:
         self.zero_until = p.get("until") if p.get("on") else None

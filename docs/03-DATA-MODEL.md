@@ -66,7 +66,7 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `task_deferred` | `id, from, to, date, minutes` | человек, модель |
 | `task_cancelled` | `id, reason` | человек, модель |
 | `debt_written_off` | `id, justification` | человек, модель |
-| `sleep_recorded` | `duration_min, bedtime, date, source` | человек, модель |
+| `sleep_recorded` | `duration_min, bedtime, wake, date, source` — `wake` с 0.6: длительность из отбоя и подъёма считает код | человек, модель |
 | `focus_session` | `duration_min, task_id, topic?` — с задачей копится в `Task.focus_min`, без задачи (тема «физика») идёт в глубокую работу дня; сессии дня — `Day.focus` | человек |
 | `focus_noted` | `focus_event_id, date, note` — «что успел» к прошедшей сессии; сама сессия не меняется | человек |
 | `file_received` | `name, kind, size, path, read, caption` — файл от человека в хранилище (`arvix/files.py`) | человек |
@@ -89,6 +89,7 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `shield_used` | `date, reason, damage_prevented, target` | scheduler |
 | `mode_changed` | `from, to, trigger` | l0, scheduler |
 | `sos` | `on, until, note` — ручной 🟥 на 24 ч | человек, модель |
+| `recovery_started` | `until` — человек нажал «Вернуться к плану»: до смены дня режим не выше 🟨, SOS снят (D38) | только человек (кнопка, MCP `mode resume` с подтверждением) |
 | `protocol_zero` | `on, until` | scheduler |
 | `safety_flag` | `level (high·critical), note` — выключает ментора; `info`/`low` в журнал не пишутся, а становятся фактом | l0, l1, модель |
 | `quota_result` | `sphere, target, actual, met, week` | scheduler |

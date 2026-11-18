@@ -329,6 +329,7 @@ class ServerTest(BotCase):
         while self.running:
             with self.app.lock:
                 self.hub.run_pending(self.bot, 0.05)
+            time.sleep(0.002)  # отпустить замок: иначе чтение /api/state голодает (замок нечестный) и ловит таймаут
 
     def tearDown(self) -> None:
         self.running = False

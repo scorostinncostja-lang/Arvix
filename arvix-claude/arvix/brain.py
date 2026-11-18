@@ -34,7 +34,7 @@ ACTION_TYPES = (
     # Действия интерфейса: их исполняет бот после ответа, а не ядро (05-INTERFACES §2.1).
     # Так человек говорит словами, а не командами: «давай позанимаемся физикой» → урок.
     "plan_schedule", "show_schedule", "start_lesson", "start_focus", "stop_focus", "show_day", "show_status",
-    "show_week", "show_goals", "debrief_now", "rest_day", "silent_day", "open_app", "install_app",
+    "show_week", "show_goals", "debrief_now", "rest_day", "silent_day", "open_app", "install_app", "offer_return",
 )
 UI_ACTIONS = frozenset(ACTION_TYPES[ACTION_TYPES.index("plan_schedule"):])
 ACTION_RU = {
@@ -53,7 +53,8 @@ _ACTION_FIELDS = {
     "done_pct": {"type": "integer"}, "report": {"type": "string", "description": "для complete_task: что именно сделано, словами человека"},
     "reason": {"type": "string"},
     "minutes": {"type": "integer"}, "duration": {"type": "string", "description": "сон, например 7:30"},
-    "bedtime": {"type": "string"}, "amount": {"type": "number"}, "category": {"type": "string"},
+    "bedtime": {"type": "string", "description": "отбой ЧЧ:ММ"},
+    "wake": {"type": "string", "description": "для log_sleep: подъём ЧЧ:ММ — с bedtime длительность посчитает код"}, "amount": {"type": "number"}, "category": {"type": "string"},
     "impulse": {"type": "boolean"}, "who": {"type": "string"}, "topic": {"type": "string"},
     "fact": {"type": "string"}, "key": {"type": "string"}, "value": {"type": "string"},
     "text": {"type": "string"}, "kind": {"type": "string"}, "why": {"type": "string"},
@@ -154,6 +155,31 @@ EXTRACT_SCHEMA = {
     "required": ["summary", "actions"],
 }
 
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# Сообщения, где нужно подумать: план, выбор, «почему», учёба, разбор — им усилие выше. Остальное
+# (отчёт, сон, «ок», «давай», болтовня) — низкое: ответ быстрее в разы, а думать там не о чем (D40).
+DEEP_ASK = re.compile(
+    r"план|распоряд|расписан|недел|почему|зачем|объясни|как лучше|что делать|посоветуй|советуешь|совет|цел[ьиея]|роадмап|"
+    r"разбер|проверь|стратег|выбрать|сравни|правильно ли|не понимаю|научи|как мне|помоги",
+    re.IGNORECASE,
+)
+
+
+def effort_for(text: str) -> str:
+    """Усилие головы по сообщению — код, а не модель: длинное или «думательное» — medium, остальное — low."""
+    return "medium" if len(text) > 280 or DEEP_ASK.search(text or "") else "low"
+
+
+def mode_shift(result: dict[str, Any]) -> str:
+    """«· режим 🟥 → 🟨» к записи сна, если сон сменил режим: человек видит, что сон сработал."""
+    from arvix.rules import MODE_LABELS
+
+    before, after = result.get("mode_before"), result.get("mode")
+    if not before or before == after:
+        return ""
+    return f" · режим {MODE_LABELS[before].split()[0]} → {MODE_LABELS[after]}"
+
+
 # Валидаторы ответа (04-AI-LAYER) — дешёвые проверки кодом, без модели.
 GENTLE_STOP = ("дисциплин", "продуктивн", "провал", "слил", "штраф", "лень", "саботаж", " xp", " hp", "выполнени", "долг")
 LINK_RE = re.compile(r"https?://\S+")
@@ -199,8 +225,30 @@ class Brain:
         # Навыки головы (D33): своя проверенная библиотека + папки плагинов, которые владелец указал сам.
         self.skills_enabled = bool(section.get("skills", True))
         self.skill_dirs = [str(Path(p).expanduser()) for p in (section.get("skill_dirs") or []) if p]
+        # Усилие (D40): "auto" — по сообщению (effort_for), уровень — для всех, "" — как решит CLI.
+        self.effort = str(section.get("effort", "auto") or "").strip().lower()
         self.last_error = ""
         self.last_stats: dict[str, Any] = {}
+        self._flags: str | None = None
+
+    def supports(self, flag: str) -> bool:
+        """Старый claude не знает нового флага и падает на нём — а голова молчала бы на каждом
+        сообщении. Справку читаем один раз за жизнь процесса."""
+        if self._flags is None:
+            try:
+                out = subprocess.run([self.bin, "--help"], capture_output=True, text=True, timeout=20, check=False)
+                self._flags = out.stdout + out.stderr
+            except (OSError, subprocess.TimeoutExpired):
+                self._flags = ""
+        return flag in self._flags
+
+    def effort_level(self, effort: str | None) -> str | None:
+        """effort — уровень, который код подобрал под сообщение (effort_for). Конфиг сильнее:
+        «auto» — берём подобранный, конкретный уровень — всегда он, пусто — флаг не передаём."""
+        level = self.effort if self.effort != "auto" else (effort or "").strip().lower()
+        if level not in EFFORTS or not self.supports("--effort"):
+            return None
+        return level
 
     def available(self) -> bool:
         return shutil.which(self.bin) is not None or os.path.isfile(self.bin)
@@ -216,7 +264,7 @@ class Brain:
         return dirs
 
     def command(self, *, system: str, prompt: str, schema: dict[str, Any], role: str, vault_tools: bool, web: bool = False,
-                skills: str = "off") -> list[str]:
+                skills: str = "off", effort: str | None = None) -> list[str]:
         plugins = self.skill_plugins(skills)
         cmd = [
             self.bin, "-p", prompt,
@@ -233,6 +281,8 @@ class Brain:
             cmd.append("--disable-slash-commands")  # навыки — тоже слеш-команды: без библиотеки выключено всё
         if model := self.cfg.model(role):
             cmd += ["--model", model]
+        if level := self.effort_level(effort):
+            cmd += ["--effort", level]
         tools: list[str] = []
         dirs: list[str] = []
         if vault_tools and self.vault_tools:
@@ -260,13 +310,27 @@ class Brain:
         return cmd
 
     def ask(self, *, system: str, prompt: str, schema: dict[str, Any], role: str = "voice", vault_tools: bool = False,
-            web: bool = False, skills: str = "off") -> dict[str, Any] | None:
+            web: bool = False, skills: str = "off", effort: str | None = None) -> dict[str, Any] | None:
         """None — голова недоступна (лимит подписки, сеть, таймаут). Вызывающий
         отвечает шаблоном L0: напоминания и учёт от этого не ломаются."""
+        result = self._ask(system=system, prompt=prompt, schema=schema, role=role, vault_tools=vault_tools, web=web,
+                           skills=skills, effort=effort)
+        if result is None and self.effort_level(effort) and "effort" in self.last_error.lower():
+            # Модель роли не знает усилия (например, старая) — без флага, и больше его не передаём.
+            log.warning("усилие отключено: %s", self.last_error[:200])
+            self.effort = ""
+            result = self._ask(system=system, prompt=prompt, schema=schema, role=role, vault_tools=vault_tools, web=web,
+                               skills=skills, effort=None)
+        return result
+
+    def _ask(self, *, system: str, prompt: str, schema: dict[str, Any], role: str, vault_tools: bool, web: bool,
+             skills: str, effort: str | None) -> dict[str, Any] | None:
         cwd = data_dir() / "brain"
         cwd.mkdir(parents=True, exist_ok=True)
-        cmd = self.command(system=system, prompt=prompt, schema=schema, role=role, vault_tools=vault_tools, web=web, skills=skills)
-        env = {**os.environ, "ARVIX_BRAIN": "1"}
+        cmd = self.command(system=system, prompt=prompt, schema=schema, role=role, vault_tools=vault_tools, web=web, skills=skills,
+                           effort=effort)
+        # Без телеметрии, автообновления и отчётов об ошибках: вызов на сообщение не ждёт чужой сети.
+        env = {**os.environ, "ARVIX_BRAIN": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
         started = time.monotonic()
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout, cwd=cwd, env=env, check=False)
@@ -287,8 +351,8 @@ class Brain:
         self.last_error = ""
         # Скорость видна в журнале службы: сколько ждали, сколько ходов с инструментами.
         self.last_stats = {"sec": round(time.monotonic() - started, 1), "turns": data.get("num_turns"), "role": role,
-                           "api_ms": data.get("duration_api_ms")}
-        log.info("голова: %(sec)s с, ходов %(turns)s, роль %(role)s", self.last_stats)
+                           "api_ms": data.get("duration_api_ms"), "effort": self.effort_level(effort) or "-"}
+        log.info("голова: %(sec)s с, ходов %(turns)s, роль %(role)s, усилие %(effort)s", self.last_stats)
         return data["structured_output"]
 
 
@@ -345,8 +409,9 @@ def apply_actions(
                 task = core.start_task(action["task"], source=source)
                 done.append(f"▶️ {task.title}")
             elif kind == "log_sleep":
-                result = core.log_sleep(action.get("duration") or action.get("minutes"), bedtime=action.get("bedtime"), day=action.get("date"), source=source)
-                done.append(f"сон {result['duration_min'] // 60}ч{result['duration_min'] % 60:02d}м")
+                result = core.log_sleep(action.get("duration") or action.get("minutes"), bedtime=action.get("bedtime"),
+                                        wake=action.get("wake"), day=action.get("date"), source=source)
+                done.append(f"сон {result['duration_min'] // 60}ч{result['duration_min'] % 60:02d}м" + mode_shift(result))
                 warnings += result["warnings"]
             elif kind == "log_expense":
                 result = core.log_expense(action["amount"], action.get("category", "прочее"), impulse=bool(action.get("impulse")), note=action.get("text", ""), source=source)

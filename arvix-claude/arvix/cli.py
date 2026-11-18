@@ -600,12 +600,13 @@ def cmd_remote(args: argparse.Namespace) -> None:
 
 
 def cmd_brain_test(args: argparse.Namespace) -> None:
-    from arvix.brain import VOICE_SCHEMA, Brain
-    from arvix.prompt import system_prompt
+    from arvix.brain import VOICE_SCHEMA, Brain, effort_for
+    from arvix.prompt import voice_prompt
 
     core = _core()
     started = time.time()
-    result = Brain(core.cfg).ask(system=system_prompt(core), prompt=args.text, schema=VOICE_SCHEMA)
+    system, prompt = voice_prompt(core, message=args.text)
+    result = Brain(core.cfg).ask(system=system, prompt=prompt, schema=VOICE_SCHEMA, effort=effort_for(args.text))
     print(json.dumps(result, ensure_ascii=False, indent=1) if result else "Голова не ответила — смотри журнал.")
     print(f"{time.time() - started:.1f} с")
 

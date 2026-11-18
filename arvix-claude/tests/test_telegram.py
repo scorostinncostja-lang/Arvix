@@ -63,13 +63,21 @@ class FakeAPI:
 
 
 class FakeBrain:
+    """Подставная голова. В calls: system — всё, что видит модель (системный промпт + запрос),
+    prompt — само сообщение человека из <message>; как есть — в raw_system / raw_prompt (D40)."""
+
     def __init__(self) -> None:
         self.answers: list[dict | None] = []
         self.calls: list[dict[str, Any]] = []
         self.last_error = ""
 
     def ask(self, **kwargs: Any) -> dict | None:
-        self.calls.append(kwargs)
+        call = dict(kwargs, raw_system=kwargs.get("system", ""), raw_prompt=kwargs.get("prompt", ""))
+        prompt = call["raw_prompt"]
+        if "<message>\n" in prompt:
+            call["system"] = call["raw_system"] + "\n\n" + prompt
+            call["prompt"] = prompt.rsplit("<message>\n", 1)[1].split("\n</message>", 1)[0]
+        self.calls.append(call)
         return self.answers.pop(0) if self.answers else None
 
     def available(self) -> bool:
@@ -441,7 +449,9 @@ class PanelTest(BotCase):
         text, buttons = self.api.sent[-1]
         self.assertNotIn("Математика", text)
         self.assertNotIn("HP", text)
-        self.assertEqual(buttons, [[("🔄", "p:refresh")]])
+        flat = [data for row in buttons for _, data in row]
+        self.assertEqual(flat, ["r:back", "r:rest", "f:go:15", "p:refresh"])  # без задач, но с выходом (D38)
+        self.assertFalse(any(data.startswith("t:") for data in flat))
 
 
 class FocusTest(BotCase):

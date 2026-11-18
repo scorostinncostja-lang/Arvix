@@ -117,23 +117,38 @@ def guard_mode(
     completion: list[float | None],
     hp: int,
     sos: bool,
+    sleep_target: int | None = None,
+    recovery: bool = False,
+    after_red: bool = False,
 ) -> tuple[str, str]:
     """Burnout Guard, 02-MECHANICS §6. Возвращает (режим, триггер).
 
     sleep — минуты сна по дням, completion — % выполнения закрытых дней (None —
-    день без задач); в обоих списках новейший элемент последний. Нет данных о сне —
-    нет и «давления»: нельзя утверждать «ты выспался», не зная этого.
+    день без задач и день, закрытый в 🟥: плана тогда не было); в обоих списках новейший
+    элемент последний. Нет данных о сне — нет и «давления»: нельзя утверждать «ты выспался»,
+    не зная этого.
+
+    Из 🟥 есть выход, а не только вход (D38): сегодняшний сон в норме снимает 🟥 по HP —
+    тело восстановилось, план возвращается мягко, через 🟨; recovery — человек сам нажал
+    «Вернуться к плану» (не модель); after_red — первый день после 🟥 тоже 🟨, без разгона.
+    Ручной SOS — выбор человека: он снимается только им самим или через 24 ч.
     """
     if sos:
         return "red", "ручной SOS"
+    rested = bool(sleep_target) and bool(sleep) and sleep[-1] is not None and sleep[-1] >= sleep_target - 30
+    red = ""
     if hp <= 20:
-        return "red", f"HP {hp}"
+        red = f"HP {hp}"
+        if rested:
+            return "yellow", f"восстановление: HP {hp}, сон в норме"
     last3 = sleep[-3:]
-    if len(last3) == 3 and all(s is not None and s < 300 for s in last3):
-        return "red", "сон <5ч 3 дня подряд"
+    if not red and len(last3) == 3 and all(s is not None and s < 300 for s in last3):
+        red = "сон <5ч 3 дня подряд"
     week = [c for c in completion[-7:] if c is not None]
-    if len(week) >= 5 and sum(week) / len(week) < 20:
-        return "red", "выполнение <20% неделю"
+    if not red and len(week) >= 5 and sum(week) / len(week) < 20:
+        red = "выполнение <20% неделю"
+    if red:
+        return ("yellow", f"возвращение после 🟥 ({red})") if recovery else ("red", red)
     last2 = sleep[-2:]
     if len(last2) == 2 and all(s is not None and s < 360 for s in last2):
         return "yellow", "сон <6ч 2 дня подряд"
@@ -143,8 +158,10 @@ def guard_mode(
         if 20 <= avg <= 40:
             return "yellow", f"выполнение {avg:.0f}%"
         known = [s for s in last3 if s is not None]
-        if avg < 50 and known and sum(known) / len(known) >= 420:
+        if avg < 50 and known and sum(known) / len(known) >= 420 and not (after_red or recovery):
             return "pressure", f"выполнение {avg:.0f}% при нормальном сне"
+    if after_red or recovery:
+        return "yellow", "первый день после 🟥: без разгона"
     return "normal", ""
 
 

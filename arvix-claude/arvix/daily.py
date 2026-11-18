@@ -204,8 +204,12 @@ def close_day(core: Any, d: date) -> dict[str, Any] | None:
             xp_bonus.append((rules.BONUS_SILENT_DAY, "silent_day"))
         for amount, reason in xp_bonus:
             core.emit("xp_awarded", {"amount": amount, "reason": reason, "date": d.isoformat()}, source="scheduler")
-        if completion is not None and completion >= 70 and sleep_ok and st.hp < rules.HP_MAX:
-            core.emit("hp_changed", {"amount": rules.HP_REGEN, "reason": "regen", "date": d.isoformat()}, source="scheduler")
+        # В 🟥 плана нет — восстановление идёт от сна, а не от выполнения: иначе HP ≤ 20
+        # держал бы 🟥 вечно (D38).
+        resting = core.effective_mode() == "red"
+        if sleep_ok and st.hp < rules.HP_MAX and (resting or (completion is not None and completion >= 70)):
+            core.emit("hp_changed", {"amount": rules.HP_REGEN, "reason": "regen_sleep" if resting else "regen", "date": d.isoformat()},
+                      source="scheduler")
 
         # 9. HP = 0 → Протокол Ноль, а не потеря уровня.
         if core.state.hp == 0 and core.state.zero_until is None:

@@ -72,6 +72,74 @@ def parse_duration(value: Any) -> int:
     raise ArvixError(f"Длительность «{value}» не распознана. Примеры: 7:30, 7.5, 450м")
 
 
+def sleep_between(bedtime: str, wake: str) -> int:
+    """Минуты сна от отбоя до подъёма через полночь: 01:00 → 08:30 = 450, 23:30 → 07:00 = 450."""
+    bed_h, bed_m = map(int, bedtime.split(":"))
+    up_h, up_m = map(int, wake.split(":"))
+    return (up_h * 60 + up_m - bed_h * 60 - bed_m) % 1440
+
+
+_CLOCK = r"(\d{1,2}(?:[:.]\d{2})?|час|полночь)"
+_BED_RE = re.compile(r"\b(?:лег\w*|легл\w*|уснул\w*|заснул\w*|отбой|вырубил\w*|отключил\w*)\s*(?:в|около|примерно в|где-то в)?\s*" + _CLOCK)
+_WAKE_RE = re.compile(r"\b(?:встал\w*|проснул\w*|подъем)\s*(?:в|около|примерно в|где-то в)?\s*" + _CLOCK)
+_MORNING_RE = re.compile(r"(?<![\d:.])" + _CLOCK + r"\s*утра")
+_RANGE_RE = re.compile(r"(?:^|\bс\s+)(\d{1,2}(?:[:.]\d{2})?)\s*(?:-|–|—|до)\s*(\d{1,2}(?:[:.]\d{2})?)\b(?!\s*ч)")
+_HOURS_RE = re.compile(r"(\d{1,2}(?:[.,]\d)?)\s*(?:ч\b|час\w*)")
+
+
+def _clock(token: str, *, bed: bool) -> str:
+    """«час» → 01:00; «11» в отбое → 23:00 (вечер), «12» → 00:00; подъём — как сказан."""
+    if token == "час":
+        return "01:00"
+    if token == "полночь":
+        return "00:00"
+    value = parse_hhmm(token.replace(".", ":"))
+    hours, minutes = map(int, value.split(":"))
+    if bed and 6 <= hours <= 11:
+        hours += 12
+    elif bed and hours == 12:
+        hours = 0
+    return f"{hours:02d}:{minutes:02d}"
+
+
+def parse_sleep_text(text: str, expect: str | None = None) -> dict[str, Any]:
+    """Ответ про сон словами → {duration, bedtime, wake}; чего нет — None (02-MECHANICS §7.2).
+
+    «7:30», «7.5», «7ч30м» — длительность; «7:20 00:30» — длительность и отбой;
+    «лёг в час, встал в 8:30», «с 0:30 до 8:30», «0:30–8:30» — отбой и подъём;
+    «8:30 утра», «встал в 9» — только подъём (отбой код спросит сам); «23:40» — только отбой.
+    Голое «8:30» — длительность: так его просит брифинг. expect — какую половину код только что
+    спросил («Во сколько уснул?» → expect="bedtime»): тогда «в час» — это она."""
+    low = text.lower().replace("ё", "е").strip()
+    out: dict[str, Any] = {"duration": None, "bedtime": None, "wake": None}
+    if match := _RANGE_RE.search(low):
+        out["bedtime"], out["wake"] = _clock(match.group(1), bed=True), _clock(match.group(2), bed=False)
+    if match := _BED_RE.search(low):
+        out["bedtime"] = _clock(match.group(1), bed=True)
+    if match := _WAKE_RE.search(low) or _MORNING_RE.search(low):
+        out["wake"] = _clock(match.group(1), bed=False)
+    if expect in ("bedtime", "wake") and not out[expect] and (match := re.search(r"(?<![\d:.])" + _CLOCK + r"(?![\d:.])", low)):
+        out[expect] = _clock(match.group(1), bed=expect == "bedtime")
+    if out["bedtime"] and out["wake"]:
+        out["duration"] = sleep_between(out["bedtime"], out["wake"])
+        return out
+    if match := re.search(r"спал\w*\s*(?:около|примерно|где-то)?\s*(\d[\d:.,]*\s*(?:ч\w*\s*\d*\s*м?\w*|м\w*)?)", low):
+        out["duration"] = parse_duration(match.group(1).replace("часов", "ч").replace("часа", "ч").replace("час", "ч").strip())
+    elif match := _HOURS_RE.search(low):
+        out["duration"] = parse_duration(match.group(1).replace(",", "."))
+    elif not (out["bedtime"] or out["wake"]):
+        words = low.replace(",", " ").split()
+        if words and re.fullmatch(r"(1[3-9]|2[0-3])[:.]\d{2}", words[0]):
+            out["bedtime"] = _clock(words[0], bed=True)  # 23:40 сном быть не может — это отбой
+        elif 0 < len(words) <= 2:  # «5 задач сегодня?» — не сон: голое число берём только коротким ответом
+            out["duration"] = parse_duration(words[0])
+            if len(words) > 1 and re.fullmatch(r"\d{1,2}[:.]\d{2}", words[1]):
+                out["bedtime"] = _clock(words[1], bed=True)
+    if not any(out.values()):
+        raise ArvixError("Не понял про сон. Примеры: «7:30», «лёг в час, встал в 8:30»")
+    return out
+
+
 class Core:
     def __init__(self, cfg: Config | None = None, store: Store | None = None):
         self.cfg = cfg or load_config()
@@ -172,18 +240,63 @@ class Core:
         """Выключенный ментор (safety-контур) по тону равен 🟥 — правило №5."""
         return "red" if not self.state.mentor_enabled else self.state.mode
 
+    def recovery_active(self) -> bool:
+        until = self.state.recovery_until
+        return bool(until) and datetime.fromisoformat(until) > self.now()
+
+    def guard_completion(self, until: date, n: int = 7) -> list[float | None]:
+        """Выполнение для Burnout Guard. День, закрытый в 🟥, — None: бот сам сказал «без плана»
+        и о задачах не напоминал, значит, и провала не было. Иначе 🟥 кормил сам себя:
+        нет напоминаний → задачи не отмечены → выполнение 0 % → снова 🟥 (D38)."""
+        out = []
+        for i, value in enumerate(self.state.series(until, n, "completion")):
+            day = self.state.days.get(until - timedelta(days=n - 1 - i))
+            out.append(None if day and day.closed and day.closed.get("mode") == "red" else value)
+        return out
+
     def recompute_mode(self, source: str = "scheduler") -> str:
         today = self.today()
+        yesterday = self.state.days.get(today - timedelta(days=1))
         mode, trigger = rules.guard_mode(
             sleep=self.state.series(today, 3, "sleep_min"),
-            completion=self.state.series(today - timedelta(days=1), 7, "completion"),
+            completion=self.guard_completion(today - timedelta(days=1)),
             hp=self.state.hp,
             sos=self.sos_active(),
+            sleep_target=self.sleep_target(),
+            recovery=self.recovery_active(),
+            after_red=bool(yesterday and yesterday.closed and yesterday.closed.get("mode") == "red"),
         )
         if mode != self.state.mode:
             with self.tx():
                 self.emit("mode_changed", {"from": self.state.mode, "to": mode, "trigger": trigger}, source=source)
         return mode
+
+    def resume_plan(self, *, source: str = "telegram") -> str:
+        """«Вернуться к плану» после 🟥 — решение человека, кнопкой, а не модели (D38).
+        Снимает ручной SOS и до следующей смены дня держит режим не выше 🟨: план
+        возвращается без разгона. Выключенный safety-контуром ментор так не включается —
+        только /mentor on."""
+        if not self.state.mentor_enabled:
+            raise ArvixError("Ментор выключен safety-контуром. Включить его можешь только ты сам: /mentor on")
+        rollover = parse_hhmm(self.cfg.schedule("rollover")) or "04:00"
+        until = self.at(self.today() + timedelta(days=1), rollover)
+        with self.tx():
+            if self.sos_active():
+                self.emit("sos", {"on": False, "until": None, "note": "возвращение к плану"}, source=source)
+            self.emit("recovery_started", {"until": until.isoformat()}, source=source)
+        return self.recompute_mode(source="l0")
+
+    def red_exit(self) -> str:
+        """Как выйти из 🟥 — фактом для модели и человека, а не надеждой «цифры подтянутся сами»."""
+        trigger = self.state.mode_trigger
+        sleep = f"сон от {self.sleep_target() // 60}ч{self.sleep_target() % 60:02d}м сегодня"
+        if trigger.startswith("ручной"):
+            return "кнопка «Вернуться к плану» или сам через сутки после включения"
+        if trigger.startswith("HP"):
+            return f"{sleep} (запиши его — режим пересчитается сразу) или кнопка «Вернуться к плану»"
+        if trigger.startswith("сон"):
+            return "нормальный сон сегодня (запиши его — режим пересчитается сразу) или кнопка «Вернуться к плану»"
+        return "кнопка «Вернуться к плану»; без неё — сам, когда дни без плана выйдут из недельного окна"
 
     def sleep_target(self) -> int:
         """Норма сна в минутах: явное поле профиля, иначе расстояние между целевым отбоем
@@ -437,19 +550,30 @@ class Core:
 
     # --- журналы дня ----------------------------------------------------------
 
-    def log_sleep(self, duration: Any, *, bedtime: Any = None, day: Any = None, source: str = "claude") -> dict[str, Any]:
-        minutes = parse_duration(duration)
+    def log_sleep(self, duration: Any = None, *, bedtime: Any = None, wake: Any = None, day: Any = None,
+                  source: str = "claude") -> dict[str, Any]:
+        """Сон длительностью («7:30») или отбоем и подъёмом («лёг 01:00, встал 08:30» → 7ч30м:
+        арифметику через полночь делает код, а не модель)."""
+        bed, up = parse_hhmm(bedtime), parse_hhmm(wake)
+        if duration in (None, "") and bed and up:
+            minutes = sleep_between(bed, up)
+        elif duration in (None, ""):
+            raise ArvixError("Нужна длительность сна или время отбоя и подъёма")
+        else:
+            minutes = parse_duration(duration)
         if not 0 < minutes <= 20 * 60:
             raise ArvixError("Сон должен быть от 1 минуты до 20 часов")
         target = self.parse_day(day)
+        before = self.state.mode
         with self.tx():
             self.emit(
                 "sleep_recorded",
-                {"duration_min": minutes, "bedtime": parse_hhmm(bedtime), "date": target.isoformat(), "source": source},
+                {"duration_min": minutes, "bedtime": bed, "wake": up, "date": target.isoformat(), "source": source},
                 source=source,
             )
         mode = self.recompute_mode(source="l0")
-        return {"duration_min": minutes, "date": target, "mode": mode, "warnings": checks.sleep_issues(minutes)}
+        return {"duration_min": minutes, "date": target, "mode": mode, "mode_before": before, "bedtime": bed, "wake": up,
+                "warnings": checks.sleep_issues(minutes)}
 
     def log_expense(self, amount: Any, category: str, *, impulse: bool = False, note: str = "", source: str = "claude") -> dict[str, Any]:
         try:
