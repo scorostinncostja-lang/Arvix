@@ -45,6 +45,33 @@ class GraphTest(ArvixCase):
         best = next(s for s in self.g["suggestions"] if s["b"] == "Физика/Закон Ома.md")
         self.assertIn("физика", best["tags"])
 
+    def test_templates_are_not_in_graph_and_label_is_file_name(self) -> None:
+        self.write("05_System/Templates/Concept.md", "---\ncreated: {{ date:YYYY-MM-DD }}\n---\n# {{title}}\n[[Закон Ома]] " + OHM)
+        self.write("Шаблоны/Отчёт {{date:DD.MM.YYYY}}.md", "# Отчёт\n")
+        self.write("Физика/Ток.md", "---\nrelated: \"[[Мощность]]\"\n---\n# Совсем другой заголовок\n![[схема.png]] [[Физика/Закон Ома]]\n")
+        g = graph.build(Vault(self.vault))
+        ids = {n["id"] for n in g["nodes"]}
+        self.assertFalse(any("Templates" in i or "Шаблоны" in i for i in ids), ids)
+        self.assertFalse(any("{{" in n["title"] for n in g["nodes"]))
+        tok = next(n for n in g["nodes"] if n["id"] == "Физика/Ток.md")
+        self.assertEqual((tok["title"], tok["degree"]), ("Ток", 2))  # ссылка из свойств и путь — связи
+        self.assertNotIn("схема.png", [x["name"] for x in g["ghosts"]])
+
+    def test_link_target_uses_path_for_duplicate_names(self) -> None:
+        self.write("Другое/Мощность.md", "# Мощность в спорте\n")
+        vault = Vault(self.vault)
+        self.assertEqual(graph.link_target(vault, "Физика/Мощность.md"), "Физика/Мощность")
+        self.assertEqual(graph.link_target(vault, "Физика/Закон Ома.md"), "Закон Ома")
+        self.assertEqual(graph.link_line("x [[Б|алиас]]\n", "Б"), "x [[Б|алиас]]\n")
+
+    def test_lesson_skeleton_renders_obsidian_vars_with_spaces(self) -> None:
+        from datetime import date
+
+        from arvix import lesson
+        text = lesson.skeleton("---\ncreated: {{ date:YYYY-MM-DD }}\n---\n# {{title}}\n", "Ток", "Физика", date(2026, 11, 18), ["?"], [])
+        self.assertIn("created: 2026-11-18", text)
+        self.assertIn("# Ток", text)
+
     def test_link_line_appends_once(self) -> None:
         text = graph.link_line("# A\nтекст\n", "Б")
         self.assertTrue(text.endswith("\nСвязи: [[Б]]\n"))

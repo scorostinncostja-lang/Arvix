@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 SKIP_DIRS = {".obsidian", ".trash", ".git", "node_modules", "Cache"}
+TEMPLATE_DIR_NAMES = ("templates", "template", "шаблоны")
 MAX_READ_BYTES = 200_000
 ASSET_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
                ".svg": "image/svg+xml", ".pdf": "application/pdf", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": "video/mp4"}
@@ -96,7 +97,7 @@ def detect_paths(root: Path) -> dict[str, str]:
             folders.append(json.loads((root / ".obsidian" / "templates.json").read_text(encoding="utf-8")).get("folder") or "")
         except (OSError, ValueError):
             pass
-        folders += [str(p.relative_to(root)) for p in dirs if p.name.lower() in ("templates", "шаблоны", "template")]
+        folders += [str(p.relative_to(root)) for p in dirs if p.name.lower() in TEMPLATE_DIR_NAMES]
         for folder in [f for f in folders if f]:
             for path in sorted((root / folder).glob("*.md")):
                 if any(key in path.stem.lower() for key in ("daily", "отч", "report", "день")):
@@ -447,6 +448,23 @@ class Vault:
             return None
         text = path.read_text(encoding="utf-8", errors="replace")
         return {"path": rel, "fields": parse_frontmatter(text), "text": text[:4000]}
+
+    def template_dirs(self) -> list[str]:
+        """Папки шаблонов: настройка Templates, папка Templater и любые «Templates»/«Шаблоны».
+        Шаблон — заготовка, а не мысль: в граф и подсказки он не попадает."""
+        found: list[str] = []
+        for conf, key in ((".obsidian/templates.json", "folder"),
+                          (".obsidian/plugins/templater-obsidian/data.json", "templates_folder")):
+            try:
+                found.append(str(json.loads((self.root / conf).read_text(encoding="utf-8")).get(key) or ""))
+            except (OSError, ValueError, AttributeError):
+                pass
+        for path in self.root.rglob("*"):
+            rel = path.relative_to(self.root)
+            if len(rel.parts) <= 3 and path.is_dir() and path.name.lower() in TEMPLATE_DIR_NAMES \
+                    and not any(part in SKIP_DIRS for part in rel.parts):
+                found.append(rel.as_posix())
+        return sorted({f.strip("/") for f in found if f.strip("/")})
 
     def daily_template(self) -> str:
         _, _, template = self.daily_note_settings()

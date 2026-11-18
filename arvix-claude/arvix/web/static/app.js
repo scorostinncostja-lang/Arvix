@@ -664,7 +664,7 @@ async function talkListen() {
   const rec = talk.rec = new MediaRecorder(talk.stream, type ? { mimeType: type } : undefined);
   const chunks = [];
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-  rec.onstop = () => { if (talk.on && spoke) talkSend(new Blob(chunks, { type: rec.mimeType || "audio/webm" })); };
+  rec.onstop = () => { const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" }); if (talk.on && spoke && blob.size > 1500) talkSend(blob); else if (talk.on && spoke) talkListen(); };
   rec.start(); haptic("light");
   talkStatus(talk.note ? `Слушаю… (${talk.note})` : "Слушаю…", "listening");
   const buf = new Uint8Array(talk.analyser.fftSize);
@@ -878,7 +878,7 @@ function renderGraph() {
     <div class="graph-wrap"><canvas id="g-canvas" aria-label="Граф заметок"></canvas>
       ${sel ? `<div class="graph-card"><div class="grow"><b>${esc(sel.title)}</b><div class="muted small">${esc(sel.folder || "корень")} · связей ${sel.degree}</div></div>
         <button class="pill" id="g-local">${graph.local ? "Весь граф" : "Рядом"}</button><button class="pill primary" id="g-open">Открыть</button></div>` :
-        `<div class="graph-hint muted small">${d ? `${d.nodes.length} заметок · ${d.edges.length} связей` : "Строю граф…"} · тап — заметка, щипок — масштаб</div>`}
+        `<div class="graph-hint muted small">${d ? `${graph.nodes.length} заметок · ${graph.edges.length} связей` : "Строю граф…"} · тап — заметка, щипок — масштаб</div>`}
     </div>
     ${sugg.length ? `<div class="card"><h3>Арвикс предлагает связать</h3>
       <p class="muted small">Заметки говорят об одном, но ссылок между ними нет. Связь — строка «Связи: [[…]]» в конце первой.</p>
@@ -901,7 +901,7 @@ function renderGraph() {
   view.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.open)));
   view.querySelectorAll("[data-link]").forEach((b) => b.addEventListener("click", async () => {
     const s = sugg[+b.dataset.link]; b.disabled = true;
-    try { await api("note/link", { json: { a: s.a, b: s.b } }); notify("success"); toast("Связал: " + name(s.a) + " → " + name(s.b)); await loadGraph(); }
+    try { await api("note/link", { json: { a: s.a, b: s.b } }); notify("success"); toast("Связал: в «" + name(s.a) + "» добавлена ссылка на «" + name(s.b) + "»"); await loadGraph(); }
     catch (err) { b.disabled = false; toast(err.message); }
   }));
   view.querySelectorAll("[data-ghost]").forEach((b) => b.addEventListener("click", async () => {

@@ -2,9 +2,12 @@
 
 import io
 import json
+import subprocess
 import sys
+import tempfile
 import unittest
 import urllib.error
+from pathlib import Path
 from unittest import mock
 
 from arvix import stt
@@ -65,6 +68,26 @@ class SttTest(unittest.TestCase):
         with mock.patch.object(stt.urllib.request, "urlopen", side_effect=error):
             with self.assertRaisesRegex(stt.STTError, "ключ API не подошёл"):
                 engine.transcribe(b"OGG")
+
+    def test_400_carries_service_message(self) -> None:
+        engine = stt.STT(cfg(engine="groq", api_key="k"))
+        body = io.BytesIO(b'{"error": {"message": "could not process file - is it a valid media file?"}}')
+        error = urllib.error.HTTPError("u", 400, "bad", {}, body)
+        with mock.patch.object(stt.urllib.request, "urlopen", side_effect=error), self.assertLogs("arvix.stt", "WARNING"):
+            with self.assertRaisesRegex(stt.STTError, "HTTP 400 — could not process file"):
+                engine.transcribe(b"OGG")
+
+    def test_browser_recording_is_rebuilt_by_ffmpeg(self) -> None:
+        if not stt.shutil.which("ffmpeg"):
+            self.skipTest("нет ffmpeg")
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "t.webm"
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=f=300:d=1", "-c:a", "libopus", str(src)], check=True)
+            data, name = stt.normalize(src.read_bytes(), "voice.webm")
+        self.assertEqual(name, "voice.ogg")
+        self.assertTrue(data.startswith(b"OggS"))
+        self.assertEqual(stt.normalize(b"OggS-telegram", "voice.ogg"), (b"OggS-telegram", "voice.ogg"))
+        self.assertEqual(stt.normalize(b"not audio", "voice.webm"), (b"not audio", "voice.webm"))  # не справился — как есть
 
     def test_command_engine_gets_the_file_and_returns_stdout(self) -> None:
         reader = f'{sys.executable} -c "import sys; print(open(sys.argv[1], encoding=\'utf-8\').read()); print(sys.argv[2].endswith(\'.wav\'))" {{input}} {{wav}}'
