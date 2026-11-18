@@ -13,7 +13,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import shlex
+import shutil
 import subprocess
 import tempfile
 import urllib.error
@@ -24,6 +26,9 @@ from typing import Any
 
 ENDPOINTS = {"groq": "https://api.groq.com/openai/v1", "openai": "https://api.openai.com/v1"}
 API_ENGINES = tuple(ENDPOINTS)
+MIME = {"ogg": "audio/ogg", "oga": "audio/ogg", "webm": "audio/webm", "m4a": "audio/mp4",
+        "mp4": "audio/mp4", "mp3": "audio/mpeg", "wav": "audio/wav"}
+log = logging.getLogger("arvix.stt")
 
 
 class STTError(RuntimeError):
@@ -77,18 +82,21 @@ class STT:
     def enabled(self) -> bool:
         return not self.problem()
 
-    def transcribe(self, audio: bytes, filename: str = "voice.ogg") -> str:
+    def transcribe(self, audio: bytes, filename: str = "voice.ogg", *, browser: bool = False) -> str:
+        """browser=True — запись из MediaRecorder: перед отправкой всегда пересобирается ffmpeg."""
         if not self.enabled:
             raise STTError(self.problem())
         if self.engine == "command":
             return self._command(audio, filename)
-        return self._api(audio, filename)
+        return self._api(audio, filename, browser)
 
-    def _api(self, audio: bytes, filename: str) -> str:
+    def _api(self, audio: bytes, filename: str, browser: bool = False) -> str:
+        audio, filename = normalize(audio, filename, timeout=self.timeout, force=browser)
         fields = {"model": self.model, "response_format": "json"}
         if self.language:
             fields["language"] = self.language
-        body, content_type = multipart(fields, "file", filename, audio, "audio/ogg")
+        ext = Path(filename).suffix.lstrip(".").lower()
+        body, content_type = multipart(fields, "file", filename, audio, MIME.get(ext, "application/octet-stream"))
         request = urllib.request.Request(
             f"{self.base_url}/audio/transcriptions", data=body, method="POST",
             headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": content_type, "User-Agent": "arvix-stt"},
@@ -97,9 +105,12 @@ class STT:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 data = json.loads(response.read() or b"{}")
         except urllib.error.HTTPError as exc:
-            exc.close()
+            detail = _error_detail(exc)
+            log.warning("STT %s HTTP %s (%s, %d байт): %s", self.engine, exc.code, filename, len(audio), detail)
             reason = {401: "ключ API не подошёл", 403: "доступ запрещён — регион или права ключа", 413: "файл слишком большой",
                       429: "лимит распознавания — попробуй через минуту"}.get(exc.code, f"сервис ответил HTTP {exc.code}")
+            if exc.code == 400 and detail:
+                reason += f" — {detail[:160]}"
             raise STTError(reason) from exc
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             raise STTError(f"сервис распознавания недоступен: {exc}") from exc
@@ -121,3 +132,45 @@ class STT:
             if done.returncode != 0:
                 raise STTError(f"команда завершилась с кодом {done.returncode}: {(done.stderr or '').strip()[-200:]}")
             return " ".join(line.strip() for line in done.stdout.splitlines() if line.strip())
+
+
+def _error_detail(exc: urllib.error.HTTPError) -> str:
+    """Текст ошибки из ответа сервиса ({"error": {"message": …}}) — без него 400 не разобрать."""
+    try:
+        raw = exc.read() or b""
+    except OSError:
+        raw = b""
+    finally:
+        exc.close()
+    try:
+        data = json.loads(raw)
+        err = data.get("error") if isinstance(data, dict) else None
+        return str((err.get("message") if isinstance(err, dict) else err) or "").strip()
+    except ValueError:
+        return raw.decode("utf-8", "replace").strip()[:200]
+
+
+def normalize(audio: bytes, filename: str, *, timeout: int = 60, force: bool = False) -> tuple[bytes, str]:
+    """Запись из браузера (webm/mp4 из MediaRecorder) → ogg (кодек libopus) 16 кГц моно через ffmpeg.
+
+    MediaRecorder пишет «потоковые» файлы: webm без длительности, фрагментированный mp4 с телефона.
+    Whisper-сервисы такие нередко отвергают с HTTP 400, а ffmpeg читает их и собирает обычный файл.
+    Голосовые Telegram уже ogg — их не трогаем. Нет ffmpeg или он не справился — отправляем как есть."""
+    ext = Path(filename).suffix.lstrip(".").lower()
+    ffmpeg = shutil.which("ffmpeg")
+    if (ext in ("ogg", "oga") and not force) or not ffmpeg:
+        return audio, filename
+    with tempfile.TemporaryDirectory(prefix="arvix-stt-") as tmp:
+        source, out = Path(tmp) / f"in.{ext or 'bin'}", Path(tmp) / "voice.ogg"
+        source.write_bytes(audio)
+        try:
+            done = subprocess.run([ffmpeg, "-v", "error", "-y", "-i", str(source), "-vn", "-ac", "1", "-ar", "16000",
+                                   "-c:a", "libopus", "-b:a", "32k", str(out)], capture_output=True, text=True,
+                                  timeout=timeout, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            log.warning("ffmpeg не перекодировал %s: %s", filename, exc)
+            return audio, filename
+        if done.returncode != 0 or not out.is_file() or not out.stat().st_size:
+            log.warning("ffmpeg не перекодировал %s (%d байт): %s", filename, len(audio), (done.stderr or "").strip()[-300:])
+            return audio, filename
+        return out.read_bytes(), "voice.ogg"

@@ -82,7 +82,7 @@ class FakeSTT:
     def __init__(self, text: str = "", error: str = "") -> None:
         self.text, self.error, self.enabled, self.seen = text, error, True, []
 
-    def transcribe(self, audio: bytes, filename: str = "voice.ogg") -> str:
+    def transcribe(self, audio: bytes, filename: str = "voice.ogg", *, browser: bool = False) -> str:
         from arvix.stt import STTError
 
         self.seen.append(audio)

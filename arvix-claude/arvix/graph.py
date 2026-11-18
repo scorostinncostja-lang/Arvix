@@ -14,7 +14,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from arvix.vault import split_frontmatter
+from arvix.vault import PLACEHOLDER, split_frontmatter
 
 WIKI = re.compile(r"!?\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\]")
 MDLINK = re.compile(r"\[[^\]]*\]\(([^)\s]+?\.md)\)")
@@ -44,12 +44,19 @@ def _kind(rel: str, vault: Any) -> str:
     return "note"
 
 
+def is_template(rel: str, template_dirs: list[str]) -> bool:
+    """Шаблон Obsidian: лежит в папке шаблонов или в имени есть {{переменная}} / <% Templater %>."""
+    return any(rel.startswith(d + "/") for d in template_dirs) or bool(PLACEHOLDER.search(Path(rel).stem))
+
+
 def build(vault: Any, *, suggestions: int = 12) -> dict[str, Any]:
-    files = vault.files()
+    template_dirs = vault.template_dirs()
     by_name: dict[str, list[str]] = {}
     texts: dict[str, str] = {}
-    for path in files:
+    for path in vault.files():
         rel = vault.rel(path)
+        if is_template(rel, template_dirs):
+            continue
         by_name.setdefault(path.stem.lower(), []).append(rel)
         try:
             texts[rel] = path.read_text(encoding="utf-8", errors="replace")
@@ -57,10 +64,13 @@ def build(vault: Any, *, suggestions: int = 12) -> dict[str, Any]:
             texts[rel] = ""
 
     def resolve(target: str, src: str) -> str | None:
-        target = target.strip().removesuffix(".md")
-        if "/" in target:
-            direct = target + ".md"
-            return direct if direct in texts else None
+        target = target.strip().removesuffix(".md").lstrip("./")
+        if "/" in target:  # как Obsidian: путь от корня, от папки заметки или хвост пути
+            for cand in (target + ".md", str(Path(src).parent / target) + ".md"):
+                if cand in texts:
+                    return cand
+            tail = [r for r in by_name.get(Path(target).name.lower(), []) if r.lower().endswith("/" + target.lower() + ".md")]
+            return tail[0] if tail else None
         hits = by_name.get(target.lower()) or []
         if len(hits) > 1:  # как Obsidian: ближайшая к источнику
             folder = str(Path(src).parent)
@@ -73,8 +83,9 @@ def build(vault: Any, *, suggestions: int = 12) -> dict[str, Any]:
     stems: dict[str, Counter[str]] = {}
     tags: dict[str, set[str]] = {}
     for rel, text in texts.items():
-        _, body = split_frontmatter(text)
-        title = next((line.lstrip("# ").strip() for line in body.splitlines() if line.startswith("# ")), Path(rel).stem)
+        front, body = split_frontmatter(text)
+        # Подпись — имя файла, как в графе Obsidian: заголовок может быть «{{title}}» или чужим.
+        title = Path(rel).stem
         clean = CODE.sub(" ", body)
         note_tags = {t.lower() for t in TAG.findall(clean)}
         fm_tags = re.search(r"^tags:\s*\[?([^\]\n]*)", text[:2000], re.MULTILINE)
@@ -83,12 +94,17 @@ def build(vault: Any, *, suggestions: int = 12) -> dict[str, Any]:
         tags[rel] = note_tags
         nodes[rel] = {"id": rel, "title": title[:80], "name": Path(rel).stem, "folder": str(Path(rel).parent) if "/" in rel else "",
                       "kind": _kind(rel, vault), "tags": sorted(note_tags)[:8], "words": len(WORD.findall(clean)), "degree": 0}
-        for raw in WIKI.findall(clean) + MDLINK.findall(clean):
-            target = resolve(raw.replace("%20", " "), rel)
+        for raw in WIKI.findall("\n".join(front) + "\n" + clean) + MDLINK.findall(clean):  # ссылки в свойствах — тоже связи
+            raw = raw.replace("%20", " ").strip()
+            if not raw or PLACEHOLDER.search(raw):
+                continue
+            if Path(raw).suffix.lower() not in ("", ".md"):  # вложения (картинки, pdf, canvas) — не заметки
+                continue
+            target = resolve(raw, rel)
             if target and target != rel:
                 edges.add(tuple(sorted((rel, target))))  # type: ignore[arg-type]
-            elif not target and not Path(raw).suffix.lower() in (".png", ".jpg", ".jpeg", ".pdf", ".gif", ".webp", ".svg"):
-                ghosts[raw.strip()] = ghosts.get(raw.strip(), 0) + 1
+            elif not target:
+                ghosts[raw] = ghosts.get(raw, 0) + 1
         stems[rel] = Counter(_stem(w) for w in WORD.findall(clean) if w.lower() not in STOP)
     for a, b in edges:
         nodes[a]["degree"] += 1
@@ -137,10 +153,18 @@ def suggest(nodes: dict[str, dict[str, Any]], edges: set[tuple[str, str]], stems
     return out[:limit]
 
 
+def link_target(vault: Any, target_rel: str) -> str:
+    """Как сослаться на заметку, чтобы Obsidian нашёл именно её: имя файла, а если такое
+    имя есть в нескольких папках — путь без .md (иначе ссылка уйдёт в ближайшую тёзку)."""
+    stem = Path(target_rel).stem
+    same = [p for p in vault.files() if p.stem.lower() == stem.lower()]
+    return target_rel.removesuffix(".md") if len(same) > 1 else stem
+
+
 def link_line(text: str, target_name: str) -> str:
     """Дописать [[target]] в строку «Связи:» в конце заметки (или создать её)."""
     link = f"[[{target_name}]]"
-    if link in text:
+    if link in text or re.search(r"\[\[" + re.escape(target_name) + r"(?:[#|][^\]]*)?\]\]", text):
         return text
     lines = text.rstrip("\n").split("\n")
     if lines and lines[-1].startswith(LINK_LINE):
@@ -150,4 +174,4 @@ def link_line(text: str, target_name: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["build", "link_line", "suggest"]
+__all__ = ["build", "is_template", "link_line", "link_target", "suggest"]

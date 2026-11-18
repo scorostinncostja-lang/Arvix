@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Двусторонняя синхронизация хранилища Obsidian с сервером через rsync (новее — побеждает,
-# ничего не удаляется). Простая замена Syncthing; таймер arvix-vault-sync.timer — раз в 10 минут.
+# ничего не удаляется). Простая замена Syncthing; таймер arvix-vault-sync.timer — раз в 2 минуты.
 #
 #   deploy/vault-sync.sh                 # хост из [remote] host, хранилище из vault в config.toml
 #   deploy/vault-sync.sh arvix@host      # хост явно

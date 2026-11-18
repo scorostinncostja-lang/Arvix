@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Any
+
+from arvix.vault import render_template
 
 LESSON_SCHEMA = {
     "type": "object",
@@ -150,8 +152,8 @@ def skeleton(template: str | None, title: str, subject: str, today: date, questi
     """Каркас заметки по шаблону человека (Templates/Concept.md): заполняются только
     название, предмет, дата и вопросы самопроверки; остальное он пишет сам."""
     if template:
-        text = template.replace("{{title}}", title)
-        text = re.sub(r"\{\{date(?::[^}]*)?\}\}", today.isoformat(), text)
+        # Те же переменные, что подставил бы Obsidian: {{title}}, {{ date:YYYY-MM-DD }} с пробелами, Templater.
+        text = render_template(template, datetime.combine(today, datetime.min.time()), title)
         text = re.sub(r"^(subject:\s*)$", rf"\g<1>{subject}", text, count=1, flags=re.MULTILINE)
         checks = "\n".join(f"- [ ] {q}" for q in questions)
         text, n = re.subn(r"(## Самопроверка\n)(?:- \[ \][^\n]*\n?)*", rf"\g<1>{checks}\n", text, count=1)

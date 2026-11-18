@@ -303,7 +303,7 @@ def voice(audio: bytes, filename: str) -> Any:
                 bot.send(tpl.VOICE_OFF)
                 return
             try:
-                text = bot.stt.transcribe(audio, filename=filename)
+                text = bot.stt.transcribe(audio, filename=filename, browser=True)
             except STTError as exc:
                 bot.log_in("[голосовое — не распознано]")
                 bot.send(f"Голосовое не распознал: {exc}. Напиши текстом.")
@@ -440,10 +440,13 @@ def graph_link(a: str, b: str) -> Any:
         a_rel = vault.rel(vault.resolve(a, must_exist=True))
         b_path = vault.resolve(b, must_exist=True)
         text = vault.read(a_rel)
-        new = graph.link_line(text, b_path.stem)
+        b_rel = vault.rel(b_path)
+        if a_rel == b_rel:
+            raise ArvixError("Заметку не связать саму с собой")
+        new = graph.link_line(text, graph.link_target(vault, b_rel))
         if new != text:
             bot.core.save_note(a_rel, new, base_sha=sha(text), source="web")
-        return {"linked": True, "a": a_rel, "b": vault.rel(b_path)}
+        return {"linked": True, "a": a_rel, "b": b_rel}
     return run
 
 
