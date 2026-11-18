@@ -190,12 +190,21 @@ ssh -t arvix@HOST '~/.local/bin/arvix setup --stt command --yes && systemctl --u
 ```
 `base` быстрее, `small` точнее по-русски и медленнее в 2–3 раза.
 
-**Голос Арвикса (ответ голосовым, озвучка разговора, D34)** — Piper с русским голосом, локально:
+**Голос Арвикса (ответ голосовым, звонок в приложении, D36)** — Gemini TTS, бесплатный тариф Google AI Studio:
+1. Ключ: aistudio.google.com → Get API key → Create API key (из России — через VPN; сам сервер ходит в Google из Финляндии).
+2. На сервере (ключ — скрытым вводом, в чат не попадает):
 ```bash
-ssh -t arvix@HOST 'bash ~/.local/share/arvix/app/deploy/tts-local.sh irina'
+ssh -t arvix@HOST '~/.local/bin/arvix setup --tts gemini --yes'
 ```
-Скрипт сам перезапускает бота и пишет «Готово: голос включён»; повторный запуск безопасен.
-Голоса: `irina`, `dmitri`, `denis`, `ruslan`. Без этого режим разговора в приложении говорит голосом телефона.
+Команда сразу пробует голос («Голос работает: Gemini · Charon, … за N с») и перезапускает бота. Другой мужской голос —
+`--voice Orus` (`Iapetus`, `Algieba`, `Sadaltager`, `Puck`, `Fenrir`…); модель — `[roles.tts] model`
+(`gemini-3.8-flash-tts`, экономнее — `gemini-3.8-flash-lite-tts`). Лимиты бесплатного тарифа Google не публикует — смотреть
+в aistudio.google.com/rate-limit; при исчерпании (HTTP 429, сброс в полночь по тихоокеанскому, ~11:00 МСК) звонок говорит
+голосом телефона, в Telegram — текст. Текст ответов уходит в Google; на бесплатном тарифе Google может использовать его
+для улучшения своих продуктов.
+
+Локально и без сети — Piper (`deploy/tts-local.sh irina`): голос механический; как запасной —
+`[tts] fallback_command`. Без голоса сервера звонок говорит голосом телефона.
 
 **Аватар бота** — `arvix avatar [файл.png]` (по умолчанию `deploy/avatar.png`, исходник `deploy/avatar.svg`); Bot API
 `setMyProfilePhoto`, BotFather не нужен.

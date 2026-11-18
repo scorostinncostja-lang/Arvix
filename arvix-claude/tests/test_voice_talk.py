@@ -77,3 +77,119 @@ class TtsServerTest(test_v04.ServerTest):
         self.assertIn("голос телефона", body["error"])
         status, state = self.call("/api/state")
         self.assertFalse(state["server_tts"])
+
+
+def wav_bytes(seconds: float = 0.3) -> bytes:
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(24000)
+        w.writeframes(b"\x00\x01" * int(24000 * seconds))
+    return buf.getvalue()
+
+
+class GeminiVoiceTest(BotCase):
+    """D36: голос Gemini (бесплатный тариф AI Studio), мужской Charon; запрос — по официальному примеру."""
+
+    def gemini(self, **tts: Any) -> TTS:
+        self.core.cfg.raw["tts"] = {"engine": "gemini", "api_key": "test-key", **tts}
+        return TTS(self.core.cfg)
+
+    def fake_response(self, payload: dict, seen: dict) -> Any:
+        import io
+        import json as _json
+
+        class Response(io.BytesIO):
+            def __enter__(self) -> "Response":
+                return self
+
+            def __exit__(self, *a: Any) -> None:
+                return None
+
+        def urlopen(request: Any, timeout: int = 0) -> Response:
+            seen["url"], seen["headers"], seen["body"] = request.full_url, dict(request.header_items()), _json.loads(request.data)
+            return Response(_json.dumps(payload).encode())
+
+        return urlopen
+
+    def test_request_follows_docs_and_model_comes_from_config(self) -> None:
+        import base64
+        from unittest import mock
+
+        tts = self.gemini()
+        self.assertTrue(tts.model)  # [roles.tts] model из defaults.toml — правило №4
+        audio = base64.b64encode(wav_bytes()).decode()
+        payload = {"steps": [{"type": "model_output", "content": [{"type": "audio", "mime_type": "audio/wav", "data": audio}]}]}
+        seen: dict = {}
+        with mock.patch("urllib.request.urlopen", self.fake_response(payload, seen)):
+            if shutil.which("ffmpeg"):
+                self.assertTrue(tts.synth("**Привет** 🎯, это Арвикс").startswith(b"OggS"))
+            else:
+                tts._gemini("Привет")
+        self.assertEqual(seen["url"], "https://generativelanguage.googleapis.com/v1beta/interactions")
+        self.assertEqual(seen["headers"]["X-goog-api-key"], "test-key")
+        body = seen["body"]
+        self.assertEqual(body["model"], tts.model)
+        self.assertEqual(body["generation_config"]["speech_config"], [{"voice": "Charon"}])  # мужской голос по умолчанию
+        self.assertEqual(body["response_format"], {"type": "audio"})
+        part = body["input"][0]["content"][0]
+        self.assertEqual(part["annotations"][0]["type"], "speech_metadata")
+        if shutil.which("ffmpeg"):
+            self.assertEqual(part["text"], "Привет , это Арвикс")  # разметка и эмодзи не читаются вслух
+
+    def test_quota_and_bad_key_are_explained_in_words(self) -> None:
+        import io
+        import urllib.error
+        from unittest import mock
+
+        from arvix.tts import TTSError
+
+        def limited(request: Any, timeout: int = 0) -> Any:
+            raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", {}, io.BytesIO(b'{"error": {"message": "quota"}}'))
+
+        with mock.patch("urllib.request.urlopen", limited), self.assertRaises(TTSError) as ctx:
+            self.gemini()._gemini("привет")
+        self.assertIn("лимит", str(ctx.exception))
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "нет ffmpeg")
+    def test_fallback_command_only_when_configured(self) -> None:
+        import urllib.error
+        from unittest import mock
+
+        from arvix.tts import TTSError
+
+        def down(request: Any, timeout: int = 0) -> Any:
+            raise urllib.error.URLError("нет сети")
+
+        with mock.patch("urllib.request.urlopen", down):
+            with self.assertRaises(TTSError):  # по умолчанию робота в запасе нет: лучше текст или голос телефона
+                self.gemini().synth("привет")
+            tts = self.gemini(fallback_command="ffmpeg -v error -y -f lavfi -i sine=frequency=300:duration=1 {out}")
+            self.assertTrue(tts.synth("привет").startswith(b"OggS"))
+
+    def test_without_key_voice_is_off_and_says_how_to_enable(self) -> None:
+        self.core.cfg.raw["tts"] = {"engine": "gemini"}
+        tts = TTS(self.core.cfg)
+        self.assertFalse(tts.enabled)
+        self.assertIn("arvix setup --tts gemini", tts.problem())
+
+    def test_find_audio_takes_last_audio_part(self) -> None:
+        from arvix.tts import find_audio
+
+        data = {"steps": [{"type": "model_output", "content": [{"type": "text", "text": "x"}, {"type": "audio", "data": "QQ=="}]},
+                          {"type": "model_output", "content": [{"type": "audio", "data": "Qg=="}]}]}
+        self.assertEqual(find_audio(data), "Qg==")
+        self.assertIsNone(find_audio({"steps": []}))
+
+    def test_setup_asks_key_hidden_and_keeps_male_voice(self) -> None:
+        from unittest import mock
+
+        from arvix import cli
+
+        with mock.patch.object(cli.sys.stdin, "isatty", return_value=True), mock.patch.object(cli.getpass, "getpass", return_value="k-1"):
+            self.assertEqual(cli._setup_tts("gemini", None), {"engine": "gemini", "api_key": "k-1", "voice": "Charon"})
+            self.assertEqual(cli._setup_tts("gemini", "Orus")["voice"], "Orus")
