@@ -66,6 +66,9 @@ model = "sonnet"
 [roles.stt]             # распознавание голосовых; для engine = "openai" — например "whisper-1"
 model = "whisper-large-v3-turbo"
 
+[roles.tts]             # голос Арвикса для engine = "gemini" (бесплатный тариф AI Studio); экономнее — "gemini-3.8-flash-lite-tts"
+model = "gemini-3.8-flash-tts"
+
 # Голосовые сообщения в Telegram (05-INTERFACES §2.6). engine: off | groq | openai | command.
 # Ключ пишет `arvix setup --stt groq` (скрытый ввод). command — своя программа на этой машине:
 # {input} — присланный .ogg, {wav} — временный .wav; печатает текст в stdout (deploy/stt-local.sh).
@@ -100,7 +103,8 @@ social = 2
 novelty = 1
 offscreen = 3
 
-[tts]                   # голос Арвикса (D34): ответ на голосовое — голосовым; озвучка режима разговора
-engine = "off"          # "command" — своя команда (Piper: deploy/tts-local.sh), текст на stdin, WAV в {out}
+[tts]                   # голос Арвикса (D34, D36): ответ на голосовое — голосовым; голос в звонке
+engine = "off"          # "gemini" — arvix setup --tts gemini (ключ AI Studio); "command" — своя команда (Piper)
+voice = "Charon"        # мужские голоса Gemini: Charon, Orus, Iapetus, Algieba, Sadaltager, Puck, Fenrir…
 command = ""
 voice_replies = true

@@ -21,16 +21,19 @@
       <div id="top-day" class="top-day">Арвикс</div>
       <div id="top-sub" class="top-sub"></div>
     </div>
-    <div id="top-mode" class="chip mode"></div>
+    <div class="top-right">
+      <button id="top-call" class="top-call hidden" aria-label="Поговорить голосом"></button>
+      <div id="top-mode" class="chip mode"></div>
+    </div>
   </header>
 
   <main id="view"></main>
 
   <nav class="tabs" id="tabs">
-    <button data-tab="today" class="active"><span class="ico">◉</span><span>Сегодня</span></button>
-    <button data-tab="chat"><span class="ico">✦</span><span>Арвикс</span><i id="chat-dot" class="dot hidden"></i></button>
-    <button data-tab="notes"><span class="ico">▤</span><span>Заметки</span></button>
-    <button data-tab="progress"><span class="ico">▲</span><span>Прогресс</span></button>
+    <button data-tab="today" class="active"><span class="ico" data-ic="today"></span><span>Сегодня</span></button>
+    <button data-tab="chat"><span class="ico" data-ic="chat"></span><span>Арвикс</span><i id="chat-dot" class="dot hidden"></i></button>
+    <button data-tab="notes"><span class="ico" data-ic="notes"></span><span>Заметки</span></button>
+    <button data-tab="progress"><span class="ico" data-ic="progress"></span><span>Прогресс</span></button>
   </nav>
 </div>
 

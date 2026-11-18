@@ -314,6 +314,45 @@ STT_KEY_HINT = {
 }
 
 
+def _setup_tts(engine: str, voice: str | None) -> dict[str, Any]:
+    """Голос Арвикса: ключ Gemini — только скрытым вводом в терминале."""
+    from arvix.tts import DEFAULT_VOICE
+
+    if engine != "gemini":
+        return {"engine": engine}
+    current = (_user_config().get("tts") or {}).get("api_key") or ""
+    if not sys.stdin.isatty() and not current:
+        sys.exit("Ключ вводится только в терминале (скрытый ввод): ssh -t … arvix setup --tts gemini")
+    key = ""
+    if sys.stdin.isatty():
+        print("Ключ Gemini: aistudio.google.com → Get API key → Create API key (бесплатно; из России — через VPN).\n"
+              "Текст ответов уходит в Google; на бесплатном тарифе Google может использовать его для улучшения сервисов.\n"
+              "Enter без ввода — оставить прежний ключ.")
+        key = getpass.getpass("Ключ API: ").strip()
+    key = key or current
+    if not key:
+        sys.exit("Ключ пустой — голос не включён.")
+    return {"engine": "gemini", "api_key": key, "voice": voice or (_user_config().get("tts") or {}).get("voice") or DEFAULT_VOICE}
+
+
+def _check_voice() -> None:
+    """Проба голоса сразу после настройки: честно — работает или почему нет; бот подхватит сам."""
+    import time
+
+    from arvix.tts import TTS, TTSError
+
+    tts = TTS(load_config())
+    started = time.monotonic()
+    try:
+        audio = tts.synth("Привет. Я Арвикс, теперь у меня живой голос.")
+    except TTSError as exc:
+        sys.exit(f"Голос не работает: {exc}")
+    print(f"Голос работает: {tts.label}, {len(audio) // 1024} КБ за {time.monotonic() - started:.1f} с")
+    if subprocess.run(["systemctl", "--user", "is-active", "--quiet", "arvix-telegram"], check=False).returncode == 0:
+        subprocess.run(["systemctl", "--user", "restart", "arvix-telegram"], check=False)
+        print("Готово: бот перезапущен — отправь Арвиксу голосовое или позвони из приложения.")
+
+
 def _setup_stt(engine: str) -> dict[str, Any]:
     """Голосовые: ключ API — только скрытым вводом в терминале; локальная команда — без ключа."""
     if engine in STT_KEY_HINT:
@@ -378,7 +417,12 @@ def cmd_setup(args: argparse.Namespace) -> None:
             updates["telegram"] = {"token": token, "owner_id": _pair_telegram(token)}
     if args.stt:
         updates["stt"] = _setup_stt(args.stt)
+    if args.tts:
+        updates["tts"] = _setup_tts(args.tts, args.voice)
     path = write_user_config(updates)
+    if args.tts and args.tts != "off":
+        _check_voice()
+        return
     print(f"\nКонфиг записан: {path} (права 600)")
     for item in init_home(Path(home).expanduser(), vault):
         print(f"Создано: {item}")
@@ -465,6 +509,13 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         print("--   голосовые выключены — arvix setup --stt groq (или локально: deploy/stt-local.sh)")
     else:
         check(f"голосовые: {stt.engine}", stt.enabled, stt.problem())
+    from arvix.tts import TTS
+
+    tts = TTS(cfg)
+    if tts.engine == "off":
+        print("--   голос Арвикса выключен — arvix setup --tts gemini (звонок пока говорит голосом телефона)")
+    else:
+        check(f"голос Арвикса: {tts.label}", tts.enabled, tts.problem())
     if shutil.which("ffmpeg"):
         print("OK   видео Арвиксу: ffmpeg есть — кадры и звук из роликов")
     else:
@@ -676,6 +727,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-telegram", dest="telegram", action="store_false", help="пропустить Telegram")
     p.add_argument("-y", "--yes", action="store_true", help="без вопросов: текущие значения и флаги")
     p.add_argument("--stt", choices=("groq", "openai", "command", "off"), help="голосовые в Telegram: движок распознавания")
+    p.add_argument("--tts", choices=("gemini", "command", "off"), help="голос Арвикса: ответ голосом и звонок (gemini — ключ скрытым вводом)")
+    p.add_argument("--voice", help="голос Gemini, например Charon, Orus, Iapetus, Algieba")
     add("init-home", cmd_init_home, "создать или дополнить дом Арвикса для Claude Code")
     add("doctor", cmd_doctor, "проверка установки")
     add("statusline", cmd_statusline, "строка состояния для Claude Code (stdin — JSON сессии)")
