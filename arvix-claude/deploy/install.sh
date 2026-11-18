@@ -30,14 +30,25 @@ else
   rm -rf "$APP" && mkdir -p "$APP" && cp -r "$SRC/." "$APP/" && rm -rf "$APP/tests"
 fi
 
-step "CLI: $BIN/arvix"
-mkdir -p "$BIN"
-cat > "$BIN/arvix" <<EOF
+# Ноутбук в удалённом режиме ([remote] host) команду `arvix` не получает: там работают приложение
+# (Chromium) и Claude Code, а терминальный интерфейс владелец убрал (D38). Сервер и машина без
+# [remote] — получают: на них `arvix setup/doctor` и деплой.
+REMOTE_HOST=""
+[[ -f "$CONF" ]] && REMOTE_HOST="$(sed -n '/^\[remote\]/,/^\[/{s/^host *= *"\(.*\)"/\1/p}' "$CONF")"
+if [[ -n "$REMOTE_HOST" ]]; then
+  step "CLI: не ставлю — эта машина ходит на сервер $REMOTE_HOST, интерфейс здесь — приложение"
+  [[ -f "$BIN/arvix" ]] && grep -q "arvix_cli.py" "$BIN/arvix" && rm -f "$BIN/arvix" && echo "удалён $BIN/arvix"
+  echo "Если понадобится: $PYTHON $APP/scripts/arvix_cli.py <команда>"
+else
+  step "CLI: $BIN/arvix"
+  mkdir -p "$BIN"
+  cat > "$BIN/arvix" <<EOF
 #!/usr/bin/env bash
 exec "$PYTHON" "$APP/scripts/arvix_cli.py" "\$@"
 EOF
-chmod +x "$BIN/arvix"
-case ":$PATH:" in *":$BIN:"*) ;; *) echo "⚠ $BIN не в PATH — добавь в ~/.bashrc / config.fish: export PATH=\"$BIN:\$PATH\"";; esac
+  chmod +x "$BIN/arvix"
+  case ":$PATH:" in *":$BIN:"*) ;; *) echo "⚠ $BIN не в PATH — добавь в ~/.bashrc / config.fish: export PATH=\"$BIN:\$PATH\"";; esac
+fi
 
 step "Плагин Claude Code (маркетплейс arvix, scope user)"
 if command -v claude >/dev/null 2>&1; then

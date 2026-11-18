@@ -30,10 +30,12 @@
   <main id="view"></main>
 
   <nav class="tabs" id="tabs">
-    <button data-tab="today" class="active"><span class="ico" data-ic="today"></span><span>Сегодня</span></button>
-    <button data-tab="chat"><span class="ico" data-ic="chat"></span><span>Арвикс</span><i id="chat-dot" class="dot hidden"></i></button>
-    <button data-tab="notes"><span class="ico" data-ic="notes"></span><span>Заметки</span></button>
-    <button data-tab="progress"><span class="ico" data-ic="progress"></span><span>Прогресс</span></button>
+    <div class="brand"><img src="icon.svg" alt="" width="28" height="28"><span>Арвикс</span></div>
+    <button data-tab="today" class="active" title="Ctrl+1"><span class="ico" data-ic="today"></span><span>Сегодня</span><kbd>1</kbd></button>
+    <button data-tab="chat" title="Ctrl+2"><span class="ico" data-ic="chat"></span><span>Арвикс</span><kbd>2</kbd><i id="chat-dot" class="dot hidden"></i></button>
+    <button data-tab="notes" title="Ctrl+3"><span class="ico" data-ic="notes"></span><span>Заметки</span><kbd>3</kbd></button>
+    <button data-tab="progress" title="Ctrl+4"><span class="ico" data-ic="progress"></span><span>Прогресс</span><kbd>4</kbd></button>
+    <div class="side-hint">Ctrl+1…4 — разделы<br>Alt+N — задача · / — поиск<br>Esc — закрыть</div>
   </nav>
 </div>
 
