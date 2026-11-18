@@ -100,6 +100,9 @@ class State:
     project_log: list[dict[str, Any]] = field(default_factory=list)
     project_money: list[dict[str, Any]] = field(default_factory=list)
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)
+    resources: dict[str, dict[str, Any]] = field(default_factory=dict)  # источники и инструменты проектов (D44)
+    repos: dict[str, dict[str, Any]] = field(default_factory=dict)  # проект → последнее, что видели в GitHub
+    commits: dict[str, dict[str, Any]] = field(default_factory=dict)  # sha → коммит проекта: движение без слов
     last_user_at: str | None = None
     last_event_id: int = 0
     first_date: date | None = None
@@ -349,6 +352,15 @@ class State:
 
     def _on_channel_set(self, ev: Event, p: dict, day: Day) -> None:
         self.channels[p["id"]] = {**p, "updated": ev.local_date.isoformat()}
+
+    def _on_resource_set(self, ev: Event, p: dict, day: Day) -> None:
+        self.resources[p["id"]] = {**p, "date": self.resources.get(p["id"], {}).get("date") or ev.local_date.isoformat()}
+
+    def _on_repo_activity(self, ev: Event, p: dict, day: Day) -> None:
+        # Коммиты — факт из GitHub: дата — день самого коммита (по местному времени), а не синхронизации.
+        self.repos[p["project_id"]] = {**(p.get("meta") or {}), "repo": p.get("repo"), "synced": ev.at.isoformat()}
+        for c in p.get("commits") or []:
+            self.commits.setdefault(c["sha"], {**c, "project_id": p["project_id"], "repo": p.get("repo")})
 
     def _on_day_closed(self, ev: Event, p: dict, day: Day) -> None:
         self.day(date.fromisoformat(p["date"])).closed = dict(p)

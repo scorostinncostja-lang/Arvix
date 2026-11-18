@@ -100,20 +100,51 @@ class ProjectRulesTest(ProjectCase):
         self.assertEqual(s["forecast"], "2026-12-28")  # 1 этап за 2 недели → ещё 3 за 6 недель
         self.assertTrue(any("отстаёт" in i for i in projects.issues(self.core, self.core.state.projects[pid])))
 
-    def test_money_and_channels(self):
-        pid = self.project("Монтаж на заказ", kind="income")
-        projects.log_money(self.core, pid, 1500, direction="out", category="реклама")
-        cid = projects.set_channel(self.core, pid, "Reels", type="free", hypothesis="5 роликов → 10 заявок")
-        projects.set_channel(self.core, pid, channel_id=cid, cost=1500, leads=10, clients=2, revenue=6000, status="works")
-        projects.log_money(self.core, pid, "6 000", direction="in", channel_id=cid)
-        s = projects.stats(self.core, self.core.state.projects[pid])
-        self.assertEqual((s["income"], s["expense"], s["net"]), (6000, 1500, 4500))
-        ch = s["channels"][0]
-        self.assertEqual((ch["cpl"], ch["cpc"], ch["conversion"], ch["roi"]), (150, 750, 20.0, 300.0))
-        # Траты проекта — не личные траты недели
-        self.assertEqual(self.core.state.week_stats(self.core.today())["expenses"], {})
+    def test_channels_count_people_not_money(self):
+        pid = self.project("Канал про монтаж", kind="content")
+        cid = projects.set_channel(self.core, pid, "Reels", type="free", hypothesis="5 роликов → 10 откликов")
+        projects.set_channel(self.core, pid, channel_id=cid, reach=2000, leads=10, clients=2, status="works")
+        ch = projects.stats(self.core, self.core.state.projects[pid])["channels"][0]
+        self.assertEqual((ch["response"], ch["conversion"]), (0.5, 20.0))
+        self.assertNotIn("cost", ch)
         with self.assertRaisesRegex(ArvixError, "гипотез"):
             projects.set_channel(self.core, pid, "Авито")
+
+    def test_kind_is_free_text_and_purposes_are_many(self):
+        pid = self.project("Подкаст", kind="подкаст с друзьями", why="", purposes=["people", "fun", "научиться говорить"])
+        p = self.core.state.projects[pid]
+        self.assertEqual(projects.kind_label(p["kind"]), "подкаст с друзьями")
+        self.assertEqual([projects.purpose_label(x) for x in p["purposes"]], ["единомышленники", "удовольствие", "научиться говорить"])
+        legacy = self.project("Старый", kind="income")  # тип из 0.7 — показывается по-человечески
+        self.assertEqual(projects.kind_label(self.core.state.projects[legacy]["kind"]), "заработок")
+        with self.assertRaisesRegex(ArvixError, "зачем"):
+            projects.set_project(self.core, "Без всего", why="", purposes=[])
+
+    def test_resources_and_repo_normalization(self):
+        pid = self.project(repo="https://github.com/me/schedule-bot.git")
+        self.assertEqual(self.core.state.projects[pid]["repo"], "me/schedule-bot")
+        rid = projects.set_resource(self.core, pid, "Документация aiogram", url="docs.aiogram.dev", kind="doc")
+        self.assertEqual(self.core.state.resources[rid]["url"], "https://docs.aiogram.dev")
+        projects.set_resource(self.core, pid, resource_id=rid, status="removed")
+        self.assertEqual(projects.resources(self.core, pid), [])
+        with self.assertRaises(ArvixError):
+            projects.set_resource(self.core, pid, "Плохая", url="не ссылка вовсе")
+        with self.assertRaises(ArvixError):
+            self.project("Плохой репо", repo="не репозиторий")
+
+    def test_roadmap_orders_projects_by_goal(self):
+        goal = self.core.set_goal("Поступить в лицей на IT", why="сильная школа", kind="main", deadline="2027-06-30")
+        a = self.project("Сайт-визитка", goal_id=goal)
+        b = self.project("Бот расписания", goal_id=goal)
+        c = self.project("Олимпиада", goal_id=goal, status="idea")
+        loose = self.project("Рисование", status="idea")
+        rm = projects.roadmap(self.core)
+        self.assertEqual([p["id"] for p in rm[0]["projects"]], [a, b, c])
+        self.assertIsNone(rm[-1]["goal"])
+        self.assertEqual([p["id"] for p in rm[-1]["projects"]], [loose])
+        projects.move(self.core, c, -1)
+        self.assertEqual([p["id"] for p in projects.roadmap_chain(self.core, goal)], [a, c, b])
+        self.assertIn("2. [", projects.roadmap_text(self.core))
 
     def test_plan_block_finds_free_slot_and_names_next_step(self):
         pid = self.project()
@@ -128,11 +159,14 @@ class ProjectRulesTest(ProjectCase):
         pid = self.project()
         mid = projects.set_milestone(self.core, pid, "MVP", dod="работает")
         projects.set_milestone(self.core, pid, milestone_id=mid, status="done")
-        projects.log_money(self.core, pid, 100, direction="in")
+        projects.set_resource(self.core, pid, "MDN", url="https://developer.mozilla.org")
         projects.set_channel(self.core, pid, "Сарафан", hypothesis="друзья приведут 3")
+        self.core.emit("repo_activity", {"project_id": pid, "repo": "me/x", "meta": {"stars": 1},
+                                         "commits": [{"sha": "abc", "message": "init", "at": "2026-11-02T08:00:00Z", "date": "2026-11-02"}]},
+                       source="l0")
         projects.log_entry(self.core, pid, "релиз 0.1", kind="release")
         rebuilt = State.rebuild(self.core.store.read())
-        for attr in ("projects", "milestones", "project_log", "project_money", "channels"):
+        for attr in ("projects", "milestones", "project_log", "channels", "resources", "repos", "commits"):
             self.assertEqual(getattr(rebuilt, attr), getattr(self.core.state, attr), attr)
 
 
@@ -162,7 +196,7 @@ class ProjectSurfacesTest(ProjectCase):
         done, failed, _ = brain.apply_actions(self.core, [
             {"type": "set_milestone", "project": pid, "title": "Главная", "metric": "страница открывается по ссылке"},
             {"type": "plan_project", "project": pid, "duration_min": 45, "date": "tomorrow"},
-            {"type": "project_money", "project": pid, "amount": 300, "direction": "out", "category": "домен"},
+            {"type": "project_resource", "project": pid, "title": "Astro docs", "url": "https://docs.astro.build", "kind": "doc"},
             {"type": "project_log", "project": pid, "text": "выбрал Astro", "kind": "decision"},
             {"type": "project_channel", "project": pid, "title": "Threads", "hypothesis": "10 постов → 3 заказа"},
         ], source="telegram")
@@ -194,12 +228,13 @@ class ProjectSurfacesTest(ProjectCase):
 
         bot = FakeBot()
         api.project_op(pid, "milestone", {"milestone": detail["milestones"][0]["id"], "status": "done"})(bot)
-        api.project_op(pid, "money", {"amount": "250", "direction": "in", "note": "первый заказ"})(bot)
+        api.project_op(pid, "resource", {"title": "Figma", "url": "https://figma.com", "kind": "tool"})(bot)
         r = api.project_op(pid, "block", {"minutes": 30})(bot)
         self.assertEqual(r["task"]["project"], pid)
-        r = api.project_save({"title": "Канал про ОГЭ", "why": "люди и навык", "kind": "community"})(bot)
-        self.assertEqual(r["project"]["kind"], "community")
-        self.assertEqual(projects.stats(self.core, self.core.state.projects[pid])["income"], 250)
+        r = api.project_save({"title": "Канал про ОГЭ", "purposes": ["people", "brand"], "kind": "контент", "status": "idea"})(bot)
+        self.assertEqual(r["project"]["purposes_ru"], ["единомышленники", "личный бренд"])
+        self.assertEqual(api.project_view(self.core, pid)["resources"][0]["title"], "Figma")
+        self.assertNotIn("income", api.projects_view(self.core)["projects"][0])
 
     def test_portfolio_note_is_a_block_and_keeps_owner_text(self):
         pid = self.project(skills=["Python", "Telegram API"])
@@ -274,5 +309,98 @@ class ProjectMcpTest(ProjectCase):
         self.assertIn("Сайт: Главная", r["content"][0]["text"])
         r = server.call_tool("project", {"action": "list"})
         self.assertIn("ПРОЕКТЫ:", r["content"][0]["text"])
+        r = server.call_tool("project", {"action": "roadmap"})
+        self.assertIn("Вне целей", r["content"][0]["text"])
         r = server.call_tool("project", {"action": "milestone", "project": "Сайт", "title": "Без критерия"})
         self.assertTrue(r["isError"])
+
+
+class GithubTest(ProjectCase):
+    """Коммиты — движение без слов. Сеть подменена: тест без интернета."""
+
+    def fake(self, commits):
+        calls = []
+
+        def fetch(path, token):
+            calls.append(path)
+            if path.startswith("/users/"):
+                return [{"full_name": "me/bot", "name": "bot", "stargazers_count": 2, "pushed_at": "2026-11-09T10:00:00Z",
+                         "html_url": "https://github.com/me/bot"}]
+            if path.endswith("/commits") or "/commits?" in path:
+                return commits
+            return {"pushed_at": "2026-11-09T10:00:00Z", "stargazers_count": 2, "open_issues_count": 1, "language": "Python"}
+        return fetch, calls
+
+    def test_sync_commits_become_movement_once(self):
+        from arvix import github
+
+        pid = self.project(repo="me/bot")
+        self.at(self.start + timedelta(days=9))
+        commit = {"sha": "a1b2c3d4e5f6a7", "html_url": "u", "commit": {"message": "парсер\n\nподробности",
+                                                                      "author": {"date": "2026-11-09T21:30:00Z"}}}
+        fetch, _ = self.fake([commit])
+        self.assertEqual(github.sync(self.core, fetch=fetch, force=True), {pid: 1})
+        c = projects.commits(self.core, pid)[0]
+        self.assertEqual((c["message"], c["date"]), ("парсер", "2026-11-10"))  # 21:30 UTC — уже 10.11 по Москве
+        s = projects.stats(self.core, self.core.state.projects[pid])
+        self.assertEqual((s["idle_days"], s["commits_total"], s["commits_week"]), (1, 1, 1))
+        events = len(self.core.store.read())
+        self.assertEqual(github.sync(self.core, fetch=fetch, force=True), {pid: 0})
+        self.assertEqual(len(self.core.store.read()), events)  # ничего нового — журнал не растёт
+        self.assertEqual(github.sync(self.core, fetch=fetch), {})  # без force — не чаще раза в час
+
+    def test_repos_list_marks_linked_and_caches(self):
+        from arvix import github
+
+        self.project(repo="me/bot")
+        github.set_user(self.core, "https://github.com/me")
+        fetch, calls = self.fake([])
+        view = api.github_repos(lambda fn: fn(self.core), fetch=fetch)
+        self.assertEqual(view["user"], "me")
+        self.assertEqual(view["repos"][0]["project"], "Бот для расписания")
+        api.github_repos(lambda fn: fn(self.core), fetch=fetch)
+        self.assertEqual(len(calls), 1)  # второй раз — из кэша
+        with self.assertRaises(ArvixError):
+            github.set_user(self.core, "не имя!")
+
+
+class RoadmapGenerationTest(ProjectCase):
+    def test_roadmap_from_head_becomes_ideas_with_milestones(self):
+        from arvix import project_roadmap
+
+        goal = self.core.set_goal("Стать бэкенд-разработчиком", why="работа мечты", kind="main")
+        self.project("Бот расписания", goal_id=goal)
+
+        class Brain:
+            def __init__(self):
+                self.calls = []
+
+            def ask(self, **kw):
+                self.calls.append(kw)
+                return {"summary": "От простого к сложному.", "projects": [
+                    {"title": "Бот расписания", "why": "дубль", "expectation": "x", "milestones": []},
+                    {"title": "REST API заметок", "why": "HTTP и базы", "kind": "code", "purposes": ["skill", "portfolio", "чушь"],
+                     "expectation": "API в интернете с документацией", "weeks": 4, "weekly_min": 180, "skills": ["FastAPI"],
+                     "milestones": [{"title": "CRUD", "dod": "5 эндпоинтов с тестами"}, {"title": "Без критерия", "dod": ""}],
+                     "resources": [{"title": "FastAPI docs", "url": "https://fastapi.tiangolo.com", "kind": "doc"},
+                                   {"title": "Выдуманная", "url": "не ссылка", "kind": "doc"}]},
+                ]}
+
+        brain = Brain()
+        result = project_roadmap.generate(self.core, brain, goal, system="SYS")
+        self.assertEqual(result["created"], ["REST API заметок"])
+        self.assertIn("Бот расписания", brain.calls[0]["prompt"])  # существующее модель видит
+        chain = projects.roadmap_chain(self.core, goal)
+        new = chain[-1]
+        self.assertEqual((new["status"], new["by"], new["order"], new["weeks"]), ("idea", "arvix", 2, 4))
+        self.assertEqual(new["purposes"], ["skill", "portfolio"])
+        self.assertEqual([m["title"] for m in projects.milestones(self.core, new["id"])], ["CRUD"])
+        self.assertEqual([r["title"] for r in projects.resources(self.core, new["id"])], ["FastAPI docs"])
+        self.assertTrue((self.vault / result["path"]).exists())
+
+        class Down:
+            def ask(self, **kw):
+                return None
+
+        with self.assertRaisesRegex(ArvixError, "недоступна"):
+            project_roadmap.generate(self.core, Down(), goal, system="SYS")

@@ -31,7 +31,7 @@ ACTION_TYPES = (
     "log_sleep", "log_expense", "log_social", "remember", "note", "profile_set",
     "set_goal", "add_trait", "declare_reason", "learning_question", "safety_flag", "set_template",
     # Проекты (D43): карточка, этап с критерием, блок в план, журнал, деньги, канал привлечения.
-    "set_project", "set_milestone", "plan_project", "project_log", "project_money", "project_channel",
+    "set_project", "set_milestone", "plan_project", "project_log", "project_resource", "project_channel",
 ) + (
     # Действия интерфейса: их исполняет бот после ответа, а не ядро (05-INTERFACES §2.1).
     # Так человек говорит словами, а не командами: «давай позанимаемся физикой» → урок.
@@ -45,7 +45,7 @@ ACTION_RU = {
     "note": "заметка", "profile_set": "профиль", "set_goal": "цель", "add_trait": "черта", "declare_reason": "причина дня",
     "learning_question": "учебный вопрос", "safety_flag": "safety", "set_template": "распорядок",
     "set_project": "проект", "set_milestone": "этап проекта", "plan_project": "блок проекта", "project_log": "журнал проекта",
-    "project_money": "деньги проекта", "project_channel": "канал привлечения",
+    "project_resource": "источник проекта", "project_channel": "канал привлечения",
 }
 
 _ACTION_FIELDS = {
@@ -79,9 +79,13 @@ _ACTION_FIELDS = {
     "expectation": {"type": "string", "description": "для set_project: что должно быть в конце, проверяемо"},
     "weekly_min": {"type": "integer", "description": "для set_project: минут в неделю на проект"},
     "skills": {"type": "array", "items": {"type": "string"}, "description": "для set_project: навыки, которые даёт проект"},
-    "direction": {"type": "string", "enum": ["in", "out"], "description": "для project_money: in — доход, out — расход"},
+    "purposes": {"type": "array", "items": {"type": "string"},
+                 "description": "для set_project: зачем — skill, portfolio, experience, people, career, admission, earn, brand, help, idea, fun, health или своё"},
+    "repo": {"type": "string", "description": "для set_project: репозиторий GitHub owner/name — коммиты станут движением проекта"},
+    "order": {"type": "integer", "description": "для set_project: место в роадмапе цели (1 — первый)"},
+    "url": {"type": "string", "description": "для project_resource: ссылка — только настоящая"},
     "hypothesis": {"type": "string", "description": "для project_channel: что ждём от канала, с числом и сроком"},
-    "cost": {"type": "number"}, "leads": {"type": "integer"}, "clients": {"type": "integer"}, "revenue": {"type": "number"},
+    "reach": {"type": "integer"}, "leads": {"type": "integer"}, "clients": {"type": "integer"},
     "channel": {"type": "string", "description": "для project_channel: id канала — обновить итоги"},
     "link": {"type": "string"},
     "blocks": {
@@ -382,7 +386,7 @@ def _start_from_deadline(action: dict[str, Any]) -> str | None:
     return f"{max(total, 0) // 60:02d}:{max(total, 0) % 60:02d}"
 
 
-PROJECT_ACTIONS = frozenset({"set_project", "set_milestone", "plan_project", "project_log", "project_money", "project_channel"})
+PROJECT_ACTIONS = frozenset({"set_project", "set_milestone", "plan_project", "project_log", "project_resource", "project_channel"})
 
 
 def _project_action(core: Core, kind: str, a: dict[str, Any], source: str) -> tuple[str, list[str]]:
@@ -392,9 +396,10 @@ def _project_action(core: Core, kind: str, a: dict[str, Any], source: str) -> tu
     if kind == "set_project":
         pid = projects.set_project(
             core, a.get("title", ""), project_id=a.get("project") or None, why=a.get("why", ""), kind=a.get("kind"),
-            expectation=a.get("expectation") or a.get("metric") or "", deadline=a.get("deadline"), weekly_min=a.get("weekly_min"),
-            goal_id=a.get("goal_id") or None, status=a.get("status"), skills=a.get("skills"), link=a.get("link", ""),
-            reason=a.get("reason") or a.get("report") or "", source=source,
+            purposes=a.get("purposes"), expectation=a.get("expectation") or a.get("metric") or "", deadline=a.get("deadline"),
+            weekly_min=a.get("weekly_min"), goal_id=a.get("goal_id") or None, status=a.get("status"), skills=a.get("skills"),
+            link=a.get("link", ""), repo=a.get("repo"), order=a.get("order"), reason=a.get("reason") or a.get("report") or "",
+            source=source,
         )
         p = core.state.projects[pid]
         return f"проект «{p['title']}» · {projects.STATUSES[p['status']]}", [f"проект «{p['title']}»: {i}" for i in projects.issues(core, p)[:3]]
@@ -415,13 +420,13 @@ def _project_action(core: Core, kind: str, a: dict[str, Any], source: str) -> tu
         entry = projects.log_entry(core, project["id"], a.get("text") or a.get("report") or "", kind=a.get("kind") or "update",
                                    minutes=a.get("minutes") or 0, source=source)
         return f"журнал «{project['title']}»: {projects.LOG_KINDS[entry['kind']]}", []
-    if kind == "project_money":
-        m = projects.log_money(core, project["id"], a.get("amount"), direction=a.get("direction") or "out",
-                               category=a.get("category", ""), note=a.get("text", ""), channel_id=a.get("channel") or None, source=source)
-        return f"{'доход' if m['direction'] == 'in' else 'расход'} {m['amount']:.0f} · {project['title']}", []
+    if kind == "project_resource":
+        projects.set_resource(core, project["id"], a.get("title", ""), url=a.get("url") or a.get("link") or "", kind=a.get("kind"),
+                              note=a.get("text", ""), by="arvix", source=source)
+        return f"источник «{a.get('title') or a.get('url')}» · {project['title']}", []
     projects.set_channel(core, project["id"], a.get("title", ""), channel_id=a.get("channel") or None, type=a.get("kind"),
-                         hypothesis=a.get("hypothesis", ""), cost=a.get("cost"), leads=a.get("leads"), clients=a.get("clients"),
-                         revenue=a.get("revenue"), status=a.get("status") if a.get("status") in projects.CHANNEL_STATUSES else None,
+                         hypothesis=a.get("hypothesis", ""), reach=a.get("reach"), leads=a.get("leads"), clients=a.get("clients"),
+                         status=a.get("status") if a.get("status") in projects.CHANNEL_STATUSES else None,
                          note=a.get("text", ""), source=source)
     return f"канал «{a.get('title') or a.get('channel')}» · {project['title']}", []
 

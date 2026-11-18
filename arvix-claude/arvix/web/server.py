@@ -174,6 +174,9 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     self.send_json(app.read(api.projects_view))
                 elif url.path == "/api/project":
                     self.send_json(app.read(lambda c: api.project_view(c, query.get("id") or "")))
+                elif url.path == "/api/github":
+                    # Сеть — в потоке HTTP вне замка Core; список кэшируется на 10 минут
+                    self.send_json(api.github_repos(app.read, fresh=query.get("fresh") == "1"))
                 elif url.path == "/api/notes":
                     self.send_json(self.notes_dir(query.get("dir") or ""))
                 elif url.path == "/api/note":
@@ -274,6 +277,14 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif parts == ["projects"]:
                     self.send_json(app.hub.call(api.project_save(self.body_json())))
+                elif parts == ["github", "user"]:
+                    self.send_json(app.hub.call(api.github_user(str(self.body_json().get("user") or ""))))
+                elif parts == ["github", "sync"]:
+                    self.send_json(app.hub.call(api.github_sync(), timeout=120))
+                elif parts == ["projects", "roadmap"]:
+                    goal = str(self.body_json().get("goal") or "")
+                    app.hub.post(api.project_roadmap(goal), label="строю роадмап")
+                    self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif len(parts) == 3 and parts[0] == "projects":
                     self.send_json(app.hub.call(api.project_op(parts[1], parts[2], self.body_json())))
                 elif parts == ["focus"]:
