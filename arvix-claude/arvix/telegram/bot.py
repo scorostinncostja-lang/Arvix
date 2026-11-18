@@ -1703,6 +1703,24 @@ class Bot:
             projects.set_project(self.core, project_id=project["id"], status="paused", source="telegram")
             self.send(f"⏸ «{project['title']}» на паузе. Это решение, а не провал: вернуть — во вкладке «Проекты» или словами.")
 
+    def build_project_roadmap(self, goal_id: str) -> None:
+        """Роадмап проектов под цель (D44): совет в фоне — проекты ложатся идеями, ответ приходит сообщением."""
+        from arvix import project_roadmap
+
+        try:
+            result = project_roadmap.generate(self.core, self.brain, goal_id, system=self.analyst_system(""))
+        except ArvixError as exc:
+            self.send(f"Роадмап не собрался: {exc}")
+            return
+        text = f"🗺 Роадмап проектов к цели «{result['goal']['title']}»\n\n{clip(result['summary'], 900)}"
+        if result["created"]:
+            text += "\n\nДобавил идеями по порядку: " + " → ".join(result["created"]) + ". В работу берёшь сам — во вкладке «Проекты»."
+        else:
+            text += "\n\nНовых проектов не добавил: текущий роадмап уже ведёт к цели."
+        if result["path"]:
+            text += f"\n📝 {result['path']}"
+        self.send(text)
+
     def on_return_button(self, op: str) -> None:
         core = self.core
         if op == "rest":

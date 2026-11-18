@@ -132,24 +132,25 @@ TOOLS: dict[str, dict[str, Any]] = {
     },
     "project": {
         "description": (
-            "Проекты (D43): list (все с цифрами кода и ⚠️), show (project — карточка, этапы, журнал, деньги, каналы), "
-            "set (новый: title, why, kind learning|portfolio|income|community, expectation, deadline, weekly_min, skills; "
+            "Проекты (D43, D44): list (активные с цифрами кода и ⚠️), roadmap (проекты по целям в порядке), show (project — "
+            "карточка, этапы, журнал, источники, каналы, коммиты), set (новый: title, why и/или purposes, kind — любой тип "
+            "словами, expectation, deadline, weekly_min, skills, goal_id, order — место в роадмапе цели, repo owner/name; "
             "правка: project + поля; status idea|active|paused|done|dropped, done/dropped — с итогом в reason; в работе не больше 3), "
-            "milestone (этап: project, title, dod — критерий готовности обязателен, deadline; отметить: milestone + status done), "
+            "milestone (этап: project, title, dod — критерий обязателен, deadline; отметить: milestone + status done), "
             "block (блок в план в свободное окно: project, duration_min, date, start), log (журнал: project, text, "
-            "kind update|decision|lesson|blocker|release|feedback, minutes), money (project, amount, direction in|out, category), "
-            "channel (канал привлечения как эксперимент: project, title, kind free|barter|paid, hypothesis; итоги: channel + "
-            "cost, leads, clients, revenue накопленно, status test|works|dropped), export (карточка портфолио в 01_Projects). "
-            "Код за человека не пишешь: режешь, ставишь блоки, ревьюишь."
+            "kind update|decision|lesson|blocker|release|feedback|idea, minutes), resource (источник или инструмент: project, "
+            "title, url — только настоящая, kind), channel (канал привлечения людей: project, title, kind free|barter|paid, "
+            "hypothesis; итоги: channel + reach, leads, clients накопленно, status test|works|dropped), "
+            "export (карточка портфолио в 01_Projects). Денег у проекта нет (D44). Код за человека не пишешь."
         ),
         "inputSchema": _obj({
-            "action": _enum("list", "show", "set", "milestone", "block", "log", "money", "channel", "export"),
+            "action": _enum("list", "roadmap", "show", "set", "milestone", "block", "log", "resource", "channel", "export"),
             "project": {**STR, "description": "id проекта или часть названия"}, "milestone": STR, "channel": STR,
             "title": STR, "why": STR, "kind": STR, "expectation": STR, "deadline": STR, "weekly_min": INT,
             "skills": {"type": "array", "items": STR}, "link": STR, "goal_id": STR, "status": STR, "reason": STR,
             "dod": STR, "duration_min": INT, "date": STR, "start": STR, "text": STR, "minutes": INT,
-            "amount": {"type": "number"}, "direction": _enum("in", "out"), "category": STR, "hypothesis": STR,
-            "cost": {"type": "number"}, "leads": INT, "clients": INT, "revenue": {"type": "number"},
+            "purposes": {"type": "array", "items": STR}, "repo": STR, "order": INT, "url": STR, "hypothesis": STR,
+            "reach": INT, "leads": INT, "clients": INT,
         }, ["action"]),
     },
     "export": {
@@ -430,6 +431,8 @@ def t_project(core: Core, a: dict[str, Any]) -> str:
     if action == "list":
         lines = projects.context_lines(core)
         return "ПРОЕКТЫ:\n" + "\n".join(lines) if lines else "Проектов нет. Новый: action=set, title, why, expectation, deadline."
+    if action == "roadmap":
+        return projects.roadmap_text(core)
     if action == "show":
         p = projects.resolve(core, a.get("project"))
         found = projects.issues(core, p)
@@ -437,7 +440,7 @@ def t_project(core: Core, a: dict[str, Any]) -> str:
     if action == "export":
         return f"Карточка проекта записана блоком Арвикса: {projects.export_note(core, a.get('project'))}"
     kind = {"set": "set_project", "milestone": "set_milestone", "block": "plan_project", "log": "project_log",
-            "money": "project_money", "channel": "project_channel"}.get(action)
+            "resource": "project_resource", "channel": "project_channel"}.get(action)
     if kind is None:
         raise ArvixError(f"Неизвестное действие {action}")
     line, warnings = brain._project_action(core, kind, a, "claude")
