@@ -88,6 +88,7 @@ VOICE_SCHEMA = {
         "reply": {"type": "string"},
         "actions": {"type": "array", "items": {"type": "object", "properties": _ACTION_FIELDS, "required": ["type"]}},
         "learning": {"type": "boolean"},
+        "voice_note": {"type": "string", "description": "чаще пусто; короткое голосовое, которое полезнее слушать, чем читать, и не пересказ reply"},
     },
     "required": ["reply", "actions"],
 }

@@ -1,4 +1,4 @@
-"""Голос Арвикса (D34): ответ на голосовое — короче и голосовым, озвучка в приложении."""
+"""Голос Арвикса (D34, D43): голосовое — только voice_note головы, не озвучка текста; озвучка в приложении."""
 
 from __future__ import annotations
 
@@ -32,23 +32,63 @@ class VoiceReplyTest(BotCase):
         self.bot.stt = FakeSTT("как думаешь, я вообще двигаюсь?")
         self.bot.tts = FakeTTS()
 
-    def test_voice_message_gets_short_spoken_answer_and_voice(self) -> None:
+    def test_voice_message_gets_text_only_not_its_own_reading(self) -> None:
+        """D43: озвучка того же текста — дубль. На голосовое — текст; голосовое — только voice_note."""
         self.brain.answers.append({"reply": "Двигаешься. Три темы за неделю закрыл. Что мешает в остальном?", "actions": []})
         self.voice()
-        self.assertIn("<spoken>", self.brain.calls[-1]["system"])
-        self.assertEqual(self.voices, [b"OggS-fake"])
-        self.assertIn("Что мешает", self.bot.tts.texts[-1])
-        self.assertIn("Двигаешься.", self.api.texts[0])  # текст тоже есть — голос вдобавок
+        self.assertIn("<dictated>", self.brain.calls[-1]["system"])
+        self.assertNotIn("<spoken>", self.brain.calls[-1]["system"])
+        self.assertEqual(self.voices, [])
+        self.assertEqual(len(self.api.sent), 1)
+        self.assertIn("Двигаешься.", self.api.last)
 
-    def test_typed_message_is_not_voiced(self) -> None:
+    def test_voice_note_is_sent_when_it_adds_something(self) -> None:
+        self.brain.answers.append({"reply": "Сегодня **английский** в 18:00, 30 минут: неправильные глаголы.",
+                                   "voice_note": "Послушай и повтори вслух: bring, brought, brought. Think, thought, thought.",
+                                   "actions": []})
+        self.text("что по английскому?")
+        self.assertEqual(self.voices, [b"OggS-fake"])
+        self.assertIn("brought", self.bot.tts.texts[-1])
+        self.assertIn("английский", self.api.texts[0])  # текст — первым и целиком
+
+    def test_voice_note_that_retells_the_reply_is_dropped(self) -> None:
+        reply = "Нет, на сегодня один блок: математика в 20:00, 45 минут. Физику не ставлю, день жёлтый."
+        self.brain.answers.append({"reply": reply, "voice_note": "Сегодня один блок — математика в 20:00, 45 минут. Физику не ставлю.",
+                                   "actions": []})
+        self.voice()
+        self.assertEqual(self.voices, [])
+
+    def test_voice_notes_have_a_daily_cap(self) -> None:
+        for i in range(4):
+            self.brain.answers.append({"reply": f"Ответ {i}.", "voice_note": "Повтори: through, though, thought.", "actions": []})
+            self.text(f"вопрос {i}")
+        self.assertEqual(len(self.voices), 3)  # [tts] voice_notes_per_day
+
+    def test_voice_note_with_pressure_is_dropped_in_red(self) -> None:
+        self.core.effective_mode = lambda *a, **k: "red"  # type: ignore[method-assign]
+        self.brain.answers.append({"reply": "Отдыхай, я рядом.", "voice_note": "Но дисциплина: завтра все задачи.", "actions": []})
+        self.text("сил нет")
+        self.assertEqual(self.voices, [])
+
+    def test_no_voice_note_in_app_channel(self) -> None:
+        sent: list[str] = []
+        app = type("App", (), {"send": lambda _s, _c, text, *a, **k: sent.append(text), "typing": lambda *_: None,
+                               "send_voice": lambda *_a, **_k: self.voices.append(b"x")})()
+        self.brain.answers.append({"reply": "Ок.", "voice_note": "Повтори: through, though, thought.", "actions": []})
+        with self.bot.via("web", app):
+            self.bot.converse("вопрос")
+        self.assertEqual(self.voices, [])
+
+    def test_typed_message_has_no_dictation_hint(self) -> None:
         self.brain.answers.append({"reply": "Ок.", "actions": []})
         self.text("что на сегодня?")
         self.assertNotIn("<spoken>", self.brain.calls[-1]["system"])
+        self.assertNotIn("<dictated>", self.brain.calls[-1]["system"])
         self.assertEqual(self.voices, [])
 
     def test_no_voice_when_tts_off(self) -> None:
         self.bot.tts = TTS(self.core.cfg)  # по умолчанию выключен
-        self.brain.answers.append({"reply": "Слышу.", "actions": []})
+        self.brain.answers.append({"reply": "Слышу.", "voice_note": "Повтори: through, though, thought.", "actions": []})
         self.voice()
         self.assertEqual(self.voices, [])
         self.assertIn("Слышу.", self.api.last)
