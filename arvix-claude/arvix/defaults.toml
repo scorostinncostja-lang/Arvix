@@ -11,9 +11,10 @@ token = ""
 owner_id = 0
 # Ответ головы уходит абзацами — отдельными сообщениями, как пишет человек. Пауза между
 # ними: base + length × per_char, не больше max (05-INTERFACES §2.4). 0 — всё одним сообщением.
-bubble_pause_sec = 0.6
-bubble_pause_per_char = 0.012
-bubble_pause_max_sec = 2.5
+# Короткие паузы (D40): ритм живого человека остаётся, а ответ целиком приходит на секунды раньше.
+bubble_pause_sec = 0.3
+bubble_pause_per_char = 0.004
+bubble_pause_max_sec = 1.0
 bubbles_max = 4
 
 # Где в хранилище живут файлы Арвикса. Пути — от корня хранилища.
@@ -43,6 +44,8 @@ silent_weekday = -1     # -1 = автоматических тихих дней 
 [brain]
 claude_bin = "claude"
 timeout_sec = 180
+effort = "auto"         # усилие модели (D40): auto — код решает по сообщению (план, «почему», учёба — medium, остальное — low);
+                        # low | medium | high — всегда так; "" — не передавать, как решит claude
 vault_tools = true      # даёт голове Read/Grep/Glob по хранилищу и по папке памяти (переписка по дням)
 web_tools = true        # WebSearch/WebFetch: факт, которого нет в заметках и памяти, голова ищет в сети (D24)
 skills = true           # навыки головы из head-skills/ (D33); в 🟥 — только мягкие
@@ -95,7 +98,6 @@ sleep_target_min = 450        # 7.5 ч, 02-MECHANICS §5
 deep_target_min = 120         # глубокая работа в день
 week_budget_min = 1560        # 26 ч — месяц 1
 week_deep_budget_min = 480    # 8 ч
-shields_per_month = 2
 
 [mechanics.quotas]            # недельные минимумы, 02-MECHANICS §8
 sport = 3

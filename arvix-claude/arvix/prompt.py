@@ -1,6 +1,8 @@
 """Сборка промпта из слоёв (04-AI-LAYER §1): конституция → few-shot → тон → контекст.
 
-Сначала статичное, потом динамичное — иначе не работает кэш провайдера.
+Статичное (конституция, примеры, канал, обращение, тон) — системный промпт: он одинаков
+от сообщения к сообщению в одном режиме, и провайдер берёт его из кэша. Динамичное
+(контекст, история, находки кода) — в запросе вместе с сообщением (voice_prompt).
 Тон-блок выбирает Burnout Guard, а не модель. В 🟥 и при выключенном менторе
 жёсткие тон-блоки, жёсткие примеры и правило «отказ с цифрой» физически не
 попадают в текст (правило №5 CLAUDE.md, проверяется tests/test_prompt_safety.py).
@@ -16,7 +18,8 @@ from arvix.config import PACKAGE_DIR
 from arvix.context import build_context
 
 CONSTITUTION_DIR = PACKAGE_DIR / "constitution"
-SECTIONS = ("identity", "mission", "voice", "autonomy_rule", "decision_rule", "critical", "honesty", "boundaries", "safety_override")
+SECTIONS = ("identity", "mission", "voice", "partner", "autonomy_rule", "decision_rule", "critical", "honesty", "boundaries",
+            "safety_override")
 # Разделы, которые выпадают в мягком режиме: цена «в цифрах» и разбор чужих ошибок в 🟥 неуместны.
 GENTLE_SKIP = frozenset({"decision_rule", "critical"})
 TONE_FILES = {"normal": "tone_norm", "pressure": "tone_pressure", "yellow": "tone_yellow", "red": "tone_red"}
@@ -73,28 +76,42 @@ def fewshot(*, gentle: bool, only: str = "all") -> str:
     if not picked:
         return ""
     body = "\n\n".join(
-        f"# {e['situation']}\nКОНТЕКСТ: {e['context']}\nЧЕЛОВЕК: {e['user']}\nАРВИКС: {e['arvix']}" for e in picked
+        f"# {e['situation']}\nКОНТЕКСТ: {e['context']}\nЧЕЛОВЕК: {e['user']}\nАРВИКС: {e['arvix']}"
+        + (f"\nДЕЙСТВИЯ: {e['actions']}" if e.get("actions") else "")
+        for e in picked
     )
     return f"<examples>\nТак звучит Арвикс. Подражай голосу, а не словам.\n\n{body}\n</examples>"
 
 
-def system_prompt(core: Any, *, channel: str = "telegram", message: str = "", history: list[str] | None = None, extra: str = "") -> str:
-    """Промпт L1 для Telegram-головы (один вызов claude -p на сообщение)."""
+def voice_prompt(core: Any, *, channel: str = "telegram", message: str = "", history: list[str] | None = None,
+                 extra: str = "") -> tuple[str, str]:
+    """Промпт L1 для головы (один вызов claude -p на сообщение) — парой (system, запрос).
+
+    system — только статичное: в одном режиме он байт в байт тот же, и провайдер берёт его
+    из кэша, а не читает заново (быстрее первый токен, D40). Запрос — контекст, история,
+    находки кода и само сообщение в <message>. Правило №5 действует на обе части: в мягком
+    режиме и тон, и контекст — мягкие."""
     st = core.state
     gentle = is_gentle(st.mode, st.mentor_enabled)
-    parts = [
+    static = [
         constitution(st.profile, gentle=gentle),
         fewshot(gentle=gentle),
         read_block(f"channel_{channel}"),
         address_block(st.profile),
         tone_block(st.mode, st.mentor_enabled),
-        "<context>\n" + build_context(core, message=message, gentle=gentle) + "\n</context>",
     ]
+    dynamic = ["<context>\n" + build_context(core, message=message, gentle=gentle) + "\n</context>"]
     if history:
-        parts.append("<history>\n" + "\n".join(history) + "\n</history>")
+        dynamic.append("<history>\n" + "\n".join(history) + "\n</history>")
     if extra:
-        parts.append(extra)
-    return "\n\n".join(p for p in parts if p)
+        dynamic.append(extra)
+    dynamic.append("<message>\n" + message + "\n</message>")
+    return "\n\n".join(p for p in static if p), "\n\n".join(p for p in dynamic if p)
+
+
+def system_prompt(core: Any, *, channel: str = "telegram", message: str = "", history: list[str] | None = None, extra: str = "") -> str:
+    """Весь промпт L1 одним текстом — для CLI, разбора и проверок правила №5."""
+    return "\n\n".join(voice_prompt(core, channel=channel, message=message, history=history, extra=extra))
 
 
 def hook_context(core: Any) -> str:
@@ -131,8 +148,9 @@ def first_session_block(core: Any) -> str:
 
 
 STYLE_TOOLS = """<tools_rule>
-Ты работаешь через MCP-инструменты сервера arvix. Числа (XP, HP, долг, режим) считает код —
+Ты работаешь через MCP-инструменты сервера arvix. Долг, режим и нагрузку решает код —
 ты их только читаешь из инструментов и никогда не вычисляешь и не выдумываешь сам.
+Очков, здоровья, уровней и серий у Арвикса нет — не упоминай их.
 В начале разговора и после любых изменений смотри состояние инструментом context.
 Отчёт о задаче → task (complete/fail), сон → log, факт о человеке → profile (remember),
 просьба изменить план → сначала check_request, потом решение на цифрах.
@@ -168,7 +186,7 @@ def render_claude_ai_instructions() -> str:
     там нет (нет журнала), а проверять цели и планы человека нужно и без журнала."""
     sections = tuple(s for s in SECTIONS if s != "decision_rule")
     note = (
-        "<stateless>\nЗдесь у тебя нет доступа к журналу событий, XP/HP и Obsidian: они живут на ноутбуке.\n"
+        "<stateless>\nЗдесь у тебя нет доступа к журналу событий, задачам и Obsidian: они живут на ноутбуке.\n"
         "Не выдумывай цифры состояния. Если человек хочет отметить задачу, сон или трату — "
         "скажи сделать это в Telegram-боте или в Claude Code.\nМетодика, голос и сократовский режим — те же.\n</stateless>"
     )

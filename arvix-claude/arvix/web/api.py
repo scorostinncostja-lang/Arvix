@@ -2,7 +2,7 @@
 
 Чтение идёт из потоков HTTP-сервера через отдельный Core (только чтение, под замком).
 Изменения — функции вида fn(bot) для главного потока (web/hub.py): те же операции L0,
-что у кнопок Telegram, поэтому XP, HP, долг и режим считает тот же код.
+что у кнопок Telegram, поэтому долг и режим решает тот же код.
 
 В 🟥 и при выключенном менторе приложение, как и панель в Telegram, не показывает
 цифры и список задач — только одну маленькую вещь (правило №5).
@@ -29,7 +29,7 @@ def task_view(task: Any) -> dict[str, Any]:
         "id": task.id, "title": task.title, "sphere": task.sphere, "sphere_ru": SPHERES_RU.get(task.sphere, task.sphere),
         "date": task.local_date.isoformat(), "start": task.start, "end": end_time(task.start, task.duration_min) if task.start else None,
         "duration_min": task.duration_min, "importance": task.importance, "difficulty": task.difficulty,
-        "deep_work": task.deep_work, "status": task.status, "done_pct": task.done_pct, "xp": task.xp,
+        "deep_work": task.deep_work, "status": task.status, "done_pct": task.done_pct,
         "focus_min": task.focus_min, "report": task.report, "proof": task.proof, "open": task.is_open,
     }
 
@@ -68,12 +68,10 @@ def state_view(core: Any, *, thinking: str = "") -> dict[str, Any]:
         "sessions": sessions_view(core, today),
         "busy": [{"start": b["start"], "end": end_time(b["start"], b.get("duration", 60)), "title": b["title"]} for b in core.fixed_blocks(today)],
         "day_type": DAY_TYPES_RU.get(day.day_type) if day and getattr(day, "day_type", None) else None,
-        "stats": {
-            "level": status["level"], "xp_into": status["xp_into"], "xp_need": status["xp_need"], "xp_total": status["xp_total"],
-            "hp": st.hp, "streak": status["streak"], "done": done, "total": len(tasks),
-            "completion": status["completion"], "deep_min": day.deep_min if day else 0, "deep_target": core.deep_target(today),
-            "sleep_min": day.sleep_min if day else None, "debts": status["debts"], "shields_left": status["shields_left"],
-            "season": status["season"],
+        "stats": {  # только факты дня (D41): ни очков, ни здоровья, ни уровня, ни серии
+            "done": done, "total": len(tasks), "completion": status["completion"],
+            "deep_min": day.deep_min if day else 0, "deep_target": core.deep_target(today),
+            "sleep_min": day.sleep_min if day else None, "sleep_target": status["sleep_target"], "debts": status["debts"],
         },
     })
     return base
@@ -117,7 +115,7 @@ def messages_view(core: Any, *, before: int | None = None, limit: int = 60) -> l
 
 
 def history_view(core: Any, days: int = 30) -> dict[str, Any]:
-    """Прогресс за N дней: выполнение, сон, глубокая работа, XP по дням; цели; неделя."""
+    """Прогресс за N дней: выполнение, сон, глубокая работа по дням; цели; неделя."""
     st = core.state
     today = core.today()
     if gentle(core):
@@ -130,7 +128,7 @@ def history_view(core: Any, days: int = 30) -> dict[str, Any]:
         rows.append({
             "date": d.isoformat(), "done": sum(1 for t in tasks if t.status == "done"), "total": len(tasks),
             "completion": st.completion(d), "sleep_min": day.sleep_min if day else None,
-            "deep_min": day.deep_min if day else 0, "xp": day.xp if day else 0,
+            "deep_min": day.deep_min if day else 0,
         })
     week = st.week_stats(today)
     quotas = core.cfg.mech("quotas") or {}
@@ -152,7 +150,7 @@ def history_view(core: Any, days: int = 30) -> dict[str, Any]:
 
 def heat_level(completion: float | None, deep_min: int, done: int, deep_target: int) -> int:
     """Цвет квадрата 0–4 — только за сделанную работу (задачи, глубокие минуты), не за сообщения:
-    иначе карту можно закрасить, ничего не сделав (П4). 3 = день серии (выполнение ≥ 70 %)."""
+    иначе карту можно закрасить, ничего не сделав (П4). Это история, а не игра: серий и рекордов нет (D41)."""
     if completion is not None and completion >= 90 and deep_min >= max(deep_target, 1):
         return 4
     if (completion is not None and completion >= 70) or deep_min >= 90:
@@ -166,12 +164,12 @@ def heat_level(completion: float | None, deep_min: int, done: int, deep_target: 
 
 def heatmap_view(core: Any, weeks: int = 53) -> dict[str, Any]:
     """Год квадратами, как вклад на GitHub: колонки — недели с понедельника, сегодня — справа.
-    Дни отдыха (тихий день, восстановление) — отдельным цветом: серию они не рвут."""
+    Дни отдыха (тихий день, восстановление) — отдельным цветом."""
     st = core.state
     today = core.today()
     start = today - timedelta(days=today.weekday() + 7 * (weeks - 1))
     days, d = [], start
-    best = run = active = 0
+    active = 0
     while d <= today:
         day = st.days.get(d)
         tasks = st.tasks_on(d)
@@ -184,13 +182,8 @@ def heatmap_view(core: Any, weeks: int = 53) -> dict[str, Any]:
         days.append({"date": d.isoformat(), "level": level if tracked else -1, "rest": rest and not level, "done": done,
                      "total": len(tasks), "deep_min": deep, "completion": completion, "focus": len(day.focus) if day else 0})
         active += 1 if level else 0
-        if d < today:  # лучшая серия — по тому же правилу, что State.streak: незакрытый день рвёт
-            closed = day.closed.get("completion") if day and day.closed else -1
-            if closed is not None:  # день без задач (None) серию не рвёт и не удлиняет
-                run = run + 1 if closed >= 70 else 0
-                best = max(best, run)
         d += timedelta(days=1)
-    return {"days": days, "streak": st.streak(today), "best": best, "active": active, "start": start.isoformat()}
+    return {"days": days, "active": active, "start": start.isoformat()}
 
 
 # --- изменения: выполняются в главном потоке (fn(bot)) ------------------------------------
@@ -221,10 +214,10 @@ def task_op(task_id: str, op: str, body: dict[str, Any]) -> Any:
         elif op == "done":
             pct = rules.clamp(int(body.get("pct") or 100), 1, 100)
             done = core.complete_task(task.id, done_pct=pct, report=(body.get("report") or None), source="web")
-            result = {"xp": done["xp"], "warnings": done["warnings"], "debt_closed": done["debt_closed"]}
+            result = {"warnings": done["warnings"], "debt_closed": done["debt_closed"]}
         elif op == "fail":
             failed = core.fail_task(task.id, reason=str(body.get("reason") or "отмечено в приложении"), source="web")
-            result = {"hp": failed["hp"], "debt": failed["debt"]}
+            result = {"debt": failed["debt"]}
         elif op == "defer":
             moved = core.defer_task(task.id, int(body.get("minutes") or 30), source="web")
             result = {"start": moved.start}

@@ -1,4 +1,4 @@
-"""Строка состояния Claude Code (statusLine): режим, уровень, HP, день, следующий блок.
+"""Строка состояния Claude Code (statusLine): режим, день, следующий блок, долг.
 
 Claude Code зовёт команду после каждого ответа (дебаунс 300 мс) и раз в минуту —
 поэтому здесь только код, без ИИ, и ответ за доли секунды. В 🟥 и при выключенном
@@ -26,7 +26,7 @@ def render(core: Any, session: dict[str, Any] | None = None) -> str:
     today = core.today()
     tasks = st.tasks_on(today)
     done = sum(1 for t in tasks if t.status == "done")
-    parts = [label, f"ур.{status['level']}", f"HP {status['hp']}", f"сегодня {done}/{len(tasks)}"]
+    parts = [label, f"сегодня {done}/{len(tasks)}"]
     now = core.now().strftime("%H:%M")
     active = next((t for t in tasks if t.status == "active"), None)
     upcoming = next((t for t in tasks if t.status == "planned" and t.start and t.start >= now), None)

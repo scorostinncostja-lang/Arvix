@@ -66,7 +66,6 @@ arvix setup --telegram --yes        # только привязать бота: 
 | `[mechanics] sleep_target_min` | `450` | норма сна, если распорядок не задан ([02-MECHANICS.md §7.1](02-MECHANICS.md#71-норма-сна--coresleep_target)) |
 | `[mechanics] deep_target_min` | `120` | норма глубокой работы, если в плане дня её нет |
 | `[mechanics] week_budget_min · week_deep_budget_min` | `1560` · `480` | бюджет недели без шаблонов |
-| `[mechanics] shields_per_month` | `2` | щиты |
 | `[mechanics.quotas]` | спорт 3 · социум 2 · новое 1 · отдых без экрана 3 | недельные минимумы |
 | `[remote] host · app` | — | удалённый режим (§3) |
 

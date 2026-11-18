@@ -27,17 +27,19 @@ HELP = """Команды не нужны — пиши или говори гол
 — «Найди в моих заметках алгоритм обучения» — поищу в Obsidian
 — «Почему так, а не иначе?» — поспорю с аргументами
 
-Кнопки внизу — быстрые действия: 📋 день, ✅ сделал, 🎯 фокус, 😴 сон, ➕ задача, 📊 статус.
+Кнопки внизу — быстрые действия: 📋 день, ✅ сделал, 🎯 фокус, 😴 сон, ➕ задача, 📊 итоги.
 📱 — приложение: задачи, таймер, заметки и прогресс в одном экране."""
 
 # Постоянная клавиатура под полем ввода (05-INTERFACES §2.7). Кнопка шлёт свой текст —
 # бот узнаёт его по MENU и выполняет действие без модели.
 MENU_DAY, MENU_DONE, MENU_FOCUS = "📋 День", "✅ Сделал", "🎯 Фокус"
-MENU_SLEEP, MENU_ADD, MENU_STATUS = "😴 Сон", "➕ Задача", "📊 Статус"
+MENU_SLEEP, MENU_ADD, MENU_STATUS = "😴 Сон", "➕ Задача", "📊 Итоги"
+MENU_STATUS_OLD = "📊 Статус"  # клавиатура, присланная до 0.6, шлёт старый текст — понимаем и его
 MENU_APP = "📱 Приложение"
 KEYBOARD = [[MENU_DAY, MENU_DONE, MENU_FOCUS], [MENU_SLEEP, MENU_ADD, MENU_STATUS]]
 APP_KEYBOARD = [[MENU_DAY, MENU_DONE, MENU_FOCUS], [MENU_SLEEP, MENU_ADD, MENU_STATUS], [MENU_APP]]
 MENU = {MENU_DAY: "day", MENU_DONE: "done", MENU_FOCUS: "focus", MENU_SLEEP: "sleep", MENU_ADD: "add", MENU_STATUS: "status",
+        MENU_STATUS_OLD: "status",
         MENU_APP: "app"}
 
 
@@ -107,8 +109,28 @@ def reminder_check(task: Any) -> str:
     return f"Сделано: {task.title}?"
 
 
-def completed(title: str, xp: int, debt_closed: bool = False) -> str:
-    return f"✅ {title} · +{xp} XP" + (" · долг закрыт" if debt_closed else "")
+def completed(title: str, debt_closed: bool = False) -> str:
+    """Факт без очков (D41): что закрыто — и закрыт ли этим долг."""
+    return f"✅ {title} — записал" + (" · долг закрыт" if debt_closed else "")
+
+
+RED_PANEL = "📋 День восстановления: без плана и без цифр. Одна маленькая вещь — любая.\nОтдохнул — верни план кнопкой."
+
+
+def red_buttons(refresh: bool = True) -> list[list[tuple[str, str]]]:
+    """Из 🟥 есть выход, и он у человека в руках, а не у модели (D38)."""
+    rows = [[("▶️ Вернуться к плану", "r:back"), ("🌿 Ещё отдыхаю", "r:rest")]]
+    if refresh:
+        rows.append([("🎯 15 мин", "f:go:15"), ("🔄", "p:refresh")])
+    return rows
+
+
+def sleep_logged(result: dict[str, Any]) -> str:
+    """«Сон 7ч30м (01:00–08:30). Режим: 🟥 → 🟨 ЖЁЛТЫЙ» — смена режима видна сразу."""
+    span = f" ({result['bedtime']}–{result['wake']})" if result.get("bedtime") and result.get("wake") else ""
+    before, after = result.get("mode_before"), result["mode"]
+    shift = f"{rules.MODE_LABELS[before].split()[0]} → " if before and before != after else ""
+    return f"Сон {hm(result['duration_min'])}{span}. Режим: {shift}{rules.MODE_LABELS[after]}"
 
 
 def warn(lines: list[str] | tuple[str, ...] | None) -> str:
@@ -116,14 +138,14 @@ def warn(lines: list[str] | tuple[str, ...] | None) -> str:
     return "".join(f"\n⚠️ Проверь: {line}" for line in lines or ())
 
 
-def failed(title: str, hp: int, debt: bool) -> str:
-    return f"❌ {title} · {hp} HP" + (" · ушла в долг" if debt else "")
+def failed(title: str, debt: bool) -> str:
+    return f"❌ {title} — не сделано" + (" · ушла в долг" if debt else "")
 
 
 def safety(support: str | None) -> str:
     person = f", например {support}" if support else ""
     return (
-        "Похоже, тебе сейчас по-настоящему тяжело. Режим ментора выключен: никаких задач, цифр и штрафов.\n"
+        "Похоже, тебе сейчас по-настоящему тяжело. Режим ментора выключен: никаких задач и цифр.\n"
         f"Это не то, с чем должен справляться бот. Напиши или позвони живому человеку{person} — прямо сейчас. "
         "Если есть угроза жизни — 112.\n"
         "Я здесь, если захочется просто написать. Вернуть режим ментора — /mentor on, когда решишь."
@@ -144,14 +166,13 @@ PANEL_ICON = {"planned": "○", "active": "▶️", "done": "✅", "failed": "�
 
 def day_panel(core: Any, d: Any = None) -> str:
     """Панель дня — одно сообщение, которое бот правит на месте (05-INTERFACES §2.7).
-    Шапка — то, ради чего открывают приложение-трекер: сколько сделано, режим, HP, серия."""
+    Шапка — факты: сколько сделано и режим. Ни очков, ни здоровья, ни серии (D41)."""
     st = core.state
     today = d or core.today()
     tasks = st.tasks_on(today)
     done = sum(1 for t in tasks if t.status == "done")
-    status = core.status()
     head = f"📋 {WEEKDAYS_FULL[today.weekday()]} · {done} из {len(tasks)}" if tasks else f"📋 {WEEKDAYS_FULL[today.weekday()]}"
-    head += f" · {rules.MODE_LABELS[core.effective_mode()].split()[0]} · HP {st.hp} · серия {status['streak']} дн"
+    head += f" · {rules.MODE_LABELS[core.effective_mode()].split()[0]}"
     lines = [head]
     day = st.days.get(today)
     if day and day.deep_min:
@@ -175,7 +196,7 @@ def day_panel(core: Any, d: Any = None) -> str:
 
 def panel_buttons(tasks: list[Any], focus_running: bool = False) -> list[list[tuple[str, str]]]:
     """Строка кнопок на каждую открытую задачу: начать или закрыть, частично, отложить на 30.
-    «Не смогу» здесь нет намеренно: провал с уроном — только в напоминании или словами."""
+    «Не смогу» здесь нет намеренно: провал — только в напоминании или словами, не случайным нажатием."""
     rows: list[list[tuple[str, str]]] = []
     for task in tasks:
         if task.status == "planned":
@@ -210,7 +231,10 @@ def brief(core: Any) -> str:
     if day and day.day_type:
         head += f" · {DAY_TYPES_RU.get(day.day_type, day.day_type)} день"
     if core.effective_mode() == "red":
-        return head + "\n\nСегодня без плана и без цифр. Сон, еда, движение и одна маленькая вещь — любая. Я рядом."
+        text = head + "\n\nСегодня без плана и без цифр. Сон, еда, движение и одна маленькая вещь — любая. Я рядом."
+        if not (day and day.sleep_min):  # сон — главный выход из 🟥: без него режим не узнает, что ты отдохнул
+            text += "\nКак спалось? Напиши, во сколько лёг и встал — например «лёг в час, встал в 8:30»."
+        return text
     lines = [head, ""]
     mode = rules.MODE_LABELS[st.mode] + (f" — {st.mode_trigger}" if st.mode_trigger else "")
     lines.append(f"Режим {mode}.")
@@ -235,7 +259,7 @@ def brief(core: Any) -> str:
         if missing:
             lines.append("Квоты недели: " + " · ".join(missing))
     if not (day and day.sleep_min):
-        lines.append("\nСон не записан: ответь числом, например 7:20, или /sleep 7:20 00:30.")
+        lines.append("\nСон не записан: ответь «7:20» или словами — «лёг в час, встал в 8:30».")
     if st.profile.get("bedtime_target"):
         lines.append(f"Отбой сегодня в {st.profile['bedtime_target']}. Не обсуждается.")
     if not st.templates:
@@ -280,19 +304,23 @@ def debrief_facts(core: Any) -> str:
 
 
 def status(core: Any) -> str:
+    """📊 Итоги — только факты из журнала (D41): ни уровней, ни очков, ни здоровья.
+    В 🟥 и при выключенном менторе — без цифр (правило №5)."""
     s = core.status()
-    season = s["season"]
-    lines = [
-        f"Режим: {rules.MODE_LABELS[s['effective_mode']]}" + (f" ({s['mode_trigger']})" if s["mode_trigger"] else ""),
-        f"Уровень {s['level']} · {s['xp_into']}/{s['xp_need']} XP · HP {s['hp']} · стрик {s['streak']} дн",
-        f"Сезон S{season['number']}, неделя {season['week']}: {season['rank']} (SP {season['sp_avg']}) · щитов {s['shields_left']}",
-    ]
+    if s["effective_mode"] == "red":
+        if not s["mentor_enabled"]:
+            return "Режим: 🟥 — ментор выключен safety-контуром. Без цифр. Вернуть: /mentor on"
+        return f"Режим: 🟥 — день восстановления, без цифр. Выход: {core.red_exit()}."
+    lines = [f"Режим: {rules.MODE_LABELS[s['effective_mode']]}" + (f" ({s['mode_trigger']})" if s["mode_trigger"] else "")]
+    pct = f" ({s['completion']:.0f}%)" if s["completion"] is not None else ""
+    lines.append(f"Сегодня: {s['done']} из {s['total']}{pct}" if s["total"] else "Сегодня задач нет")
+    lines.append(f"Неделя: сделано {hm(s['week_min'])} из {hm(s['week_budget'])} · глубокая {hm(s['week_deep'])} из {hm(s['week_deep_budget'])}")
+    if s["sleep_avg"]:
+        lines.append(f"Сон за {s['sleep_days']} дн: в среднем {hm(s['sleep_avg'])} при норме {hm(s['sleep_target'])}")
+    if s["debts"]:
+        lines.append(f"Долг: {s['debts']}")
     if line := autonomy_line(s["autonomy"]):
         lines.append(line)
-    if not s["mentor_enabled"]:
-        lines.append("Ментор выключен safety-контуром. Вернуть: /mentor on")
-    if s["protocol_zero"]:
-        lines.append("Протокол Ноль: сон, еда, движение, одна задача в день.")
     return "\n".join(lines)
 
 

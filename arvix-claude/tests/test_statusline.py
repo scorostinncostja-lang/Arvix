@@ -12,15 +12,15 @@ from tests.helpers import ROOT, ArvixCase
 
 
 class StatuslineTest(ArvixCase):
-    def test_normal_line_has_mode_hp_day_and_next_block(self) -> None:
+    def test_normal_line_has_mode_day_and_next_block(self) -> None:
         core = self.core
         core.add_task("Алгоритмы: графы", start="16:00", duration_min=90, importance=4, deep_work=True)
         done = core.add_task("Английский", start="09:00", duration_min=30, importance=2)
         core.complete_task(done.id)
         line = render(core, {"context_window": {"used_percentage": 12.4}})
         self.assertIn("🟩 НОРМА", line)
-        self.assertIn("ур.1", line)
-        self.assertIn("HP 100", line)
+        self.assertNotIn("ур.", line)  # игры нет (D41)
+        self.assertNotIn("HP", line)
         self.assertIn("сегодня 1/2", line)
         self.assertIn("→ 16:00 Алгоритмы: графы", line)
         self.assertIn("ctx 12%", line)
