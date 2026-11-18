@@ -38,7 +38,7 @@ echo "Проверка:"
 echo "Привет. Я Арвикс, и теперь я умею говорить." | "$DIR/piper/piper" --model "$MODEL" --output_file "$DIR/test.wav" >/dev/null 2>&1
 [[ -s "$DIR/test.wav" ]] && echo "Piper работает: $DIR/test.wav" || { echo "Piper не создал звук"; exit 1; }
 
-COMMAND="$DIR/piper/piper --model $MODEL --output_file {out}"
+COMMAND="$DIR/piper/piper --model $MODEL --length_scale 0.85 --output_file {out}"  # 0.85 — на 15 % быстрее: по умолчанию Piper тянет слова
 python3 - "$CONF" "$COMMAND" <<'PY'
 import re, sys, pathlib
 path, command = pathlib.Path(sys.argv[1]), sys.argv[2]

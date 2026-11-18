@@ -1,7 +1,7 @@
 /* Оболочка приложения в кэше — открывается мгновенно и без сети; данные (/api) — всегда из сети.
  * «Поделиться → Арвикс» (share_target в манифесте): файлы кладутся в кэш SHARE, страница
  * забирает их и отправляет с ключом — у service worker ключа нет и не должно быть. */
-const CACHE = "arvix-v2";
+const CACHE = "arvix-v3";
 const SHARE = "arvix-share";
 const SHELL = ["/", "/index.html", "/app.css", "/app.js", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
 
