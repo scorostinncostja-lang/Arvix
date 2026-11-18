@@ -105,6 +105,12 @@ const icon = (name, cls = "") => `<svg class="ic${cls ? " " + cls : ""}" viewBox
 
 const MODE_CLASS = { green: "green", normal: "green", yellow: "yellow", red: "red", pressure: "yellow" };
 
+/* Ноутбук: от 900 px слева боковая панель, «Сегодня» в две колонки, заметки — список и заметка рядом
+ * (как в Obsidian), окна — по центру. Порог тот же, что в app.css. Телефон и Mini App не меняются. */
+const WIDE = window.matchMedia("(min-width: 900px)");
+const isWide = () => WIDE.matches;
+WIDE.addEventListener("change", () => { if (token() || TG) render(); });
+
 // --- каркас ------------------------------------------------------------------------------------
 document.querySelectorAll("[data-ic]").forEach((el) => { el.innerHTML = icon(el.dataset.ic); });
 $("#top-call").innerHTML = icon("phone");
@@ -182,7 +188,7 @@ function renderLogin() {
 function renderToday() {
   const d = state.data;
   if (!d) { view.innerHTML = `<div class="empty">Загружаю…</div>`; return; }
-  let html = "";
+  let html = `<div class="today-grid"><div class="today-side">`;
   if (d.gentle) {
     html += `<div class="card note-card">${esc(d.note)}</div>`;
   } else if (d.stats) {
@@ -205,11 +211,12 @@ function renderToday() {
     html += `<div class="card"><h3>Урок</h3><div><b>${esc(d.lesson.topic)}</b></div>
       <div class="muted small">${d.lesson.started ? "идёт — в конце 3 вопроса проверки, ответь в чате" : "план готов — начни из чата или кнопкой ▶ у задачи"}</div></div>`;
   }
+  html += `</div><div class="today-main">`;
   const items = [...(d.tasks || []).map((t) => ({ ...t, kind: "task" })), ...(d.busy || []).map((b) => ({ ...b, kind: "busy" }))]
     .sort((a, b) => (a.start || "99").localeCompare(b.start || "99"));
-  html += `<div class="section-title"><span>План дня</span><span>${d.day_type ? esc(d.day_type) : ""}</span></div>`;
+  html += `<div class="section-title first"><span>План дня</span><span>${d.day_type ? esc(d.day_type) : ""}</span></div>`;
   html += items.length ? items.map((t) => (t.kind === "busy" ? busyRow(t) : taskRow(t))).join("") :
-    `<div class="empty">На сегодня задач нет.<br><span class="small">Нажми «+» или напиши Арвиксу: «добавь физику в 18:00 на час».</span></div>`;
+    `<div class="empty">На сегодня задач нет.<br><span class="small">Нажми «+»${isWide() ? " (Alt+N)" : ""} или напиши Арвиксу: «добавь физику в 18:00 на час».</span></div>`;
   if (d.debts && d.debts.length) {
     html += `<div class="section-title"><span>Долг</span><span>${d.debts.length}</span></div>` + d.debts.map((t) => taskRow(t, true)).join("");
   }
@@ -217,6 +224,7 @@ function renderToday() {
     html += `<details class="card"><summary><b>Завтра</b> <span class="muted">· ${d.tomorrow.length}</span></summary>
       <div style="margin-top:8px">${d.tomorrow.map((t) => `<div class="row"><span>${esc(t.start || "--:--")} ${esc(t.title)}</span><span class="muted small">${hm(t.duration_min)}</span></div>`).join("")}</div></details>`;
   }
+  html += `</div></div>`;
   view.innerHTML = html;
   bindToday();
   $("#install-now") && ($("#install-now").onclick = installApp);
@@ -256,7 +264,7 @@ function focusCard(d) {
       ${choices.map((m) => `<button type="button" data-v="${m}" class="${+form.minutes === m ? "on" : ""}">${m}</button>`).join("")}
       <button type="button" data-v="custom" class="${custom ? "on" : ""}">${custom ? form.minutes : "своё"}</button></div></div>
     <button class="btn primary" data-act="focus-go">${icon("play")} Начать ${form.minutes} мин</button>
-    <div class="muted small" style="margin-top:6px">Телефон экраном вниз. Пауза и отмена — на таймере.</div>${list}</div>`;
+    <div class="muted small" style="margin-top:6px">${isWide() ? "Телефон — подальше от стола." : "Телефон экраном вниз."} Пауза и отмена — на таймере.</div>${list}</div>`;
 }
 
 function openFocusNoteSheet(session) {
@@ -789,16 +797,51 @@ async function toggleRecord() {
 
 // --- Заметки -----------------------------------------------------------------------------------
 function renderNotes() {
-  if (state.note) { renderNote(); return; }
   if (state.notesView === undefined) { try { state.notesView = localStorage.getItem("arvix_notes_view") || "list"; } catch (_) { state.notesView = "list"; } }
-  if (state.notesView === "graph" && !state.notesResults) { renderGraph(); return; }
-  const list = state.notesList;
-  let html = notesSwitch() + `<div class="search"><input id="n-q" type="search" placeholder="Поиск по заметкам" value="${esc(state.notesQuery || "")}"></div>
-    <div class="card"><h3>Мысль в Inbox</h3><div class="field" style="margin:0"><textarea id="n-cap" rows="2" placeholder="Записать и не держать в голове"></textarea></div>
+  const wide = isWide();
+  if (state.note && !wide) { renderNote(); return; }
+  if (state.notesView === "graph" && !state.notesResults && !state.note) { renderGraph(); return; }
+  if (!wide) { view.innerHTML = notesSwitch() + notesListHtml(true); bindNotesList(view); bindNotesSwitch(); return; }
+  renderNotesShell();
+  if (state.note) renderNote(); else renderNoteEmpty();
+}
+
+/* Правая половина без открытой заметки: быстрая запись в Inbox и подсказка по клавишам. */
+function renderNoteEmpty() {
+  const pane = $("#note-pane"); if (!pane) return;
+  pane.innerHTML = `${captureHtml()}<div class="empty">Выбери заметку слева или создай новую.<br>
+    <span class="small"><kbd>/</kbd> — поиск · <kbd>Ctrl</kbd>+<kbd>S</kbd> — сохранить · <kbd>Esc</kbd> — закрыть</span></div>`;
+  bindCapture(pane);
+}
+
+/* Список слева обновляется сам по себе: открытая справа заметка (и черновик в редакторе) не пересобирается. */
+function refreshNotesList() {
+  const side = $("#notes-side");
+  if (!side) { renderNotes(); return; }
+  const top = side.scrollTop;
+  side.innerHTML = notesSwitch() + notesListHtml(false); bindNotesList(side); bindNotesSwitch(); side.scrollTop = top;
+}
+
+function captureHtml() {
+  return `<div class="card"><h3>Мысль в Inbox</h3><div class="field" style="margin:0"><textarea id="n-cap" rows="2" placeholder="Записать и не держать в голове"></textarea></div>
     <button class="pill primary" id="n-save" style="margin-top:8px">Записать</button></div>`;
+}
+function bindCapture(root) {
+  const save = root.querySelector("#n-save"); if (!save) return;
+  save.onclick = async () => {
+    const box = root.querySelector("#n-cap"), text = box.value.trim(); if (!text) return;
+    try { const r = await api("capture", { json: { text } }); notify("success"); toast("Записано" + (r.path ? ": " + r.path : "")); box.value = ""; } catch (err) { toast(err.message); }
+  };
+}
+
+function notesListHtml(withCapture) {
+  const list = state.notesList, open = state.note && state.note.path;
+  let html = `<div class="search"><input id="n-q" type="search" placeholder="Поиск по заметкам${isWide() ? "  ( / )" : ""}" value="${esc(state.notesQuery || "")}"></div>`;
+  if (withCapture) html += captureHtml();
+  const on = (path) => (path === open ? " on" : "");
   if (state.notesResults) {
     html += `<div class="section-title"><span>Найдено</span><button class="small" id="n-clear" style="color:var(--accent)">сбросить</button></div>`;
-    html += state.notesResults.length ? state.notesResults.map((r) => `<button class="list-item" data-path="${esc(r.path)}"><span class="li-ic">${icon("file")}</span>
+    html += state.notesResults.length ? state.notesResults.map((r) => `<button class="list-item${on(r.path)}" data-path="${esc(r.path)}"><span class="li-ic">${icon("file")}</span>
       <span class="grow"><b>${esc(r.path.split("/").pop().replace(/\.md$/, ""))}</b><br><span class="muted small">${esc(r.snippet)}</span></span></button>`).join("") :
       `<div class="empty">Ничего не нашлось.</div>`;
   } else if (list) {
@@ -806,30 +849,34 @@ function renderNotes() {
     html += `<div class="crumbs-row"><div class="crumbs"><button data-dir="">Хранилище</button>${parts.map((p, i) => ` / <button data-dir="${esc(parts.slice(0, i + 1).join("/"))}">${esc(p)}</button>`).join("")}</div>
       <button class="pill" id="n-new">+ Заметка</button></div>`;
     html += list.dirs.map((d) => `<button class="list-item" data-dir="${esc(d.path)}"><span class="li-ic folder">${icon("folder")}</span><span class="grow">${esc(d.name)}</span><span class="muted">${icon("chevron")}</span></button>`).join("");
-    html += list.files.map((f) => `<button class="list-item" data-path="${esc(f.path)}"><span class="li-ic">${icon("file")}</span><span class="grow">${esc(f.name)}</span>
+    html += list.files.map((f) => `<button class="list-item${on(f.path)}" data-path="${esc(f.path)}"><span class="li-ic">${icon("file")}</span><span class="grow">${esc(f.name)}</span>
       <span class="muted small">${new Date(f.modified * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}</span></button>`).join("");
     if (!list.dirs.length && !list.files.length) html += `<div class="empty">Пусто.</div>`;
   } else html += `<div class="empty">Загружаю…</div>`;
-  view.innerHTML = html;
-  const q = $("#n-q");
+  return html;
+}
+
+function bindNotesList(root) {
+  const q = root.querySelector("#n-q");
   q.addEventListener("keydown", async (e) => {
     if (e.key !== "Enter") return;
     state.notesQuery = q.value.trim();
-    if (!state.notesQuery) { state.notesResults = null; renderNotes(); return; }
-    try { state.notesResults = (await api("notes/search?q=" + encodeURIComponent(state.notesQuery))).results; renderNotes(); } catch (err) { toast(err.message); }
+    if (!state.notesQuery) { state.notesResults = null; refreshNotesList(); return; }
+    try { state.notesResults = (await api("notes/search?q=" + encodeURIComponent(state.notesQuery))).results; refreshNotesList(); } catch (err) { toast(err.message); }
   });
-  $("#n-clear") && ($("#n-clear").onclick = () => { state.notesResults = null; state.notesQuery = ""; renderNotes(); });
-  $("#n-new") && ($("#n-new").onclick = newNote);
-  bindNotesSwitch();
-  $("#n-save").onclick = async () => {
-    const text = $("#n-cap").value.trim(); if (!text) return;
-    try { const r = await api("capture", { json: { text } }); notify("success"); toast("Записано" + (r.path ? ": " + r.path : "")); $("#n-cap").value = ""; } catch (err) { toast(err.message); }
-  };
-  view.querySelectorAll("[data-dir]").forEach((b) => b.addEventListener("click", async () => {
-    state.notesDir = b.dataset.dir; state.notesList = null; renderNotes();
-    try { state.notesList = await api("notes?dir=" + encodeURIComponent(state.notesDir)); renderNotes(); } catch (err) { toast(err.message); }
+  const clear = root.querySelector("#n-clear");
+  clear && (clear.onclick = () => { state.notesResults = null; state.notesQuery = ""; refreshNotesList(); });
+  const add = root.querySelector("#n-new");
+  add && (add.onclick = newNote);
+  bindCapture(root);
+  root.querySelectorAll("[data-dir]").forEach((b) => b.addEventListener("click", async () => {
+    state.notesDir = b.dataset.dir; state.notesList = null; refreshNotesList();
+    try { state.notesList = await api("notes?dir=" + encodeURIComponent(state.notesDir)); refreshNotesList(); } catch (err) { toast(err.message); }
   }));
-  view.querySelectorAll("[data-path]").forEach((b) => b.addEventListener("click", () => openNote(b.dataset.path)));
+  root.querySelectorAll("[data-path]").forEach((b) => b.addEventListener("click", async () => {
+    if (state.noteEdit && !confirmLeaveEditor()) return;
+    openNote(b.dataset.path);
+  }));
 }
 
 // --- Граф заметок: как в Obsidian + подсказки связей от Арвикса (D32) ---------------------------
@@ -1039,8 +1086,10 @@ function notesSwitch() {
 }
 function bindNotesSwitch() {
   view.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => {
+    if (state.noteEdit && !confirmLeaveEditor()) return;
     state.notesView = b.dataset.view; haptic("soft");
     try { localStorage.setItem("arvix_notes_view", state.notesView); } catch (_) { /* приватный режим */ }
+    if (state.notesView === "graph") { state.note = null; state.noteEdit = false; state.notesResults = null; }
     renderNotes();
   }));
 }
@@ -1050,6 +1099,8 @@ async function openNote(path, opts = {}) {
     state.note = await api("note?path=" + encodeURIComponent(path));
     state.noteEdit = !!opts.edit;
     renderNote(); if (!opts.keepScroll) window.scrollTo(0, 0);
+    const side = $("#notes-side");
+    side && side.querySelectorAll(".list-item[data-path]").forEach((x) => x.classList.toggle("on", x.dataset.path === path));
     if (TG) { TG.BackButton.show(); TG.BackButton.offClick(noteBack); TG.BackButton.onClick(noteBack); }
   } catch (err) { toast(err.message); }
 }
@@ -1060,8 +1111,9 @@ function noteBack() {
 function closeNote() {
   state.note = null; state.noteEdit = false;
   if (TG) { TG.BackButton.offClick(noteBack); TG.BackButton.hide(); }
-  state.notesList = null; renderNotes();
-  api("notes?dir=" + encodeURIComponent(state.notesDir)).then((r) => { state.notesList = r; if (state.tab === "notes" && !state.note) renderNotes(); }).catch(() => {});
+  if (!isWide()) state.notesList = null;
+  renderNotes();
+  api("notes?dir=" + encodeURIComponent(state.notesDir)).then((r) => { state.notesList = r; if (state.tab === "notes" && !state.note) refreshNotesList(); }).catch(() => {});
 }
 
 const noteName = (path) => String(path || "").split("/").pop().replace(/\.md$/, "");
@@ -1069,13 +1121,28 @@ const DRAFT_KEY = (path) => "arvix_draft:" + path;
 const draftGet = (path) => { try { return JSON.parse(localStorage.getItem(DRAFT_KEY(path)) || "null"); } catch (_) { return null; } };
 const draftSet = (path, d) => { try { d ? localStorage.setItem(DRAFT_KEY(path), JSON.stringify(d)) : localStorage.removeItem(DRAFT_KEY(path)); } catch (_) { /* приватный режим */ } };
 
+/* Куда рисовать заметку: на ноутбуке — в правую панель рядом со списком, на телефоне — на весь экран. */
+function noteRoot() {
+  if (!isWide()) return view;
+  if (!$("#note-pane")) renderNotesShell();
+  return $("#note-pane");
+}
+function renderNotesShell() {
+  view.innerHTML = `<div class="notes-split"><aside class="notes-side" id="notes-side">${notesSwitch()}${notesListHtml(false)}</aside>
+    <section class="notes-main" id="note-pane"></section></div>`;
+  bindNotesList($("#notes-side")); bindNotesSwitch();
+  if (!state.notesList) api("notes?dir=" + encodeURIComponent(state.notesDir)).then((r) => { state.notesList = r; if ($("#notes-side")) refreshNotesList(); }).catch(() => {});
+}
+
 function renderNote() {
   if (state.noteEdit) { renderEditor(); return; }
   const n = state.note;
+  const root = noteRoot();
   const doc = obsidian(n.text, n.tasks || {});
   const folder = n.path.includes("/") ? n.path.slice(0, n.path.lastIndexOf("/")) : "Хранилище";
-  view.innerHTML = `<div class="note-bar"><button id="n-back" class="note-back">${icon("back")} ${esc(folder.split("/").pop())}</button>
-      <button id="n-edit" class="icon-btn" aria-label="Править">${icon("pencil")}</button></div>
+  root.innerHTML = `<div class="note-bar"><button id="n-back" class="note-back" title="Esc">${isWide() ? icon("x") + " Закрыть" : icon("back") + " " + esc(folder.split("/").pop())}</button>
+      ${isWide() ? `<span class="note-bar-title muted small">${esc(folder)}</span>` : ""}
+      <button id="n-edit" class="icon-btn" aria-label="Править" title="Править (E)">${icon("pencil")}</button></div>
     <article class="obs">
       <h1 class="obs-title">${esc(noteName(n.path))}</h1>
       ${doc.props.length ? propsHtml(doc.props) : ""}
@@ -1083,7 +1150,7 @@ function renderNote() {
     </article>`;
   $("#n-back").onclick = closeNote;
   $("#n-edit").onclick = () => { state.noteEdit = true; renderNote(); };
-  bindNote();
+  bindNote(root);
 }
 
 function propsHtml(props) {
@@ -1098,9 +1165,9 @@ function propsHtml(props) {
   </details>`;
 }
 
-function bindNote() {
+function bindNote(root = view) {
   const n = state.note;
-  view.querySelectorAll(".obs input[data-line]").forEach((box) => box.addEventListener("click", async (e) => {
+  root.querySelectorAll(".obs input[data-line]").forEach((box) => box.addEventListener("click", async (e) => {
     e.preventDefault(); haptic();
     try {
       const r = await api("note/toggle", { json: { path: n.path, line: +box.dataset.line, sha: n.sha } });
@@ -1108,7 +1175,7 @@ function bindNote() {
       state.note = r; renderNote(); notify("success");
     } catch (err) { await noteError(err); }
   }));
-  view.querySelectorAll("[data-wiki]").forEach((a) => a.addEventListener("click", async (e) => {
+  root.querySelectorAll("[data-wiki]").forEach((a) => a.addEventListener("click", async (e) => {
     e.preventDefault();
     try {
       const r = await api("notes/search?q=" + encodeURIComponent(a.dataset.wiki));
@@ -1117,15 +1184,15 @@ function bindNote() {
       if (hit) openNote(hit.path); else toast("Заметки «" + a.dataset.wiki + "» ещё нет");
     } catch (err) { toast(err.message); }
   }));
-  view.querySelectorAll("[data-tag]").forEach((t) => t.addEventListener("click", async () => {
+  root.querySelectorAll("[data-tag]").forEach((t) => t.addEventListener("click", async () => {
     state.note = null; state.notesQuery = "#" + t.dataset.tag;
     try { state.notesResults = (await api("notes/search?q=" + encodeURIComponent(t.dataset.tag))).results; } catch (_) { state.notesResults = []; }
     if (TG) { TG.BackButton.offClick(noteBack); TG.BackButton.hide(); }
     renderNotes();
   }));
-  view.querySelectorAll(".obs-prop").forEach((row) => row.addEventListener("click", () => editProp(row)));
-  view.querySelectorAll(".callout.foldable > .callout-title").forEach((t) => t.addEventListener("click", () => t.parentElement.classList.toggle("folded")));
-  hydrateAssets(view);
+  root.querySelectorAll(".obs-prop").forEach((row) => row.addEventListener("click", () => editProp(row)));
+  root.querySelectorAll(".callout.foldable > .callout-title").forEach((t) => t.addEventListener("click", () => t.parentElement.classList.toggle("folded")));
+  hydrateAssets(root);
 }
 
 /* Галочка у строки-задачи Арвикса закрывает задачу тем же путём, что ✓ на «Сегодня». */
@@ -1170,8 +1237,9 @@ function renderEditor() {
   const n = state.note;
   const draft = draftGet(n.path);
   const text = draft && draft.sha === n.sha ? draft.text : n.text;
-  view.innerHTML = `<div class="note-bar editing"><button id="e-cancel" class="note-back">Отмена</button>
-      <span class="note-bar-title">${esc(noteName(n.path))}</span><button id="e-save" class="pill primary">Сохранить</button></div>
+  const root = noteRoot();
+  root.innerHTML = `<div class="note-bar editing"><button id="e-cancel" class="note-back">Отмена</button>
+      <span class="note-bar-title">${esc(noteName(n.path))}</span><button id="e-save" class="pill primary" title="Ctrl+S">Сохранить</button></div>
     <div class="md-tools">${TOOLS.map(([label, title], i) => `<button type="button" data-tool="${i}" title="${title}" aria-label="${title}">${esc(label)}</button>`).join("")}</div>
     <textarea id="e-text" class="md-source" spellcheck="true" autocapitalize="sentences">${esc(text)}</textarea>
     ${draft && draft.sha === n.sha && draft.text !== n.text ? `<p class="muted small">Восстановлен несохранённый черновик.</p>` : ""}`;
@@ -1190,7 +1258,7 @@ function renderEditor() {
     ta.setRangeText("\n" + m[1] + next, start, ta.selectionEnd, "end");
     ta.dispatchEvent(new Event("input"));
   });
-  view.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("pointerdown", (e) => {
+  root.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("pointerdown", (e) => {
     e.preventDefault();  // не забирать фокус у текста — клавиатура не прячется
     applyTool(ta, TOOLS[+b.dataset.tool][2]); haptic("soft");
   }));
@@ -1241,9 +1309,12 @@ async function saveEditor() {
   }
 }
 
-function leaveEditor() {
+function confirmLeaveEditor() {
   const ta = $("#e-text"), n = state.note;
-  if (ta && ta.value !== n.text && !confirm("Выйти без сохранения? Черновик останется на этом устройстве.")) return;
+  return !(ta && n && ta.value !== n.text) || confirm("Выйти без сохранения? Черновик останется на этом устройстве.");
+}
+function leaveEditor() {
+  if (!confirmLeaveEditor()) return;
   state.noteEdit = false; renderNote();
 }
 
@@ -1427,7 +1498,7 @@ function heatCard(heat) {
     <div class="heat-scroll" id="heat-scroll"><div class="heat-grid">
       <div class="heat-days"><span></span><span>пн</span><span></span><span>ср</span><span></span><span>пт</span><span></span></div>
       <div><div class="heat-months">${months}</div><div class="heat-cols">${cells}</div></div></div></div>
-    <div class="heat-foot"><span class="muted small" id="heat-info">Тап по дню — что в нём было</span>
+    <div class="heat-foot"><span class="muted small" id="heat-info">${isWide() ? "Клик" : "Тап"} по дню — что в нём было</span>
       <span class="heat-legend muted small">меньше <i class="heat-cell l0"></i><i class="heat-cell l1"></i><i class="heat-cell l2"></i><i class="heat-cell l3"></i><i class="heat-cell l4"></i> больше</span></div></div>`;
 }
 function bindHeat(heat) {
@@ -1452,7 +1523,7 @@ function renderProgress() {
   else if (h.gentle) html = `<div class="card note-card">Сегодня без цифр. Прогресс подождёт — восстановление тоже часть плана.</div>`;
   else {
     const w = h.week;
-    html += heatCard(h.heat);
+    html += heatCard(h.heat) + `<div class="progress-grid">`;
     html += `<div class="card"><h3>Неделя</h3>
       <div class="row"><span>Сделано</span><b>${hm(w.productive_min)} из ${hm(w.budget_min)}</b></div><div class="bar"><i style="width:${Math.min(100, 100 * w.productive_min / Math.max(1, w.budget_min))}%"></i></div>
       <div class="row" style="margin-top:6px"><span>Глубокая работа</span><b>${hm(w.deep_min)} из ${hm(w.deep_budget_min)}</b></div><div class="bar deep"><i style="width:${Math.min(100, 100 * w.deep_min / Math.max(1, w.deep_budget_min))}%"></i></div>
@@ -1469,6 +1540,7 @@ function renderProgress() {
       html += `<div class="card"><h3>Уроки</h3>${h.lessons.slice().reverse().map((x) => `<div class="row"><span>${esc(x.subject)}: ${esc(x.topic)}</span>
         <span class="chip ${x.score >= 70 ? "green" : x.score != null ? "yellow" : ""}">${x.score != null ? x.score + "%" : "—"}</span></div>`).join("")}</div>`;
     }
+    html += `</div>`;
   }
   html += `<div class="card"><h3>Приложение</h3>
     ${TG ? `<button class="btn" id="install">${icon("download")} Установить на телефон</button><p class="muted small">Откроется Chrome — там кнопка «Установить» (или ⋮ → «Установить приложение»): появится иконка Арвикса, как у обычного приложения. Ссылка одноразовая, живёт 15 минут.</p>` :
@@ -1552,6 +1624,38 @@ function onChange(ev) {
     } catch (err) { if (err.auth) renderLogin(); }
   }, 250);
 }
+
+// --- клавиатура (ноутбук) ----------------------------------------------------------------------
+/* Ctrl/Alt+1…4 — вкладки, Alt+N — новая задача, / — поиск или поле сообщения, E — править заметку
+ * (клавиши — по e.code, чтобы работали и на русской раскладке),
+ * Ctrl+S — сохранить, Esc — закрыть окно, заметку или разговор. На телефоне клавиатуры нет — ничего не мешает. */
+const TABS = ["today", "chat", "notes", "progress"];
+document.addEventListener("keydown", (e) => {
+  const typing = e.target instanceof Element && !!e.target.closest("input, textarea, select, [contenteditable]");
+  if ((e.ctrlKey || e.metaKey) && e.code === "KeyS" && $("#e-text")) { e.preventDefault(); saveEditor(); return; }
+  if (e.key === "Escape") {
+    if (!$("#sheet").classList.contains("hidden")) { closeSheet(); return; }
+    if (talk.on) { closeTalk(); return; }
+    if (state.tab === "notes" && state.note) { e.preventDefault(); noteBack(); return; }
+    if (typing) e.target.blur();
+    return;
+  }
+  if ((e.altKey || e.ctrlKey) && !e.shiftKey && /^Digit[1-4]$/.test(e.code)) {
+    e.preventDefault();
+    const tab = TABS[+e.code.slice(5) - 1];
+    if (tab !== state.tab && !(state.noteEdit && !confirmLeaveEditor())) setTab(tab);
+    return;
+  }
+  if (e.altKey && e.code === "KeyN") { e.preventDefault(); if (state.data && !state.data.gentle) openAddSheet(); return; }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey || !$("#sheet").classList.contains("hidden")) return;
+  if (e.key === "/" || e.code === "Slash") {  // физическая клавиша: на русской раскладке она даёт «.»
+    const box = state.tab === "notes" ? $("#n-q") : state.tab === "chat" ? $("#msg") : null;
+    if (box) { e.preventDefault(); box.focus(); }
+  } else if (e.code === "KeyE" && state.tab === "notes" && state.note && !state.noteEdit) {
+    e.preventDefault(); state.noteEdit = true; renderNote();
+    setTimeout(() => $("#e-text") && $("#e-text").focus(), 30);
+  }
+});
 
 // --- старт -------------------------------------------------------------------------------------
 if (TG) {

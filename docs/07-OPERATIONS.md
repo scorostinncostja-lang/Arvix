@@ -14,7 +14,9 @@ arvix doctor                                  # проверка
 `install.sh` (нужен Python 3.11+, зависимостей нет):
 1. копирует плагин в `~/.local/share/arvix/app` — путь без пробелов и кириллицы, его видят systemd, Claude Code и
    Claude Desktop, и он не исчезает вместе с git-worktree; тесты не копируются;
-2. ставит CLI `~/.local/bin/arvix` (предупреждает, если папки нет в `PATH`);
+2. ставит CLI `~/.local/bin/arvix` (предупреждает, если папки нет в `PATH`); на машине в удалённом режиме
+   (`[remote] host`) — не ставит и удаляет прежнюю обёртку: там интерфейс — приложение (D42), запасной путь —
+   `python3 ~/.local/share/arvix/app/scripts/arvix_cli.py <команда>`;
 3. проверяет плагин `claude plugin validate`, регистрирует маркетплейс `arvix` и плагин `arvix@arvix` (scope user);
 4. кладёт systemd-юниты пользователя: `arvix-telegram.service`, `arvix-backup.service/.timer`,
    `arvix-vault-sync.service/.timer` — **не включает** их; если бот уже работает — перезапускает на новой версии;
