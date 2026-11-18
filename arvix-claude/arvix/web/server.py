@@ -136,6 +136,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
         # --- маршруты ------------------------------------------------------------------
 
         def do_GET(self) -> None:  # noqa: N802 — имя задаёт http.server
+            self.__dict__.pop("_body", None)  # обработчик живёт всё keep-alive соединение — тело у каждого запроса своё
             url = urllib.parse.urlsplit(self.path)
             if not url.path.startswith("/api/"):
                 self.static(url.path)
@@ -169,6 +170,10 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 elif url.path == "/api/history":
                     days = max(7, min(int(query.get("days") or 30), 120))
                     self.send_json(app.read(lambda c: api.history_view(c, days)))
+                elif url.path == "/api/projects":
+                    self.send_json(app.read(api.projects_view))
+                elif url.path == "/api/project":
+                    self.send_json(app.read(lambda c: api.project_view(c, query.get("id") or "")))
                 elif url.path == "/api/notes":
                     self.send_json(self.notes_dir(query.get("dir") or ""))
                 elif url.path == "/api/note":
@@ -195,6 +200,9 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 self.fail(HTTPStatus.BAD_REQUEST, str(exc))
 
         def do_POST(self) -> None:  # noqa: N802
+            # Один обработчик отвечает на все запросы keep-alive соединения: тело прошлого POST
+            # нельзя переиспользовать — иначе второй POST получит чужое тело, а своё останется в сокете (501).
+            self.__dict__.pop("_body", None)
             url = urllib.parse.urlsplit(self.path)
             try:
                 self.body_bytes()
@@ -264,6 +272,10 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 elif len(parts) == 2 and parts[0] == "lesson":
                     app.hub.post(api.lesson(parts[1]), label="готовлю урок")
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
+                elif parts == ["projects"]:
+                    self.send_json(app.hub.call(api.project_save(self.body_json())))
+                elif len(parts) == 3 and parts[0] == "projects":
+                    self.send_json(app.hub.call(api.project_op(parts[1], parts[2], self.body_json())))
                 elif parts == ["focus"]:
                     body = self.body_json()
                     self.send_json(app.hub.call(api.focus_start(int(body.get("minutes") or 25), body.get("task"), body.get("topic"))))

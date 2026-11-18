@@ -249,6 +249,10 @@ def brief(core: Any) -> str:
     debts = st.debts()
     if debts:
         lines.append("Долг: " + ", ".join(t.title for t in debts[:3]))
+    from arvix import projects
+
+    if line := projects.brief_line(core):
+        lines.append(line)
     budget = core.budget()
     if budget["auto"] and budget["since"] == today.isoformat() and budget.get("change"):
         lines.append(f"Нагрузка недели: {budget['change']} — {budget['reason']}.")
@@ -340,3 +344,21 @@ def week(core: Any) -> str:
 
 def question(q: dict[str, Any], number: int, total: int) -> str:
     return f"[{q['block_title']} · {number}/{total}]\n{q['text']}"
+
+
+def project_stall(project: dict[str, Any], stats: dict[str, Any], step: dict[str, Any] | None) -> str:
+    """Застой проекта — факт и один шаг, без стыда (00-VISION §6, вопрос 4)."""
+    days = stats["idle_days"]
+    text = f"📁 «{project['title']}» — {days} дн без движения."
+    if step:
+        text += f"\nСледующий этап: {step['title']} (готово, когда {step['dod']})."
+    if days >= 21:
+        text += "\nЧестно: продолжаем, пауза или закрываем с итогом? Пауза — тоже решение."
+    else:
+        text += "\n30 минут сегодня сдвинут его с места — поставлю блок в свободное окно."
+    return text
+
+
+def project_buttons(project_id: str) -> list[list[tuple[str, str]]]:
+    return [[("▶️ 30 мин сегодня", f"j:{project_id}:b30"), ("Завтра на час", f"j:{project_id}:t60")],
+            [("⏸ Пауза", f"j:{project_id}:pause")]]

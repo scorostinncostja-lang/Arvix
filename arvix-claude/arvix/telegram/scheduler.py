@@ -62,6 +62,7 @@ class Scheduler:
             if full and not red:  # в 🟥 план — одна маленькая вещь: напоминаний о задачах нет
                 self.reminders(now)
                 self.midday(now)
+                self.projects(now)
                 self.curiosity(now)
             if full or back:
                 self.bedtime(now, gentle=red)
@@ -119,6 +120,22 @@ class Scheduler:
         due = when and self._once(key, when, now, timedelta(hours=2)) and self.core.effective_mode() != "red"
         if due and (text := tpl.midday(self.core)):
             self.bot.send(text, key=key)
+
+    def projects(self, now: datetime) -> None:
+        """Застой проекта (D43): 7+ дней без движения → одно сообщение в неделю на проект, в окно
+        чек-ина. Проект не умирает молча — но и стены напоминаний нет."""
+        from arvix import projects
+
+        when = self._when("midday")
+        if not when or not (when <= now < when + timedelta(hours=3)):
+            return
+        week = "{}-{:02d}".format(*now.isocalendar()[:2])
+        for project, stats in projects.stalled(self.core):
+            key = f"proj:{project['id']}:{week}"
+            if self.core.sent(key):
+                continue
+            self.bot.send(tpl.project_stall(project, stats, projects.next_step(self.core, project)), tpl.project_buttons(project["id"]), key=key)
+            return  # одно за оборот: два застоя — два сообщения, но не пачкой
 
     def debrief(self, now: datetime) -> None:
         when = self._when("debrief")

@@ -31,6 +31,7 @@ def task_view(task: Any) -> dict[str, Any]:
         "duration_min": task.duration_min, "importance": task.importance, "difficulty": task.difficulty,
         "deep_work": task.deep_work, "status": task.status, "done_pct": task.done_pct,
         "focus_min": task.focus_min, "report": task.report, "proof": task.proof, "open": task.is_open,
+        "project": task.project,
     }
 
 
@@ -184,6 +185,125 @@ def heatmap_view(core: Any, weeks: int = 53) -> dict[str, Any]:
         active += 1 if level else 0
         d += timedelta(days=1)
     return {"days": days, "active": active, "start": start.isoformat()}
+
+
+# --- проекты (D43): чтение — цифры кода, изменения — операции arvix/projects.py ---------------------
+
+def _project_card(core: Any, p: dict[str, Any]) -> dict[str, Any]:
+    from arvix import projects
+
+    s = projects.stats(core, p)
+    step = projects.next_step(core, p)
+    return {
+        "id": p["id"], "title": p["title"], "why": p.get("why", ""), "kind": p.get("kind"), "kind_ru": projects.KINDS.get(p.get("kind"), ""),
+        "status": p["status"], "status_ru": projects.STATUSES[p["status"]], "expectation": p.get("expectation", ""),
+        "deadline": p.get("deadline"), "weekly_min": s["weekly_target"], "week_min": s["week_min"], "minutes": s["minutes"],
+        "milestones_done": s["milestones_done"], "milestones_total": s["milestones_total"], "idle_days": s["idle_days"],
+        "last_move": s["last_move"], "pace": s["pace"], "forecast": s["forecast"], "income": s["income"], "expense": s["expense"],
+        "net": s["net"], "next": {"id": step["id"], "title": step["title"], "dod": step["dod"]} if step else None,
+        "issues": projects.issues(core, p, s), "skills": p.get("skills") or [], "link": p.get("link", ""),
+        "started": p.get("started"), "closed": p.get("closed"), "goal_id": p.get("goal_id"),
+    }
+
+
+def projects_view(core: Any) -> dict[str, Any]:
+    """Список проектов. В 🟥 и при выключенном менторе — без цифр и без давления (правило №5)."""
+    from arvix import projects
+
+    if gentle(core):
+        return {"gentle": True, "projects": [], "note": "Проекты подождут. Сегодня — восстановление; если тянет к проекту, "
+                                                        "сделай самое приятное в нём, без плана и цифр."}
+    order = {"active": 0, "idea": 1, "paused": 2, "done": 3, "dropped": 4}
+    items = sorted(core.state.projects.values(), key=lambda p: (order[p["status"]], p.get("deadline") or "9999", p["title"]))
+    cards = [_project_card(core, p) for p in items]
+    active = [c for c in cards if c["status"] == "active"]
+    return {
+        "gentle": False, "projects": cards, "max_active": projects.max_active(core), "load_issue": projects.load_issue(core),
+        "kinds": projects.KINDS, "log_kinds": projects.LOG_KINDS, "channel_types": projects.CHANNEL_TYPES,
+        "channel_statuses": projects.CHANNEL_STATUSES, "statuses": projects.STATUSES,
+        "goals": [{"id": g["id"], "title": g["title"]} for g in core.state.goals.values() if g.get("status", "active") == "active"],
+        "summary": {"active": len(active), "week_min": sum(c["week_min"] for c in active),
+                    "weekly_min": sum(c["weekly_min"] for c in active), "net": round(sum(c["net"] for c in cards), 2)},
+    }
+
+
+def project_view(core: Any, project_id: str) -> dict[str, Any]:
+    from arvix import projects
+
+    if gentle(core):
+        return {"gentle": True}
+    p = projects.resolve(core, project_id)
+    s = projects.stats(core, p)
+    st = core.state
+    tasks = sorted((t for t in st.tasks.values() if t.project == p["id"] and t.status != "cancelled"),
+                   key=lambda t: (t.local_date, t.start or "99"), reverse=True)
+    log = [x for x in st.project_log if x["project_id"] == p["id"]]
+    money = [x for x in st.project_money if x["project_id"] == p["id"]]
+    return {
+        **_project_card(core, p), "gentle": False,
+        "milestones": [{k: m.get(k) for k in ("id", "title", "dod", "due", "status", "done_date")} for m in projects.milestones(core, p["id"])],
+        "tasks": [task_view(t) for t in tasks[:30]], "log": list(reversed(log[-60:])), "money": list(reversed(money[-60:])),
+        "channels": s["channels"], "task_min": s["task_min"], "said_min": s["said_min"], "per_hour": s["per_hour"],
+        "month_income": s["month_income"], "month_expense": s["month_expense"], "note_path": projects.note_path(core, p),
+    }
+
+
+def project_save(fields: dict[str, Any]) -> Any:
+    """Новый проект или правка карточки (поле id)."""
+    def run(bot: Any) -> dict[str, Any]:
+        from arvix import projects
+
+        skills = fields.get("skills")
+        if isinstance(skills, str):
+            skills = [x.strip() for x in skills.split(",")]
+        pid = projects.set_project(
+            bot.core, str(fields.get("title") or ""), project_id=fields.get("id") or None, why=str(fields.get("why") or ""),
+            kind=fields.get("kind"), expectation=str(fields.get("expectation") or ""), deadline=fields.get("deadline") or None,
+            weekly_min=fields.get("weekly_min"), goal_id=fields.get("goal_id") or None, status=fields.get("status") or None,
+            skills=skills, link=str(fields.get("link") or ""), reason=str(fields.get("reason") or ""), source="web",
+        )
+        return {"project": _project_card(bot.core, bot.core.state.projects[pid])}
+    return run
+
+
+def project_op(project_id: str, op: str, body: dict[str, Any]) -> Any:
+    """milestone · log · money · channel · block · status · export — по кнопкам вкладки «Проекты»."""
+    def run(bot: Any) -> dict[str, Any]:
+        from arvix import projects
+
+        core = bot.core
+        pid = projects.resolve(core, project_id)["id"]
+        out: dict[str, Any] = {}
+        if op == "milestone":
+            projects.set_milestone(core, pid, str(body.get("title") or ""), milestone_id=body.get("milestone") or None,
+                                   due=body.get("due") or None, dod=str(body.get("dod") or ""), status=body.get("status") or None,
+                                   source="web")
+        elif op == "log":
+            projects.log_entry(core, pid, str(body.get("text") or ""), kind=str(body.get("kind") or "update"),
+                               minutes=body.get("minutes") or 0, source="web")
+        elif op == "money":
+            projects.log_money(core, pid, body.get("amount"), direction=str(body.get("direction") or "out"),
+                               category=str(body.get("category") or ""), note=str(body.get("note") or ""),
+                               channel_id=body.get("channel") or None, source="web")
+        elif op == "channel":
+            projects.set_channel(core, pid, str(body.get("name") or ""), channel_id=body.get("channel") or None,
+                                 type=body.get("type") or None, hypothesis=str(body.get("hypothesis") or ""), cost=body.get("cost"),
+                                 leads=body.get("leads"), clients=body.get("clients"), revenue=body.get("revenue"),
+                                 status=body.get("status") or None, note=str(body.get("note") or ""), source="web")
+        elif op == "block":
+            task = projects.plan_block(core, pid, minutes=int(body.get("minutes") or 60), day=body.get("date") or None,
+                                       start=body.get("start") or None, source="web")
+            out = {"task": task_view(task), "warnings": core.task_warnings(task)}
+            bot.refresh_panel()
+        elif op == "status":
+            projects.set_project(core, project_id=pid, status=str(body.get("status") or ""), reason=str(body.get("reason") or ""),
+                                 source="web")
+        elif op == "export":
+            out = {"path": projects.export_note(core, pid, source="web")}
+        else:
+            raise ArvixError(f"Неизвестное действие проекта: {op}")
+        return {**out, "project": project_view(core, pid)}
+    return run
 
 
 # --- изменения: выполняются в главном потоке (fn(bot)) ------------------------------------

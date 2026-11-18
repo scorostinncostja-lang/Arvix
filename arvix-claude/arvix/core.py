@@ -387,6 +387,7 @@ class Core:
         day: Any = None,
         tags: list[str] | tuple[str, ...] = (),
         task_source: str = "user",
+        project: str | None = None,
         source: str = "claude",
     ) -> Task:
         title = str(title).strip()
@@ -396,6 +397,10 @@ class Core:
         importance = rules.clamp(int(importance), 1, 5)
         difficulty = rules.clamp(int(difficulty), 1, 5)
         target = self.parse_day(day)
+        if project:
+            from arvix import projects
+
+            project = projects.resolve(self, project)["id"]  # чужой или выдуманный id — отказ, а не задача-сирота
         with self.tx():
             debts = self.state.debts()
             # В 🟥 живые люди — часть восстановления, а не «необязательное»: блок снимается.
@@ -414,6 +419,7 @@ class Core:
                     "duration_min": max(0, int(duration_min or 0)), "deep_work": bool(deep_work),
                     "proof": rules.derive_proof(importance, sphere, bool(deep_work)),
                     "source": task_source, "tags": [str(t) for t in tags],
+                    **({"project": project} if project else {}),
                 },
                 source=source,
                 entity_id=task_id,

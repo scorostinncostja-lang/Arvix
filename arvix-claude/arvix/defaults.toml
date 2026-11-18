@@ -29,6 +29,7 @@ inbox = "05_System/Inbox.md"
 system = "05_System/Арвикс"         # журнал, инсайты, бэкапы
 daily = ""                          # пусто — папка ежедневных заметок из настроек Obsidian
 daily_template = ""                 # пусто — шаблон из настроек Obsidian
+projects = "01_Projects"            # карточки проектов (портфолио) — блоком Арвикса в заметке проекта
 
 [schedule]
 brief = "auto"          # auto = время подъёма из профиля + 15 мин
@@ -92,6 +93,9 @@ check_questions = 3           # вопросов проверки в конце 
 tools = []                    # что ещё есть у человека, кроме названного в его заметках: ["Anki", "NotebookLM"]
 concept_dir = ""              # папка для каркасов заметок; пусто — папка с «concept» в названии или [vault_paths] notes
 concept_template = ""         # шаблон заметки; пусто — Templates/Concept.md из хранилища, если есть
+
+[projects]                    # проекты (D43, 02-MECHANICS §14)
+max_active = 3                # в работе одновременно; остальное — идеи и пауза
 
 [mechanics]
 sleep_target_min = 450        # 7.5 ч, 02-MECHANICS §5

@@ -30,6 +30,8 @@ ACTION_TYPES = (
     "add_task", "complete_task", "fail_task", "defer_task", "cancel_task", "start_task",
     "log_sleep", "log_expense", "log_social", "remember", "note", "profile_set",
     "set_goal", "add_trait", "declare_reason", "learning_question", "safety_flag", "set_template",
+    # Проекты (D43): карточка, этап с критерием, блок в план, журнал, деньги, канал привлечения.
+    "set_project", "set_milestone", "plan_project", "project_log", "project_money", "project_channel",
 ) + (
     # Действия интерфейса: их исполняет бот после ответа, а не ядро (05-INTERFACES §2.1).
     # Так человек говорит словами, а не командами: «давай позанимаемся физикой» → урок.
@@ -42,6 +44,8 @@ ACTION_RU = {
     "start_task": "старт", "log_sleep": "сон", "log_expense": "трата", "log_social": "социум", "remember": "память",
     "note": "заметка", "profile_set": "профиль", "set_goal": "цель", "add_trait": "черта", "declare_reason": "причина дня",
     "learning_question": "учебный вопрос", "safety_flag": "safety", "set_template": "распорядок",
+    "set_project": "проект", "set_milestone": "этап проекта", "plan_project": "блок проекта", "project_log": "журнал проекта",
+    "project_money": "деньги проекта", "project_channel": "канал привлечения",
 }
 
 _ACTION_FIELDS = {
@@ -64,9 +68,22 @@ _ACTION_FIELDS = {
     "goal_id": {"type": "string", "description": "для set_goal: id существующей цели — исправить её (kind, deadline, metric, status=dropped)"},
     "parent_id": {"type": "string", "description": "для set_goal: id цели, этапом которой становится эта"},
     "metric": {"type": "string", "description": "для set_goal: как проверить достижение — число, оценка, результат"},
-    "status": {"type": "string", "enum": ["active", "done", "dropped"]},
+    "status": {"type": "string", "enum": ["active", "done", "dropped", "idea", "paused", "open", "test", "works"],
+               "description": "цель: active/done/dropped; проект: idea/active/paused/done/dropped (done и dropped — с итогом в reason); "
+                              "этап: open/done/dropped; канал: test/works/dropped"},
     "weekdays": {"type": "array", "items": {"type": "integer"}, "description": "для set_template: 0=пн … 6=вс"},
     "day_type": {"type": "string", "enum": ["study", "work", "deep", "recovery", "silent"]},
+    "project": {"type": "string", "description": "id проекта из блока ПРОЕКТЫ: для add_task — блок работает на проект; для set_project — правка"},
+    "milestone": {"type": "string", "description": "для set_milestone: id этапа — отметить (status=done/dropped) или исправить"},
+    "dod": {"type": "string", "description": "для set_milestone: критерий готовности этапа — как проверить, что он сделан"},
+    "expectation": {"type": "string", "description": "для set_project: что должно быть в конце, проверяемо"},
+    "weekly_min": {"type": "integer", "description": "для set_project: минут в неделю на проект"},
+    "skills": {"type": "array", "items": {"type": "string"}, "description": "для set_project: навыки, которые даёт проект"},
+    "direction": {"type": "string", "enum": ["in", "out"], "description": "для project_money: in — доход, out — расход"},
+    "hypothesis": {"type": "string", "description": "для project_channel: что ждём от канала, с числом и сроком"},
+    "cost": {"type": "number"}, "leads": {"type": "integer"}, "clients": {"type": "integer"}, "revenue": {"type": "number"},
+    "channel": {"type": "string", "description": "для project_channel: id канала — обновить итоги"},
+    "link": {"type": "string"},
     "blocks": {
         "type": "array",
         "items": {
@@ -365,6 +382,50 @@ def _start_from_deadline(action: dict[str, Any]) -> str | None:
     return f"{max(total, 0) // 60:02d}:{max(total, 0) % 60:02d}"
 
 
+PROJECT_ACTIONS = frozenset({"set_project", "set_milestone", "plan_project", "project_log", "project_money", "project_channel"})
+
+
+def _project_action(core: Core, kind: str, a: dict[str, Any], source: str) -> tuple[str, list[str]]:
+    """Действия проекта — те же операции L0, что у кнопок приложения (arvix/projects.py)."""
+    from arvix import projects
+
+    if kind == "set_project":
+        pid = projects.set_project(
+            core, a.get("title", ""), project_id=a.get("project") or None, why=a.get("why", ""), kind=a.get("kind"),
+            expectation=a.get("expectation") or a.get("metric") or "", deadline=a.get("deadline"), weekly_min=a.get("weekly_min"),
+            goal_id=a.get("goal_id") or None, status=a.get("status"), skills=a.get("skills"), link=a.get("link", ""),
+            reason=a.get("reason") or a.get("report") or "", source=source,
+        )
+        p = core.state.projects[pid]
+        return f"проект «{p['title']}» · {projects.STATUSES[p['status']]}", [f"проект «{p['title']}»: {i}" for i in projects.issues(core, p)[:3]]
+    project = projects.resolve(core, a.get("project") or a.get("goal_id") or "")
+    if kind == "set_milestone":
+        status = a.get("status") if a.get("status") in projects.MILESTONE_STATUSES else None
+        projects.set_milestone(core, project["id"], a.get("title", ""), milestone_id=a.get("milestone") or None,
+                               due=a.get("deadline") or a.get("date"), dod=a.get("dod") or a.get("metric") or "",
+                               status=status, source=source)
+        return f"этап «{a.get('title') or core.state.milestones[a['milestone']]['title']}» · {project['title']}" + (
+            " · пройден" if status == "done" else ""), []
+    if kind == "plan_project":
+        task = projects.plan_block(core, project["id"], minutes=a.get("duration_min") or a.get("minutes") or 60,
+                                   day=a.get("date"), start=a.get("start"), title=a.get("title", ""), source=source)
+        return f"+ {task.title} · {task.start}, {task.duration_min} мин" + (" · завтра" if task.local_date > core.today() else ""), \
+            core.task_warnings(task)
+    if kind == "project_log":
+        entry = projects.log_entry(core, project["id"], a.get("text") or a.get("report") or "", kind=a.get("kind") or "update",
+                                   minutes=a.get("minutes") or 0, source=source)
+        return f"журнал «{project['title']}»: {projects.LOG_KINDS[entry['kind']]}", []
+    if kind == "project_money":
+        m = projects.log_money(core, project["id"], a.get("amount"), direction=a.get("direction") or "out",
+                               category=a.get("category", ""), note=a.get("text", ""), channel_id=a.get("channel") or None, source=source)
+        return f"{'доход' if m['direction'] == 'in' else 'расход'} {m['amount']:.0f} · {project['title']}", []
+    projects.set_channel(core, project["id"], a.get("title", ""), channel_id=a.get("channel") or None, type=a.get("kind"),
+                         hypothesis=a.get("hypothesis", ""), cost=a.get("cost"), leads=a.get("leads"), clients=a.get("clients"),
+                         revenue=a.get("revenue"), status=a.get("status") if a.get("status") in projects.CHANNEL_STATUSES else None,
+                         note=a.get("text", ""), source=source)
+    return f"канал «{a.get('title') or a.get('channel')}» · {project['title']}", []
+
+
 def apply_actions(
     core: Core, actions: list[dict[str, Any]], *, source: str = "telegram", fallback_report: str | None = None,
 ) -> tuple[list[str], list[str], list[str]]:
@@ -386,7 +447,8 @@ def apply_actions(
                     action.get("title", ""), sphere=action.get("sphere") or "project",
                     importance=action.get("importance") or 3, difficulty=action.get("difficulty") or 3,
                     start=_start_from_deadline(action), duration_min=action.get("duration_min") or 60,
-                    deep_work=bool(action.get("deep_work")), day=action.get("date"), source=source,
+                    deep_work=bool(action.get("deep_work")), day=action.get("date"), project=action.get("project") or None,
+                    source=source,
                 )
                 when = (f"{task.start}, " if task.start else "") + f"{task.duration_min} мин"
                 done.append(f"+ {task.title} · {when}" + (" · завтра" if task.local_date > core.today() else ""))
@@ -448,6 +510,10 @@ def apply_actions(
             elif kind == "set_template":
                 core.set_template(action.get("weekdays") or [], action.get("day_type", ""), action.get("blocks") or [], source=source)
                 done.append(f"шаблон «{action.get('day_type')}» для дней {action.get('weekdays')}")
+            elif kind in PROJECT_ACTIONS:
+                line, extra = _project_action(core, kind, action, source)
+                done.append(line)
+                warnings += extra
         except ArvixError as exc:
             failed.append(f"{ACTION_RU.get(kind, kind)} — {exc}")
         except (KeyError, TypeError, ValueError) as exc:

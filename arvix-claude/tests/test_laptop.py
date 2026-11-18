@@ -85,7 +85,7 @@ class LaptopLayoutTest(unittest.TestCase):
     def test_sidebar_markup(self) -> None:
         html = (STATIC / "index.html").read_text()
         self.assertIn('class="brand"', html)
-        self.assertEqual(html.count("data-tab="), 4)
+        self.assertEqual(html.count("data-tab="), 5)  # Сегодня · Арвикс · Заметки · Проекты (D43) · Прогресс
 
 
 if __name__ == "__main__":
