@@ -3,6 +3,10 @@
 State.apply(event) — инкремент, State.rebuild(events) — полный пересчёт.
 Инвариант «rebuild() == накопленный apply()» проверяется тестом. Поля State
 снаружи не меняются: только новым событием через Core.emit().
+
+Игры нет (D41): XP, уровней, HP, щитов, Протокола Ноль, сезонов и серии больше не
+считаем. Их старые события (xp_awarded, hp_changed, shield_used, protocol_zero)
+остаются в журнале — он только дополняется, — но в свёртку не входят.
 """
 
 from __future__ import annotations
@@ -35,11 +39,10 @@ class Task:
     status: str = "planned"  # planned | active | done | failed | debt | cancelled | written_off
     actual_start: str | None = None
     done_pct: int = 0
-    xp: int = 0
     report: str | None = None
     debt_since: date | None = None
     reason: str | None = None
-    focus_min: int = 0  # фокус-сессии по этой задаче (таймер) — K_proof «timer» при закрытии
+    focus_min: int = 0  # фокус-сессии по этой задаче (таймер): при закрытии — глубокие минуты и подтверждение «таймер»
 
     @property
     def is_open(self) -> bool:
@@ -52,8 +55,6 @@ class Day:
     sleep_min: int | None = None
     bedtime: str | None = None
     deep_min: int = 0
-    xp: int = 0
-    hp_end: int | None = None
     debrief: bool = False
     user_actions: int = 0
     msgs_out: int = 0
@@ -64,7 +65,6 @@ class Day:
     day_type: str | None = None
     social: int = 0
     expenses: float = 0.0
-    damages: list[tuple[int, str]] = field(default_factory=list)
     closed: dict[str, Any] | None = None
     focus: list[dict[str, Any]] = field(default_factory=list)  # сессии таймера: минуты, задача или тема, заметка
 
@@ -82,20 +82,15 @@ class State:
     days: dict[date, Day] = field(default_factory=dict)
     interview: dict[str, str] = field(default_factory=dict)
     interview_skipped: set[str] = field(default_factory=set)
-    xp_total: int = 0
-    hp: int = rules.HP_MAX
     mode: str = "normal"
     mode_trigger: str = ""
     mentor_enabled: bool = True
     sos_until: str | None = None
     recovery_until: str | None = None  # «Вернуться к плану» после 🟥: до этого момента режим не выше 🟨 (D38)
-    zero_until: str | None = None
-    shields: list[date] = field(default_factory=list)
     expenses: list[dict[str, Any]] = field(default_factory=list)
     learning: list[dict[str, Any]] = field(default_factory=list)
     lessons: list[dict[str, Any]] = field(default_factory=list)  # учебные блоки: тема, задача, оценка проверки
     safety: list[dict[str, Any]] = field(default_factory=list)
-    penalized: set[str] = field(default_factory=set)
     notes: dict[str, str] = field(default_factory=dict)  # заметки Арвикса: путь → хэш последней записи
     budget: dict[str, Any] = field(default_factory=dict)
     last_user_at: str | None = None
@@ -191,7 +186,6 @@ class State:
         if task := self._task(p):
             task.status = "done"
             task.done_pct = int(p.get("done_pct", 100))
-            task.xp = int(p.get("xp", 0))
             task.report = p.get("report")
             self.day(task.local_date).deep_min += int(p.get("deep_min", 0))
 
@@ -223,24 +217,6 @@ class State:
         if task := self._task(p):
             task.status = "written_off"
             task.reason = p.get("justification")
-
-    def _on_xp_awarded(self, ev: Event, p: dict, day: Day) -> None:
-        amount = int(p["amount"])
-        self.xp_total += amount
-        self.day(date.fromisoformat(p["date"]) if p.get("date") else ev.local_date).xp += amount
-
-    def _on_hp_changed(self, ev: Event, p: dict, day: Day) -> None:
-        amount = int(p["amount"])
-        self.hp = rules.clamp(self.hp + amount, 0, rules.HP_MAX)
-        target = self.day(date.fromisoformat(p["date"])) if p.get("date") else day
-        target.hp_end = self.hp
-        if amount < 0:
-            target.damages.append((amount, p.get("reason", "")))
-        if p.get("once_key"):
-            self.penalized.add(p["once_key"])
-
-    def _on_shield_used(self, ev: Event, p: dict, day: Day) -> None:
-        self.shields.append(date.fromisoformat(p["date"]) if p.get("date") else ev.local_date)
 
     def _on_reason_declared(self, ev: Event, p: dict, day: Day) -> None:
         day.reason = p["reason"]
@@ -328,9 +304,6 @@ class State:
     def _on_recovery_started(self, ev: Event, p: dict, day: Day) -> None:
         self.recovery_until = p.get("until")
 
-    def _on_protocol_zero(self, ev: Event, p: dict, day: Day) -> None:
-        self.zero_until = p.get("until") if p.get("on") else None
-
     def _on_note_written(self, ev: Event, p: dict, day: Day) -> None:
         if p.get("owned"):
             self.notes[p["path"]] = p["sha"]
@@ -360,9 +333,6 @@ class State:
         done = sum(t.done_pct / 100 for t in tasks if t.status == "done")
         return round(done / len(tasks) * 100, 1)
 
-    def level(self) -> tuple[int, int, int]:
-        return rules.level_info(self.xp_total)
-
     def series(self, until: date, n: int, attr: str) -> list[Any]:
         out = []
         for i in range(n - 1, -1, -1):
@@ -374,25 +344,12 @@ class State:
                 out.append(getattr(self.days.get(d), attr, None) if d in self.days else None)
         return out
 
-    def streak(self, today: date) -> int:
-        """Подряд закрытых дней с выполнением ≥ 70%. Дни без задач стрик не рвут."""
-        count, d = 0, today - timedelta(days=1)
-        while d in self.days and self.days[d].closed:
-            completion = self.days[d].closed.get("completion")
-            if completion is not None:
-                if completion < 70:
-                    break
-                count += 1
-            d -= timedelta(days=1)
-        return count
-
     def ignore_streak(self, until: date) -> int:
         """Сколько дней (до until включительно) бот писал, а человек молчал.
 
         Серию рвёт только действие человека. Дни, когда бот ничего не отправлял
         (ноутбук спал, недельная пауза протокола игнора), её не рвут и не удлиняют:
-        иначе после восьми дней тишины протокол начинался бы заново с «обычного дня»
-        и снова снимал HP."""
+        иначе после восьми дней тишины протокол начинался бы заново с «обычного дня»."""
         if self.first_date is None:
             return 0
         count, d = 0, until
@@ -404,9 +361,6 @@ class State:
                 count += 1
             d -= timedelta(days=1)
         return count
-
-    def shields_used(self, d: date) -> int:
-        return sum(1 for s in self.shields if (s.year, s.month) == (d.year, d.month))
 
     def autonomy(self, today: date, days: int = 28) -> dict[str, Any]:
         """Автономность (00-VISION §5): насколько человек держит день без бота.

@@ -2,12 +2,12 @@
 
 ## 1. Принцип: журнал событий + свёртка
 
-Всё, что происходит, пишется в **append-only** таблицу `events`. Состояние (XP, HP, задачи, режим, профиль) —
+Всё, что происходит, пишется в **append-only** таблицу `events`. Состояние (задачи, долг, режим, профиль) —
 производное: `State.rebuild(events)` сворачивает журнал с нуля, `State.apply(event)` — инкрементально.
 Инвариант «rebuild = накопленный apply» проверяется тестом на случайной истории из 220 операций.
 
 Почему так:
-- формулы XP/HP будут меняться — с журналом история пересчитывается, а не теряется;
+- правила будут меняться — с журналом история пересчитывается, а не теряется (так ушли XP и HP, D41: события остались, свёртка их не читает);
 - любой отчёт за любой период строится из одной таблицы;
 - аналитик получает сырую ленту с id событий, а не чью-то интерпретацию;
 - невозможно «потерять» историю кривым UPDATE — его запрещает триггер.
@@ -60,7 +60,7 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `day_materialized` | `date, day_type` | scheduler |
 | `task_created` | снимок задачи: `id, title, sphere, importance, difficulty, date, start, duration_min, deep_work, proof, source, tags` | человек, модель, scheduler |
 | `task_started` | `id, at` | человек |
-| `task_completed` | `id, done_pct, xp, report, proof_kind, deep_min[, focus_min, doubts]` — `focus_min` есть, когда таймер покрыл ≥ половины блока (K_proof timer) | человек, модель |
+| `task_completed` | `id, done_pct, report, proof_kind, deep_min[, focus_min, doubts]` — `focus_min` есть, когда таймер покрыл ≥ половины блока; `xp` — только в событиях до 0.6 | человек, модель |
 | `task_failed` | `id, reason, debt, hp` | человек, модель, scheduler (`no_report`) |
 | `task_reason` | `id, reason` — причина, присланная позже | человек |
 | `task_deferred` | `id, from, to, date, minutes` | человек, модель |
@@ -74,27 +74,24 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `lesson_checked` | `task_id, score_pct (null — голова недоступна), answers, gaps[], next_step` — проверка в конце блока; `State.lessons` | код + модель |
 | `expense_logged` | `amount, currency, category, impulse, note` | человек, модель |
 | `social_contact` | `who` | человек, модель |
-| `reason_declared` | `reason` — причина плохого дня для щита | человек, модель |
+| `reason_declared` | `reason` — причина плохого дня: важное, не сделанное в этот день, не уходит в долг | человек, модель |
 | `silent_day` | `date` | человек, scheduler |
 | `debrief_completed` | `date, answers, conclusion` | человек, модель |
 | `learning_question` | `question, mode (hint·direct)` | модель |
 | `note_captured` | `text, path` — Inbox | человек, модель |
 | `note_written` | `path, sha, owned, mode, created, backup` — чтобы отличать свои заметки от чужих; `mode = edit \| create` — правка человека из приложения (`owned = false`) | l0, человек |
 
-### Счёт и режимы (пишет только код)
+### Режимы и итоги (пишет только код)
 | kind | payload | источник |
 |---|---|---|
-| `xp_awarded` | `amount ≥ 0, reason (task:<id>, full_day, sleep_norm, quota:<sphere>, silent_day), date?` | l0, scheduler |
-| `hp_changed` | `amount, reason, date?, once_key?` — отрицательные попадают в `Day.damages` для щита | l0, scheduler |
-| `shield_used` | `date, reason, damage_prevented, target` | scheduler |
+| `xp_awarded` · `hp_changed` · `shield_used` · `protocol_zero` | **устарели (D41).** С 0.6 не пишутся; старые остаются в журнале, свёртка их не читает | — |
 | `mode_changed` | `from, to, trigger` | l0, scheduler |
 | `sos` | `on, until, note` — ручной 🟥 на 24 ч | человек, модель |
 | `recovery_started` | `until` — человек нажал «Вернуться к плану»: до смены дня режим не выше 🟨, SOS снят (D38) | только человек (кнопка, MCP `mode resume` с подтверждением) |
-| `protocol_zero` | `on, until` | scheduler |
 | `safety_flag` | `level (high·critical), note` — выключает ментора; `info`/`low` в журнал не пишутся, а становятся фактом | l0, l1, модель |
 | `quota_result` | `sphere, target, actual, met, week` | scheduler |
 | `budget_set` | `week_min, deep_min, factors{}, streaks{}, verdict (up·down·hold), reason, change, from_*` | scheduler |
-| `day_closed` | `date, completion, total, done, deep_min, sleep_min, sp, ignored, penalty_mult, hp_end, mode` | scheduler |
+| `day_closed` | `date, completion, total, done, deep_min, sleep_min, ignored, frozen, mode`; до 0.6 ещё `sp, penalty_mult, hp_end` | scheduler |
 
 ### Совет и переписка
 | kind | payload | источник |
@@ -107,7 +104,7 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 Переписка (`message_in`, `message_out`) хранится целиком, до 16 000 символов (D25); `channel` — `telegram`, `web` или
 `terminal`; у `message_out` бывают `buttons` — приложение показывает те же кнопки. Производные данные вне журнала:
 FTS5-индекс `memory_fts` (поиск по памяти) и в runtime-таблице — ключ приложения `web_token`, кэш погоды, отметки
-`dialog_day`, `last_in_at`, `curiosity_tried`. Ни XP, ни задач в них нет.
+`dialog_day`, `last_in_at`, `curiosity_tried`. Ни задач, ни режима в них нет.
 
 ## 3. Состояние — `State`
 
@@ -135,8 +132,8 @@ materialized, day_type, social, expenses, damages[], closed{}`.
 
 | # | Инвариант | Тест |
 |---|---|---|
-| 1 | Пересчёт из журнала даёт те же XP, HP, статусы задач и закрытия дней, что накопленное состояние | `test_rebuild_equals_incremental_on_random_history` |
-| 2 | `hp ∈ [0, 100]`; `xp_total` не убывает; сумма `xp_awarded` = `xp_total` | там же, `arvix rebuild` на живой базе |
+| 1 | Пересчёт из журнала даёт те же статусы задач, закрытия дней и режим, что накопленное состояние | `test_rebuild_equals_incremental_on_random_history` |
+| 2 | Игровых событий (`xp_awarded`, `hp_changed`, `shield_used`, `protocol_zero`) код больше не пишет, и они ни на что не влияют | там же, `tests/test_no_game.py` |
 | 3 | `done` не возвращается в `planned`; повторное закрытие или провал закрытой задачи отклоняется | `test_done_cannot_go_back` |
 | 4 | События не редактируются и не удаляются — триггеры SQLite | `test_append_only` |
 | 5 | Директива без `evidence` или со ссылкой на несуществующее событие отклоняется | `test_directive_requires_evidence`, `test_directive_needs_evidence` |
@@ -146,7 +143,7 @@ materialized, day_type, social, expenses, damages[], closed{}`.
 | 9 | Имена моделей отсутствуют в коде | `test_no_model_names_in_code` |
 | 10 | Сгенерированные файлы (стиль, claude.ai) соответствуют конституции | `test_generated_assets_are_fresh` |
 
-`arvix rebuild` прогоняет инварианты 1–2 на живой базе и выходит с кодом 1 при расхождении.
+`arvix rebuild` прогоняет инвариант 1 и «день закрыт один раз» на живой базе и выходит с кодом 1 при расхождении.
 
 ## 5. Obsidian — второе хранилище
 

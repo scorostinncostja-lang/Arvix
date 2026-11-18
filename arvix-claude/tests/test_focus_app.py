@@ -145,7 +145,7 @@ class HeatmapTest(BotCase):
         self.assertEqual(web_api.heat_level(70, 0, 2, 60), 3)  # день серии
         self.assertEqual(web_api.heat_level(100, 120, 3, 90), 4)
 
-    def test_year_grid_streak_and_best(self) -> None:
+    def test_year_grid_counts_days_with_work(self) -> None:
         for day in (2, 3, 4):  # три дня по 100 %
             self.at(moscow(2026, 11, day, 10, 0))
             self.core.refresh()
@@ -167,7 +167,8 @@ class HeatmapTest(BotCase):
         self.assertEqual(by["2026-11-03"]["level"], 3)
         self.assertEqual(by["2026-11-05"]["level"], 0)
         self.assertEqual(by["2026-10-20"]["level"], -1)  # до начала учёта
-        self.assertEqual((heat["streak"], heat["best"], heat["active"]), (0, 3, 3))
+        self.assertEqual(heat["active"], 3)
+        self.assertNotIn("streak", heat)  # история, а не игра: серий и рекордов нет (D41)
 
     def test_red_mode_has_no_heatmap(self) -> None:
         self.core.sos(True, note="плохо")

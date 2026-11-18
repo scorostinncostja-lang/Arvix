@@ -22,8 +22,8 @@ class EventLogTest(ArvixCase):
         conn.close()
 
     def test_rebuild_equals_incremental_on_random_history(self) -> None:
-        """Инвариант 1: пересчёт из журнала = накопленное состояние. Плюс HP в
-        [0, 100] (инв. 2) и сумма xp_awarded = xp_total (инв. 4)."""
+        """Инвариант 1: пересчёт из журнала = накопленное состояние. Игровых событий
+        (xp_awarded, hp_changed) в журнале больше не появляется (D41)."""
         rnd = random.Random(42)
         day = moscow(2026, 11, 2, 8, 0)
         for step in range(220):
@@ -52,13 +52,10 @@ class EventLogTest(ArvixCase):
         events = self.core.store.read(0)
         fresh = State.rebuild(events)
         live = self.core.state
-        self.assertEqual(fresh.xp_total, live.xp_total)
-        self.assertEqual(fresh.hp, live.hp)
+        self.assertEqual((fresh.mode, fresh.mode_trigger), (live.mode, live.mode_trigger))
         self.assertEqual({k: t.status for k, t in fresh.tasks.items()}, {k: t.status for k, t in live.tasks.items()})
         self.assertEqual({d: x.closed for d, x in fresh.days.items()}, {d: x.closed for d, x in live.days.items()})
-        self.assertTrue(0 <= live.hp <= 100)
-        self.assertEqual(sum(int(e.payload["amount"]) for e in events if e.kind == "xp_awarded"), live.xp_total)
-        self.assertTrue(all(int(e.payload["amount"]) >= 0 for e in events if e.kind == "xp_awarded"))
+        self.assertFalse({e.kind for e in events} & {"xp_awarded", "hp_changed", "shield_used", "protocol_zero"})
         self.assertGreaterEqual(sum(1 for e in events if e.kind == "day_closed"), 5)
 
     def test_other_process_writes_are_seen(self) -> None:
@@ -83,7 +80,7 @@ class TaskOpsTest(ArvixCase):
         with self.assertRaises(ArvixError):
             self.core.complete_task(task.id)
         result = self.core.complete_task(task.id, report="графы, 3 задачи")
-        self.assertGreater(result["xp"], 0)
+        self.assertNotIn("xp", result)
         self.assertEqual(self.core.state.days[task.local_date].deep_min, task.duration_min)
 
     def test_important_failure_goes_to_debt_and_blocks_optional(self) -> None:
@@ -91,8 +88,7 @@ class TaskOpsTest(ArvixCase):
             task = self.core.add_task(title, importance=5, start="09:00")
             result = self.core.fail_task(task.id, reason="не успел")
             self.assertTrue(result["debt"])
-            self.assertEqual(result["hp"], -12)
-        self.assertEqual(self.core.state.hp, 76)
+            self.assertNotIn("hp", result)
         with self.assertRaises(ArvixError) as ctx:
             self.core.add_task("Кино с друзьями", sphere="social", start="19:00")
         self.assertIn("Долг", str(ctx.exception))

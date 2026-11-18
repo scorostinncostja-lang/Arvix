@@ -1,8 +1,9 @@
 """Core — фасад L0. Каждая операция: проверка → формула → событие в журнал.
 
 Им пользуются все лица Арвикса: MCP-сервер (Claude Code / Desktop), Telegram-бот
-и CLI. Модель сюда напрямую не пишет — она только вызывает операции, а числа
-(XP, HP, долг, режим) считает код (00-VISION П3, правило №1 CLAUDE.md).
+и CLI. Модель сюда напрямую не пишет — она только вызывает операции, а решения
+(долг, режим, нагрузку) принимает код (00-VISION П3, правило №1 CLAUDE.md).
+Игры нет (D41): ни очков, ни здоровья, ни уровней — только факты.
 """
 
 from __future__ import annotations
@@ -30,7 +31,6 @@ GOAL_KINDS = ("dream", "main", "yearly", "quarterly", "milestone")
 GOAL_STATUSES = ("active", "done", "dropped")
 DAY_TYPES = ("study", "work", "deep", "recovery", "silent")
 SOS_HOURS = 24
-ZERO_HOURS = 48
 
 
 class ArvixError(ValueError):
@@ -232,10 +232,6 @@ class Core:
         until = self.state.sos_until
         return bool(until) and datetime.fromisoformat(until) > self.now()
 
-    def zero_active(self) -> bool:
-        until = self.state.zero_until
-        return bool(until) and datetime.fromisoformat(until) > self.now()
-
     def effective_mode(self) -> str:
         """Выключенный ментор (safety-контур) по тону равен 🟥 — правило №5."""
         return "red" if not self.state.mentor_enabled else self.state.mode
@@ -260,9 +256,7 @@ class Core:
         mode, trigger = rules.guard_mode(
             sleep=self.state.series(today, 3, "sleep_min"),
             completion=self.guard_completion(today - timedelta(days=1)),
-            hp=self.state.hp,
             sos=self.sos_active(),
-            sleep_target=self.sleep_target(),
             recovery=self.recovery_active(),
             after_red=bool(yesterday and yesterday.closed and yesterday.closed.get("mode") == "red"),
         )
@@ -289,11 +283,8 @@ class Core:
     def red_exit(self) -> str:
         """Как выйти из 🟥 — фактом для модели и человека, а не надеждой «цифры подтянутся сами»."""
         trigger = self.state.mode_trigger
-        sleep = f"сон от {self.sleep_target() // 60}ч{self.sleep_target() % 60:02d}м сегодня"
         if trigger.startswith("ручной"):
             return "кнопка «Вернуться к плану» или сам через сутки после включения"
-        if trigger.startswith("HP"):
-            return f"{sleep} (запиши его — режим пересчитается сразу) или кнопка «Вернуться к плану»"
         if trigger.startswith("сон"):
             return "нормальный сон сегодня (запиши его — режим пересчитается сразу) или кнопка «Вернуться к плану»"
         return "кнопка «Вернуться к плану»; без неё — сам, когда дни без плана выйдут из недельного окна"
@@ -353,17 +344,13 @@ class Core:
             items.append("главной цели нет — без неё план не к чему привязать")
         return items[:limit]
 
-    def penalty_multiplier(self, d: date | None = None, ignore_days: int = 0) -> float:
+    def frozen(self, d: date | None = None) -> bool:
+        """Важное, не сделанное в этот день, не уходит в долг: 🟥, тихий день, ментор выключен,
+        3+ дня тишины, заявленная причина (rules.frozen)."""
         d = d or self.today()
         day = self.state.days.get(d)
-        return rules.penalty_multiplier(
-            mode=self.state.mode,
-            mentor_enabled=self.state.mentor_enabled,
-            hp=self.state.hp,
-            silent=bool(day and day.silent),
-            ignore_days=ignore_days,
-            protocol_zero=self.zero_active(),
-        )
+        return rules.frozen(mode=self.state.mode, mentor_enabled=self.state.mentor_enabled, silent=bool(day and day.silent),
+                            ignore_days=self.state.ignore_streak(d), reason=bool(day and day.reason))
 
     # --- задачи -------------------------------------------------------------
 
@@ -461,13 +448,9 @@ class Core:
             if kind == "photo" and task.proof != "photo":
                 kind = "report"
             pct = rules.clamp(int(done_pct), 1, 100)
-            delay = None
-            if task.actual_start and task.start:
-                delay = (datetime.fromisoformat(task.actual_start) - self.at(task.local_date, task.start)).total_seconds() / 60
             # Фокус-таймер по задаче хотя бы на половину её длительности — самое сильное
-            # доказательство из доступных (K_proof «timer», 02-MECHANICS §2); отчёт он не отменяет.
+            # доказательство из доступных; отчёт он не отменяет, в журнале видно оба.
             timed = task.focus_min and task.focus_min * 2 >= max(task.duration_min, 1)
-            xp = rules.task_xp(task.difficulty, task.importance, "timer" if timed else kind, delay, pct)
             deep = task.duration_min * pct // 100 if task.deep_work else 0
             now = self.now()
             doubts = checks.report_issues(
@@ -476,34 +459,29 @@ class Core:
                 datetime.fromisoformat(task.actual_start) if task.actual_start else None,
                 task.duration_min, pct,
             )
-            payload = {"id": task.id, "done_pct": pct, "xp": xp, "report": report, "proof_kind": kind, "deep_min": deep}
+            payload = {"id": task.id, "done_pct": pct, "report": report, "proof_kind": kind, "deep_min": deep}
             if timed:
                 payload["focus_min"] = task.focus_min
             if doubts:
                 payload["doubts"] = doubts  # отчёт записан, но сомнение видно в журнале и разборе
             self.emit("task_completed", payload, source=source, entity_id=task.id)
-            if xp:
-                self.emit("xp_awarded", {"amount": xp, "reason": f"task:{task.id}"}, source=source, entity_id=task.id)
         self.recompute_mode(source="l0")
-        return {"task": task, "xp": xp, "debt_closed": task.debt_since is not None, "warnings": doubts}
+        return {"task": task, "debt_closed": task.debt_since is not None, "warnings": doubts}
 
     def fail_task(self, ref: Any, *, reason: str = "", source: str = "claude") -> dict[str, Any]:
         with self.tx():
             task = self.resolve_task(ref)
             if not task.is_open:
                 raise ArvixError(f"«{task.title}» уже {STATUS_RU[task.status]}")
-            debt = task.importance >= 4
-            hp = round(rules.HP_FAIL[task.importance] * self.penalty_multiplier())
+            debt = task.importance >= 4 and not self.frozen()
             self.emit(
                 "task_failed",
-                {"id": task.id, "reason": (reason or "не указана")[:500], "debt": debt, "hp": hp},
+                {"id": task.id, "reason": (reason or "не указана")[:500], "debt": debt},
                 source=source,
                 entity_id=task.id,
             )
-            if hp:
-                self.emit("hp_changed", {"amount": hp, "reason": f"task_failed:{task.id}"}, source=source, entity_id=task.id)
         self.recompute_mode(source="l0")  # 1.3 плана: режим пересчитывается при закрытии/провале задачи
-        return {"task": task, "hp": hp, "debt": debt}
+        return {"task": task, "debt": debt}
 
     def explain_failure(self, ref: Any, reason: str, *, source: str = "claude") -> Task:
         """Причина провала, присланная позже кнопки «Нет» — отдельным событием,
@@ -620,14 +598,13 @@ class Core:
         return {"event_id": ev.id, "note": note[:1000]}
 
     def declare_reason(self, reason: str, *, source: str = "claude") -> dict[str, Any]:
-        """Причина дня («заболел», «семья») — при закрытии дня щит снимет самый
-        крупный урон, если жетоны ещё есть (02-MECHANICS §3)."""
+        """Причина дня («заболел», «семья»): важное, не сделанное сегодня, не уйдёт в долг,
+        а причина попадёт в разбор (02-MECHANICS §4). Щитов и жетонов больше нет (D41)."""
         if not reason.strip():
             raise ArvixError("Причина пуста")
         with self.tx():
             self.emit("reason_declared", {"reason": reason[:300]}, source=source)
-        left = int(self.cfg.mech("shields_per_month", 2)) - self.state.shields_used(self.today())
-        return {"shields_left": max(0, left)}
+        return {"reason": reason[:300]}
 
     @property
     def vault(self) -> Any:
@@ -873,8 +850,6 @@ class Core:
                 self.emit("profile_set", {"key": key, "value": value}, source="l0")
             if qid == "main_goal_why" and self.state.profile.get("main_goal") and not any(g.get("kind") == "main" for g in self.state.goals.values()):
                 self.set_goal(self.state.profile["main_goal"], why=answer, kind="main", source="l0")
-            if not self.state.profile.get("season_start"):
-                self.emit("profile_set", {"key": "season_start", "value": self.today().isoformat()}, source="l0")
         next_q = self.interview_next()
         block_done = next_q is None or next_q["block"] != question["block"]
         return {"saved": qid, "extracted": extracted, "block_done": block_done, "next": next_q}
@@ -1100,7 +1075,7 @@ class Core:
         часы из интервью или конфига, глубокая работа по умолчанию 35%."""
         st = self.state
         factors = load.factors_of(st.budget)
-        since = (st.budget or {}).get("since") or st.profile.get("season_start") or (st.first_date or self.today()).isoformat()
+        since = (st.budget or {}).get("since") or (st.first_date or self.today()).isoformat()
         if st.templates:
             week = load.week_load(st.templates, factors)
             total, deep = week["total"] - week["fixed"], week["deep"]  # бюджет — своё время, без школы и смен
@@ -1148,25 +1123,22 @@ class Core:
 
     # --- сводка -----------------------------------------------------------------------
 
-    def season(self) -> dict[str, Any]:
-        st = self.state
-        start = date.fromisoformat(st.profile.get("season_start") or (st.first_date or self.today()).isoformat())
-        days_in = (self.today() - start).days
-        number = days_in // (rules.SEASON_WEEKS * 7) + 1
-        season_start = start + timedelta(days=(number - 1) * rules.SEASON_WEEKS * 7)
-        sps = [d.closed["sp"] for x, d in st.days.items() if d.closed and x >= season_start and d.closed.get("sp") is not None]
-        avg = round(sum(sps) / len(sps), 1) if sps else 0.0
-        return {"number": number, "week": (self.today() - season_start).days // 7 + 1, "sp_avg": avg, "rank": rules.season_rank(avg)}
-
     def status(self) -> dict[str, Any]:
+        """Сводка — только факты из журнала (D41): что сделано сегодня и за неделю, сколько глубокой
+        работы, как спал, что в долге. Ни одного числа, которое код «назначает» сам."""
         st = self.state
-        level, into, need = st.level()
         today = self.today()
+        tasks = st.tasks_on(today)
+        week = st.week_stats(today)
+        plan = self.budget()
+        sleeps = [s for s in st.series(today, 7, "sleep_min") if s]
         return {
-            "level": level, "xp_into": into, "xp_need": need, "xp_total": st.xp_total, "hp": st.hp,
             "mode": st.mode, "effective_mode": self.effective_mode(), "mode_trigger": st.mode_trigger,
-            "mentor_enabled": st.mentor_enabled, "streak": st.streak(today), "season": self.season(),
-            "completion": st.completion(today), "debts": len(st.debts()), "protocol_zero": self.zero_active(),
-            "shields_left": max(0, int(self.cfg.mech("shields_per_month", 2)) - st.shields_used(today)),
-            "autonomy": st.autonomy(today),
+            "mentor_enabled": st.mentor_enabled,
+            "done": sum(1 for t in tasks if t.status == "done"), "total": len(tasks), "completion": st.completion(today),
+            "week_min": week["productive_min"], "week_budget": plan["week_min"],
+            "week_deep": week["deep_min"], "week_deep_budget": plan["deep_min"],
+            "sleep_avg": round(sum(sleeps) / len(sleeps)) if sleeps else None, "sleep_days": len(sleeps),
+            "sleep_target": self.sleep_target(),
+            "debts": len(st.debts()), "autonomy": st.autonomy(today),
         }

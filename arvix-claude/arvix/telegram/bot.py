@@ -348,13 +348,13 @@ class Bot:
             elif kind == "report":
                 self.await_clear()
                 result = self.core.complete_task(waiting["task"], report=text, source="telegram")
-                self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
+                self.send(tpl.completed(result["task"].title, result["debt_closed"]) + tpl.warn(result["warnings"]))
                 self.refresh_panel()
             elif kind == "partial":
                 self.await_clear()
                 pct = int(m.group(1)) if (m := re.search(r"\b(\d{1,2})\b", text)) else 50
                 result = self.core.complete_task(waiting["task"], done_pct=pct, report=text, source="telegram")
-                self.send(tpl.completed(result["task"].title, result["xp"]) + f" · {pct}%" + tpl.warn(result["warnings"]))
+                self.send(tpl.completed(result["task"].title) + f" · {pct}%" + tpl.warn(result["warnings"]))
                 self.refresh_panel()
             elif kind == "fail_reason":
                 self.await_clear()
@@ -459,7 +459,7 @@ class Bot:
         if waiting and waiting.get("kind") == "report":
             self.await_clear()
             result = self.core.complete_task(waiting["task"], report=caption or "фото-отчёт", proof_kind="photo", source="telegram")
-            self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
+            self.send(tpl.completed(result["task"].title, result["debt_closed"]) + tpl.warn(result["warnings"]))
             self.refresh_panel()
         else:
             self.send("Фото принимаю как отчёт, когда жду его: нажми ✅ у задачи или напиши, что за задача.")
@@ -562,7 +562,7 @@ class Bot:
         elif op == "yes":
             if task.proof == "confirm":
                 result = core.complete_task(task.id, source="telegram")
-                self.send(tpl.completed(task.title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
+                self.send(tpl.completed(task.title, result["debt_closed"]) + tpl.warn(result["warnings"]))
             else:
                 self.await_set("report", task=task.id)
                 self.send((tpl.ASK_PHOTO if task.proof == "photo" else tpl.ASK_REPORT).replace("?", f" — «{task.title}»?", 1))
@@ -572,7 +572,7 @@ class Bot:
         elif op == "no":
             result = core.fail_task(task.id, reason="отмечено кнопкой", source="telegram")
             self.await_set("fail_reason", task=task.id)
-            self.send(tpl.failed(task.title, result["hp"], result["debt"]) + "\n" + tpl.ASK_FAIL_REASON)
+            self.send(tpl.failed(task.title, result["debt"]) + "\n" + tpl.ASK_FAIL_REASON)
         self.refresh_panel()
 
     def on_panel_button(self, op: str) -> None:
@@ -1028,7 +1028,7 @@ class Bot:
         if task.is_open or task.status == "debt":
             pct = 100 if score is None else max(30, score)
             done = core.complete_task(task.id, done_pct=pct, report=f"проверка {score}%: {answers}" if score is not None else answers, source="telegram")
-            receipt_lines.append(tpl.completed(task.title, done["xp"]) + (f" · проверка {score}%" if score is not None else ""))
+            receipt_lines.append(tpl.completed(task.title) + (f" · проверка {score}%" if score is not None else ""))
             receipt_lines += [f"⚠️ Проверь: {w}" for w in done["warnings"]]
         if gaps:
             receipt_lines.append("В карточки и журнал ошибок: " + "; ".join(gaps[:4]))
@@ -1484,7 +1484,7 @@ class Bot:
             if result and result.get("assessment"):
                 text += "\n\n" + clip(result["assessment"], 300)
             if day.silent:
-                text += "\nТихий день — разбор без штрафов, только выводы."
+                text += "\nТихий день — разбор без долга, только выводы."
             text += "\n\nДва вопроса:\n" + "\n".join(f"{i}. {q}" for i, q in enumerate(questions[:2], 1))
             text += "\nОтветь одним сообщением."
         if not manual and not day.user_actions:
@@ -1623,7 +1623,7 @@ class Bot:
             self.report_current()
             return
         result = self.core.complete_task(ref, report=report or None, source="telegram")
-        self.send(tpl.completed(result["task"].title, result["xp"], result["debt_closed"]) + tpl.warn(result["warnings"]))
+        self.send(tpl.completed(result["task"].title, result["debt_closed"]) + tpl.warn(result["warnings"]))
         self.refresh_panel()
 
     def cmd_add(self, rest: str) -> None:
@@ -1704,7 +1704,7 @@ class Bot:
 
     def cmd_silent(self, rest: str) -> None:
         self.core.silent_today(source="telegram")
-        self.send("Тихий день. Я молчу до вечера, разбор — без штрафов. Ведёшь день сам.")
+        self.send("Тихий день. Я молчу до вечера, долга за сегодня нет. Ведёшь день сам.")
 
     def cmd_export(self, rest: str) -> None:
         from arvix.export import export_all
@@ -1731,7 +1731,7 @@ class Bot:
 
     def cmd_reason(self, rest: str) -> None:
         result = self.core.declare_reason(rest, source="telegram")
-        self.send(f"Причина записана. Щитов осталось: {result['shields_left']} — снимет самый крупный урон при закрытии дня.")
+        self.send(f"Причина записана: «{result['reason']}». Невыполненное важное сегодня в долг не уйдёт, причина — в разбор.")
 
     def cmd_learn(self, rest: str) -> None:
         """/learn — урок по ближайшей учебной задаче дня; /learn 30 физика — новый блок на 30 минут прямо сейчас."""

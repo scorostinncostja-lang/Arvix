@@ -394,11 +394,11 @@ def apply_actions(
             elif kind == "complete_task":
                 report = action.get("report") or fallback_report
                 result = core.complete_task(action["task"], done_pct=action.get("done_pct") or 100, report=report, source=source)
-                done.append(f"✅ {result['task'].title} +{result['xp']} XP")
+                done.append(f"✅ {result['task'].title}" + (" · долг закрыт" if result["debt_closed"] else ""))
                 warnings += result["warnings"]
             elif kind == "fail_task":
                 result = core.fail_task(action["task"], reason=action.get("reason", ""), source=source)
-                done.append(f"❌ {result['task'].title} {result['hp']} HP" + (" · в долг" if result["debt"] else ""))
+                done.append(f"❌ {result['task'].title}" + (" · в долг" if result["debt"] else ""))
             elif kind == "defer_task":
                 task = core.defer_task(action["task"], int(action.get("minutes") or 15), source=source)
                 done.append(f"⏳ {task.title} → {task.start}")

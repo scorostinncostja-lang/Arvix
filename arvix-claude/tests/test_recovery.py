@@ -19,23 +19,19 @@ from tests.test_telegram import BotCase
 class GuardExitTest(unittest.TestCase):
     """rules.guard_mode: у 🟥 есть выход по данным и по решению человека."""
 
-    def test_rested_today_lifts_red_by_hp_to_yellow(self) -> None:
-        mode, trigger = rules.guard_mode(sleep=[None, None, 480], completion=[], hp=15, sos=False, sleep_target=450)
-        self.assertEqual(mode, "yellow")
-        self.assertIn("восстановление", trigger)
-
-    def test_low_hp_without_good_sleep_stays_red(self) -> None:
-        self.assertEqual(rules.guard_mode(sleep=[None, None, 300], completion=[], hp=15, sos=False, sleep_target=450)[0], "red")
+    def test_todays_good_sleep_lifts_sleep_red(self) -> None:
+        self.assertEqual(rules.guard_mode(sleep=[280, 290, 250], completion=[], sos=False)[0], "red")
+        self.assertNotEqual(rules.guard_mode(sleep=[280, 290, 480], completion=[], sos=False)[0], "red")
 
     def test_recovery_caps_data_red_at_yellow_but_not_sos(self) -> None:
         week = [5.0] * 7
-        self.assertEqual(rules.guard_mode(sleep=[], completion=week, hp=80, sos=False, recovery=True)[0], "yellow")
-        self.assertEqual(rules.guard_mode(sleep=[480], completion=[], hp=80, sos=True, sleep_target=450, recovery=True)[0], "red")
+        self.assertEqual(rules.guard_mode(sleep=[], completion=week, sos=False, recovery=True)[0], "yellow")
+        self.assertEqual(rules.guard_mode(sleep=[480], completion=[], sos=True, recovery=True)[0], "red")
 
     def test_first_day_after_red_is_yellow_not_pressure(self) -> None:
-        mode, trigger = rules.guard_mode(sleep=[480, 480, 480], completion=[45.0, 45.0, 45.0], hp=80, sos=False, after_red=True)
+        mode, trigger = rules.guard_mode(sleep=[480, 480, 480], completion=[45.0, 45.0, 45.0], sos=False, after_red=True)
         self.assertEqual((mode, trigger), ("yellow", "первый день после 🟥: без разгона"))
-        self.assertEqual(rules.guard_mode(sleep=[480, 480, 480], completion=[45.0, 45.0, 45.0], hp=80, sos=False)[0], "pressure")
+        self.assertEqual(rules.guard_mode(sleep=[480, 480, 480], completion=[45.0, 45.0, 45.0], sos=False)[0], "pressure")
 
 
 class RedTrapTest(ArvixCase):
@@ -59,22 +55,24 @@ class RedTrapTest(ArvixCase):
         self.assertEqual(self.core.state.mode, "yellow")
         self.assertEqual(self.core.state.mode_trigger, "первый день после 🟥: без разгона")
 
+    def sleep_red(self) -> None:
+        """Три ночи меньше пяти часов: позавчера, вчера и сегодня."""
+        for offset in (2, 1):
+            self.core.log_sleep("4:30", day=(self.start - timedelta(days=offset)).date().isoformat())
+        self.core.log_sleep("4:30")
+        self.assertEqual(self.core.state.mode, "red")
+
     def test_good_sleep_lifts_red_the_same_morning(self) -> None:
-        self.core.emit("hp_changed", {"amount": -85, "reason": "тест"}, source="test")
-        self.assertEqual(self.core.recompute_mode(), "red")
+        self.sleep_red()
         result = self.core.log_sleep(bedtime="00:30", wake="08:30")
         self.assertEqual(result["duration_min"], 480)
-        self.assertEqual((result["mode_before"], result["mode"]), ("red", "yellow"))
-        self.assertEqual(tpl.sleep_logged(result), "Сон 8ч00м (00:30–08:30). Режим: 🟥 → 🟨 ЖЁЛТЫЙ")
+        self.assertEqual((result["mode_before"], result["mode"]), ("red", "normal"))
+        self.assertEqual(tpl.sleep_logged(result), "Сон 8ч00м (00:30–08:30). Режим: 🟥 → 🟩 НОРМА")
 
-    def test_sleep_heals_hp_in_red(self) -> None:
-        """В 🟥 плана нет — HP растёт от сна, а не от выполнения, иначе HP ≤ 20 был бы пожизненным."""
-        self.core.emit("hp_changed", {"amount": -50, "reason": "тест"}, source="test")
-        self.core.sos(True)
-        self.core.log_sleep("7:40")
-        self.at(self.start + timedelta(hours=19))
-        self.core.refresh()
-        self.assertEqual(self.core.state.hp, 58)
+    def test_old_hp_events_do_not_drive_the_mode(self) -> None:
+        """D41: HP ≤ 20 больше не включает 🟥 — старые события журнала в режим не входят."""
+        self.core.emit("hp_changed", {"amount": -95, "reason": "из старой версии"}, source="test")
+        self.assertEqual(self.core.recompute_mode(), "normal")
 
     def test_resume_plan_is_the_persons_button(self) -> None:
         self.core.sos(True)
@@ -94,10 +92,12 @@ class RedTrapTest(ArvixCase):
     def test_gentle_context_names_the_exit_without_numbers(self) -> None:
         from arvix.context import build_context
 
-        self.core.emit("hp_changed", {"amount": -85, "reason": "тест"}, source="test")
-        self.core.recompute_mode()
+        for offset in range(5):  # неделя почти без выполнения → 🟥 по выполнению
+            self.core.emit("day_closed", {"date": (self.start.date() - timedelta(days=offset + 1)).isoformat(), "completion": 5.0,
+                                          "total": 4, "done": 0, "mode": "normal"}, source="test")
+        self.assertEqual(self.core.recompute_mode(), "red")
         context = build_context(self.core)
-        self.assertNotIn("HP", context)  # раньше: «Режим: 🟥 КРАСНЫЙ (HP 15)» — метрика в мягком промпте
+        self.assertNotIn("<20%", context)  # раньше: «Режим: 🟥 КРАСНЫЙ (выполнение <20% неделю)» — цифры в мягком промпте
         self.assertIn("ВЫХОД ИЗ 🟥", context)
         self.assertIn("СОН СЕГОДНЯ: не записан", context)
 
@@ -205,11 +205,11 @@ class SpeedTest(ArvixCase):
         self.assertNotIn("--effort", brain.command(system="s", prompt="p", schema={}, role="voice", vault_tools=False, effort="low"))
 
     def test_log_sleep_action_takes_bed_and_wake(self) -> None:
-        self.core.emit("hp_changed", {"amount": -85, "reason": "тест"}, source="test")
-        self.core.recompute_mode()
+        self.core.sos(True)
+        self.core.resume_plan()  # 🟨 до смены дня
         done, failed, _ = apply_actions(self.core, [{"type": "log_sleep", "bedtime": "01:00", "wake": "08:30"}])
         self.assertEqual(failed, [])
-        self.assertEqual(done, ["сон 7ч30м · режим 🟥 → 🟨 ЖЁЛТЫЙ"])
+        self.assertEqual(done, ["сон 7ч30м"])  # режим не сменился — и квитанция об этом молчит
 
 
 if __name__ == "__main__":

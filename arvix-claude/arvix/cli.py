@@ -1,7 +1,7 @@
 """CLI `arvix` — для человека, хуков, systemd и отладки.
 
 Примеры:
-  arvix status                 уровень, HP, режим, сезон
+  arvix status                 итоги: режим, сегодня, неделя, сон, долг
   arvix day                    задачи на сегодня
   arvix add "Физика" --start 18:00 --dur 60 --imp 4 --sphere learning --deep
   arvix done a1b2 --report "решил 12 задач"
@@ -34,7 +34,7 @@ from arvix.state import State
 CLI = "cli"
 PLUGIN_STYLE = "arvix:Arvix"
 PLUGIN_TOOLS = "mcp__plugin_arvix_arvix"
-# Строка состояния Claude Code в доме Арвикса: режим · уровень · HP · день · следующий блок.
+# Строка состояния Claude Code в доме Арвикса: режим · день · следующий блок · долг.
 STATUS_LINE = {"type": "command", "command": "~/.local/bin/arvix statusline", "refreshInterval": 60}
 YES = ("y", "д", "да", "yes")
 
@@ -46,17 +46,13 @@ def _core() -> Core:
 
 
 def cmd_status(args: argparse.Namespace) -> None:
-    core = _core()
-    s = core.status()
-    season = s["season"]
-    print(f"Режим: {rules.MODE_LABELS[s['effective_mode']]} {('(' + s['mode_trigger'] + ')') if s['mode_trigger'] else ''}")
-    print(f"Уровень {s['level']} ({s['xp_into']}/{s['xp_need']} XP, всего {s['xp_total']}) · HP {s['hp']} · стрик {s['streak']} дн")
-    print(f"Сезон S{season['number']} нед.{season['week']} · {season['rank']} (SP {season['sp_avg']}) · щитов {s['shields_left']}")
-    print(f"Ментор: {'включён' if s['mentor_enabled'] else 'ВЫКЛЮЧЕН (safety-контур) — `arvix mentor on`'} · долг: {s['debts']}")
-    from arvix.context import autonomy_line
+    """Итоги — факты из журнала, без очков и здоровья (D41)."""
+    from arvix.telegram.templates import status
 
-    if line := autonomy_line(s["autonomy"]):
-        print(line)
+    core = _core()
+    print(status(core))
+    if not core.state.mentor_enabled:
+        print("Ментор ВЫКЛЮЧЕН safety-контуром — `arvix mentor on`")
 
 
 def cmd_context(args: argparse.Namespace) -> None:
@@ -79,12 +75,12 @@ def cmd_add(args: argparse.Namespace) -> None:
 
 def cmd_done(args: argparse.Namespace) -> None:
     result = _core().complete_task(args.task, done_pct=args.pct, report=args.report, source=CLI)
-    print(f"✅ {result['task'].title} · +{result['xp']} XP")
+    print(f"✅ {result['task'].title}" + (" · долг закрыт" if result["debt_closed"] else ""))
 
 
 def cmd_fail(args: argparse.Namespace) -> None:
     result = _core().fail_task(args.task, reason=args.reason, source=CLI)
-    print(f"❌ {result['task'].title} · {result['hp']} HP" + (" · в долг" if result["debt"] else ""))
+    print(f"❌ {result['task'].title}" + (" · в долг" if result["debt"] else ""))
 
 
 def cmd_defer(args: argparse.Namespace) -> None:
@@ -93,8 +89,10 @@ def cmd_defer(args: argparse.Namespace) -> None:
 
 
 def cmd_sleep(args: argparse.Namespace) -> None:
+    from arvix.telegram.templates import sleep_logged
+
     result = _core().log_sleep(args.duration, bedtime=args.bed, day=args.date, source=CLI)
-    print(f"Сон {hm(result['duration_min'])}. Режим: {rules.MODE_LABELS[result['mode']]}")
+    print(sleep_logged(result))
 
 
 def cmd_spend(args: argparse.Namespace) -> None:
@@ -128,7 +126,7 @@ def cmd_sos(args: argparse.Namespace) -> None:
 
 def cmd_silent(args: argparse.Namespace) -> None:
     _core().silent_today(source=CLI)
-    print("Тихий день: проактивных сообщений не будет, разбор без штрафов.")
+    print("Тихий день: проактивных сообщений не будет, долга за сегодня нет.")
 
 
 def cmd_export(args: argparse.Namespace) -> None:
@@ -147,12 +145,14 @@ def cmd_rebuild(args: argparse.Namespace) -> None:
     core = Core()
     events = core.store.read(0)
     fresh = State.rebuild(events)
-    xp_sum = sum(int(e.payload["amount"]) for e in events if e.kind == "xp_awarded")
+    statuses = lambda st: sorted((t.id, t.status, t.done_pct) for t in st.tasks.values())  # noqa: E731
+    closed = lambda st: sorted((d, c.get("completion")) for d, c in ((x, y.closed) for x, y in st.days.items()) if c)  # noqa: E731
     checks = {
-        "rebuild == инкремент (XP, HP, задачи)": (fresh.xp_total, fresh.hp, len(fresh.tasks)) == (core.state.xp_total, core.state.hp, len(core.state.tasks)),
-        "HP в [0, 100]": 0 <= fresh.hp <= 100,
-        "сумма xp_awarded == xp_total": xp_sum == fresh.xp_total,
-        "XP не убывает": all(int(e.payload["amount"]) >= 0 for e in events if e.kind == "xp_awarded"),
+        "rebuild == инкремент (задачи и их статусы)": statuses(fresh) == statuses(core.state),
+        "rebuild == инкремент (закрытые дни)": closed(fresh) == closed(core.state),
+        "rebuild == инкремент (режим)": (fresh.mode, fresh.mentor_enabled) == (core.state.mode, core.state.mentor_enabled),
+        "день закрыт не больше одного раза": len([e for e in events if e.kind == "day_closed"])
+        == len({e.payload.get("date") for e in events if e.kind == "day_closed"}),
     }
     for name, ok in checks.items():
         print(("OK  " if ok else "FAIL") + " " + name)
@@ -262,7 +262,7 @@ def init_home(home: Path, vault: str) -> list[str]:
         readme.write_text(
             "# Дом Арвикса\n\n"
             "Здесь Claude работает как Арвикс — личный ментор (стиль Arvix включён в .claude/settings.json).\n\n"
-            "- Состояние, задачи, XP/HP, интервью — MCP-инструменты `arvix` (начинай с `context`).\n"
+            "- Состояние, задачи, долг, интервью — MCP-инструменты `arvix` (начинай с `context`).\n"
             f"- Obsidian: `{vault or 'не настроено'}` — Арвикс работает в его структуре: свои заметки создаёт, чужие только дополняет.\n"
             "- Скиллы: /arvix:onboarding, /arvix:plan, /arvix:goal, /arvix:brief, /arvix:debrief, /arvix:retro, /arvix:learn, /arvix:notes.\n",
             encoding="utf-8",
@@ -681,7 +681,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.set_defaults(func=func)
         return p
 
-    add("status", cmd_status, "уровень, HP, режим, сезон")
+    add("status", cmd_status, "итоги: режим, сегодня, неделя, сон, долг")
     add("context", cmd_context, "контекст-пакет, который видит модель")
     add("day", cmd_day, "задачи на дату").add_argument("date", nargs="?")
     p = add("add", cmd_add, "новая задача")

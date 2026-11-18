@@ -147,7 +147,8 @@ class InboxTest(BotCase):
         self.press(f"t:{task.id}:yes")
         self.assertIn("что именно сделано — «Физика»?", self.api.last)
         self.text("решил 10 задач")
-        self.assertIn("+", self.api.last)
+        self.assertTrue(self.api.last.startswith("✅ Физика — записал"), self.api.last)
+        self.assertNotIn("XP", self.api.last)
         self.assertEqual(self.core.state.tasks[task.id].status, "done")
         self.assertEqual(self.brain.calls, [])  # кнопки и отчёт — без модели
 
@@ -369,7 +370,7 @@ class BubblesTest(BotCase):
         self.brain.answers.append({"reply": "", "actions": [{"type": "complete_task", "task": task.id}]})
         self.text("английский сделал")
         self.assertEqual(len(self.api.sent), 1)
-        self.assertTrue(self.api.last.startswith("✅ Английский +"), self.api.last)
+        self.assertEqual(self.api.last.splitlines()[0], "✅ Английский")  # квитанция — факт, без очков (D41)
 
 
 class PanelTest(BotCase):
@@ -388,7 +389,7 @@ class PanelTest(BotCase):
     def test_menu_button_sends_pinned_panel_with_task_buttons(self) -> None:
         self.text(tpl.MENU_DAY)
         text, buttons = self.api.sent[-1]
-        self.assertTrue(text.startswith("📋 Понедельник · 0 из 2 · 🟩 · HP 100 · серия 0 дн"), text)
+        self.assertEqual(text.splitlines()[0], "📋 Понедельник · 0 из 2 · 🟩")  # без HP и серии (D41)
         self.assertIn("○ 16:00 Математика ОГЭ (45 мин)", text)
         self.assertEqual(buttons[0], [("▶️ Математика ОГЭ", f"t:{self.math.id}:start"), ("✅", f"t:{self.math.id}:yes"), ("⏳ 30", f"t:{self.math.id}:d30")])
         self.assertEqual(buttons[1][0][0], "▶️ Русский: биография Пу…")
@@ -483,8 +484,9 @@ class FocusTest(BotCase):
         self.press("f:ok:25")
         self.assertIn("Фокус: 25 мин · Математика ОГЭ — записано", self.api.texts[-2])
         self.assertEqual(self.core.state.tasks[self.math.id].focus_min, 25)
-        result = self.core.complete_task(self.math.id, report="40 задач")
-        self.assertEqual(result["xp"], 14)  # 10 × 1.0 × 1.0 × K_proof timer 1.4, вместо 11 за отчёт
+        self.core.complete_task(self.math.id, report="40 задач")
+        closed = [e for e in self.core.store.read(0) if e.kind == "task_completed"][-1].payload
+        self.assertEqual(closed["focus_min"], 25)  # таймер — доказательство в журнале, а не множитель очков
         self.assertEqual(self.core.state.days[self.core.today()].deep_min, 40)
 
     def test_stop_logs_elapsed_or_drops_short_session(self) -> None:
@@ -585,9 +587,9 @@ class LessonTest(BotCase):
         self.assertEqual(task.status, "done")
         self.assertEqual(task.done_pct, 67)
         self.assertEqual(task.focus_min, 45)
-        self.assertEqual(task.xp, int(10 * 1.0 * 1.3 * 1.4 * 67 / 100))  # diff3 imp4 K_proof timer × 67% = 12
         receipt = self.api.last
-        self.assertIn("✅ Физика: постоянный ток · +12 XP", receipt)
+        self.assertIn("✅ Физика: постоянный ток — записал", receipt)
+        self.assertNotIn("XP", receipt)
         self.assertIn("проверка 67%", receipt)
         self.assertIn("В карточки и журнал ошибок: при удвоении R ток уменьшается вдвое", receipt)
         self.assertIn("📝 Заметка своими словами: 06_Feyn Concept/Закон Ома.md", receipt)
@@ -715,7 +717,8 @@ class SchedulerTest(BotCase):
         self.assertEqual(by_day[14], [tpl.IGNORE_LATER])
         self.assertEqual(by_day[15], [])
         self.assertEqual(sum(t == tpl.IGNORE[2] for day in by_day for t in day), 1)
-        self.assertEqual(self.core.state.hp, 80)  # −10 за первые два дня, с третьего штрафы заморожены
+        self.assertTrue(all(c.closed["frozen"] for d, c in self.core.state.days.items() if c.closed and c.closed.get("ignored")
+                            and self.core.state.ignore_streak(d) >= 3))  # с третьего дня тишины долга нет
 
     def test_return_after_silence_is_gentle_and_not_greeted_as_absent(self) -> None:
         self.core.profile_set("wake_target", "07:30", source="l0")

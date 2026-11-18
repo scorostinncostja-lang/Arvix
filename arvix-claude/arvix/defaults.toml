@@ -98,7 +98,6 @@ sleep_target_min = 450        # 7.5 ч, 02-MECHANICS §5
 deep_target_min = 120         # глубокая работа в день
 week_budget_min = 1560        # 26 ч — месяц 1
 week_deep_budget_min = 480    # 8 ч
-shields_per_month = 2
 
 [mechanics.quotas]            # недельные минимумы, 02-MECHANICS §8
 sport = 3

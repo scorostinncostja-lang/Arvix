@@ -2,7 +2,7 @@
 
 Человек не задаёт часы. Шаблоны дней — это структура (когда и что), а объём каждого
 канала задаёт коэффициент, который код пересчитывает раз в неделю по фактам:
-выполнение по каналу, сон, HP, дни 🟨/🟥. Правила (02-MECHANICS §5, П1):
+выполнение по каналу, сон, дни 🟨/🟥. Правила (02-MECHANICS §5, П1):
 
 - снижаем быстро, растим медленно: признаки выгорания — сразу −20% работы и +20% отдыха,
   рост +10% — только после двух подряд недель с выполнением канала ≥ 85%;
@@ -42,7 +42,7 @@ FIXED_TITLE = re.compile(
 def is_fixed(block: dict[str, Any]) -> bool:
     """Обязательное время, которое нельзя сжать: явный флаг или очевидное название.
     Обязательный блок — занятое время, а не задача: код не масштабирует его и не создаёт
-    из него задач с напоминаниями, отчётами, XP и HP (daily.materialize)."""
+    из него задач с напоминаниями и отчётами (daily.materialize)."""
     if "fixed" in block:
         return bool(block["fixed"])
     return bool(FIXED_TITLE.search(block.get("title", "")))
@@ -97,7 +97,7 @@ def _clamp(value: float) -> float:
 def review(
     factors: dict[str, float], *, channels: dict[str, dict[str, int]], streaks: dict[str, int],
     days_with_data: int, red_days: int, yellow_days: int,
-    sleep_avg: float | None, sleep_target: int, hp_drop: int,
+    sleep_avg: float | None, sleep_target: int,
 ) -> dict[str, Any]:
     """Новые коэффициенты по итогам недели.
 
@@ -121,9 +121,7 @@ def review(
         signs.append(f"🟨 {yellow_days} дн")
     if sleep_debt > 30:
         signs.append(f"сон {sleep_avg / 60:.1f} ч при норме {sleep_target / 60:.1f}")
-    if hp_drop >= 10:
-        signs.append(f"HP −{hp_drop}")
-    hard = red_days >= 2 or yellow_days >= 3 or sleep_debt > 60 or hp_drop >= 20
+    hard = red_days >= 2 or yellow_days >= 3 or sleep_debt > 60
     soft = not hard and bool(signs)
 
     if hard or soft:

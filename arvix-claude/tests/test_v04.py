@@ -256,7 +256,8 @@ class WebApiTest(BotCase):
         view = web_api.state_view(self.core)
         self.assertEqual(view["tasks"][0]["title"], "Физика")
         self.assertEqual(view["tasks"][0]["end"], "16:45")
-        self.assertIn("hp", view["stats"])
+        self.assertEqual(set(view["stats"]) & {"hp", "xp_into", "level", "streak", "season", "shields_left"}, set())
+        self.assertIn("sleep_target", view["stats"])
 
     def test_red_mode_hides_numbers_and_list(self) -> None:
         self.core.add_task("Физика", start="16:00", duration_min=45)
@@ -270,7 +271,7 @@ class WebApiTest(BotCase):
     def test_task_ops_use_same_rules_as_buttons(self) -> None:
         task = self.core.add_task("Английский", start="12:00", duration_min=30, importance=2)
         done = self.run_main(web_api.task_op(task.id, "done", {}))
-        self.assertGreater(done["xp"], 0)
+        self.assertNotIn("xp", done)
         self.assertEqual(self.core.state.tasks[task.id].status, "done")
 
     def test_add_task_from_app(self) -> None:

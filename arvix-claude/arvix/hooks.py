@@ -37,7 +37,7 @@ def prompt_line(core) -> str:
         return line + " · без метрик и задач, человеческий тон"
     tasks = st.tasks_on(now.date())
     done = sum(1 for t in tasks if t.status == "done")
-    return line + f" · HP {st.hp} · сегодня {done}/{len(tasks)}"
+    return line + f" · сегодня {done}/{len(tasks)}"
 
 
 def _remote_configured() -> bool:

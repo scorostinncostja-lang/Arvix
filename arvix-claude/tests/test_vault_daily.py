@@ -76,7 +76,7 @@ class BudgetTest(ArvixCase):
     def test_review_rules(self) -> None:
         f = dict(load.START_FACTORS)
         ok = {"deep": {"planned": 300, "done": 290}, "sport": {"planned": 120, "done": 120}}
-        base = {"days_with_data": 6, "red_days": 0, "yellow_days": 0, "sleep_avg": 460, "sleep_target": 450, "hp_drop": 0}
+        base = {"days_with_data": 6, "red_days": 0, "yellow_days": 0, "sleep_avg": 460, "sleep_target": 450}
         first = load.review(f, channels=ok, streaks={}, **base)
         self.assertEqual(first["verdict"], "hold")  # рост только после двух недель
         self.assertEqual(first["streaks"]["deep"], 1)

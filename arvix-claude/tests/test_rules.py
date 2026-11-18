@@ -1,4 +1,4 @@
-"""Формулы L0 из 02-MECHANICS — без базы и без ИИ."""
+"""Правила L0 из 02-MECHANICS — без базы и без ИИ."""
 
 import unittest
 
@@ -7,15 +7,13 @@ from arvix import interview, rules
 from tests.helpers import ROOT  # noqa: F401 — кладёт пакет в sys.path
 
 
-class XpTest(unittest.TestCase):
-    def test_formula_matches_spec(self) -> None:
-        # 10 × K_diff(3)=1.0 × K_imp(4)=1.3 × K_proof(report)=1.1 × K_time=1.0 = 14.3
-        self.assertEqual(rules.task_xp(3, 4, "report"), 14)
-        self.assertEqual(rules.task_xp(5, 5, "photo", delay_min=-20), int(10 * 2.0 * 1.6 * 1.3 * 1.15))
-        self.assertEqual(rules.task_xp(3, 3, "confirm", delay_min=40), 8)
+class NoGameTest(unittest.TestCase):
+    """D41: игры нет — ни очков, ни здоровья, ни уровней, ни сезонов в правилах L0."""
 
-    def test_partial_scales_xp(self) -> None:
-        self.assertEqual(rules.task_xp(3, 3, "confirm", done_pct=50), 5)
+    def test_no_game_numbers_left(self) -> None:
+        for name in ("task_xp", "level_info", "sleep_damage", "penalty_multiplier", "sp_for_day", "season_rank",
+                     "HP_MAX", "HP_FAIL", "XP_BASE", "BONUS_FULL_DAY", "SEASON_WEEKS"):
+            self.assertFalse(hasattr(rules, name), name)
 
     def test_proof_levels(self) -> None:
         self.assertEqual(rules.derive_proof(2, "work", False), "confirm")
@@ -24,15 +22,10 @@ class XpTest(unittest.TestCase):
         self.assertEqual(rules.derive_proof(1, "sport", False), "photo")
         self.assertEqual(rules.derive_proof(5, "learning", True), "report")
 
-    def test_levels_never_lost(self) -> None:
-        self.assertEqual(rules.level_info(0), (1, 0, 100))
-        self.assertEqual(rules.level_info(100), (2, 0, 120))
-        self.assertEqual(rules.level_info(250), (3, 30, 140))
-
 
 class GuardTest(unittest.TestCase):
     def mode(self, **kw) -> str:
-        base = {"sleep": [None, None, None], "completion": [None] * 7, "hp": 100, "sos": False}
+        base = {"sleep": [None, None, None], "completion": [None] * 7, "sos": False}
         base.update(kw)
         return rules.guard_mode(**base)[0]
 
@@ -41,7 +34,6 @@ class GuardTest(unittest.TestCase):
 
     def test_red_triggers(self) -> None:
         self.assertEqual(self.mode(sos=True), "red")
-        self.assertEqual(self.mode(hp=20), "red")
         self.assertEqual(self.mode(sleep=[280, 290, 250]), "red")
         self.assertEqual(self.mode(completion=[10, 15, 5, 12, 18, 0, 10]), "red")
 
@@ -54,18 +46,15 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(self.mode(completion=low, sleep=[460, 470, 450]), "pressure")
         self.assertEqual(self.mode(completion=low), "normal")  # сна не знаем — давить не на что
 
-    def test_penalties_freeze(self) -> None:
-        common = {"mentor_enabled": True, "hp": 80, "silent": False, "ignore_days": 0, "protocol_zero": False}
-        self.assertEqual(rules.penalty_multiplier(mode="normal", **common), 1.0)
-        self.assertEqual(rules.penalty_multiplier(mode="red", **common), 0.0)
-        self.assertEqual(rules.penalty_multiplier(mode="normal", **{**common, "ignore_days": 3}), 0.0)
-        self.assertEqual(rules.penalty_multiplier(mode="normal", **{**common, "hp": 30}), 0.5)
-        self.assertEqual(rules.penalty_multiplier(mode="normal", **{**common, "mentor_enabled": False}), 0.0)
+    def test_debt_freezes(self) -> None:
+        common = {"mentor_enabled": True, "silent": False, "ignore_days": 0}
+        self.assertFalse(rules.frozen(mode="normal", **common))
+        self.assertTrue(rules.frozen(mode="red", **common))
+        self.assertTrue(rules.frozen(mode="normal", **{**common, "ignore_days": 3}))
+        self.assertTrue(rules.frozen(mode="normal", **{**common, "mentor_enabled": False}))
+        self.assertTrue(rules.frozen(mode="normal", **common, reason=True))
 
-    def test_sleep_and_bedtime(self) -> None:
-        self.assertEqual(rules.sleep_damage(290), -12)
-        self.assertEqual(rules.sleep_damage(350), -6)
-        self.assertEqual(rules.sleep_damage(420), 0)
+    def test_bedtime(self) -> None:
         self.assertEqual(rules.minutes_after("23:30", "01:30"), 120)
         self.assertEqual(rules.minutes_after("23:30", "23:00"), -30)
 
