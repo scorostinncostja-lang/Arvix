@@ -1,7 +1,7 @@
 # 11 · Проекты 📋
 
 > Стартапы, сервисы, бизнесы, свои продукты — то, что строится вместе с Арвиксом ради денег, навыка и опыта.
-> **Статус: 📋 запланировано** ([08-ROADMAP.md](08-ROADMAP.md) R13, решение [D42](09-DECISIONS.md)). В коде этого нет.
+> **Статус: 📋 запланировано** ([08-ROADMAP.md](08-ROADMAP.md) R13, решение [D43](09-DECISIONS.md)). В коде этого нет.
 > Документ — проект спецификации: при реализации он переписывается под код.
 
 ## 1. Принцип: проект — это ставка
@@ -96,7 +96,7 @@
 
 | Событие | Поля | Примечание |
 |---|---|---|
-| `goal_set` | `kind=project` + `hypothesis, kill_criterion, hours_cap, money_cap, skills, stage` | новой таблицы нет: проект — цель (D42) |
+| `goal_set` | `kind=project` + `hypothesis, kill_criterion, hours_cap, money_cap, skills, stage` | новой таблицы нет: проект — цель (D43) |
 | `task_created` | + `project_id` | часы проекта = свёртка закрытых задач |
 | `expense_logged` | + `project_id` | существующие траты с тегом |
 | `income` | `amount, currency, project_id, note` | новое |
