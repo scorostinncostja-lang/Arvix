@@ -190,7 +190,7 @@ ssh -t arvix@HOST '~/.local/bin/arvix setup --stt command --yes && systemctl --u
 ```
 `base` быстрее, `small` точнее по-русски и медленнее в 2–3 раза.
 
-**Голос Арвикса (голосовые по делу в Telegram и в приложении, 🔊 у ответов — D46, D51)** — Gemini TTS, бесплатный тариф Google AI Studio:
+**Голос Арвикса (голосовые по делу в Telegram и в приложении, 🔊 у ответов — D46, D52)** — Gemini TTS, бесплатный тариф Google AI Studio:
 1. Ключ: aistudio.google.com → Get API key → Create API key (из России — через VPN; сам сервер ходит в Google из Финляндии).
 2. На сервере (ключ — скрытым вводом, в чат не попадает):
 ```bash

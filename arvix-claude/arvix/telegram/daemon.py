@@ -60,7 +60,7 @@ def main() -> None:
 
     threading.Thread(target=setup_menu, name="tg-menu", daemon=True).start()
     hub = Hub()
-    bot.lane = hub.think  # голова думает вне главного потока: очередь не стоит (D51)
+    bot.lane = hub.think  # голова думает вне главного потока: очередь не стоит (D52)
     web = start_web(cfg, hub)  # приложение и API — в том же процессе (arvix/web)
 
     stopping = threading.Event()

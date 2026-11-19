@@ -1163,7 +1163,7 @@ class Core:
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "channel": channel}
         if project:
             payload["project"] = project  # чат проекта (D47): своя нить в общей переписке
-        if cid:  # метка приложения: черновик в ленте заменяется этим сообщением, а не исчезает (D51)
+        if cid:  # метка приложения: черновик в ленте заменяется этим сообщением, а не исчезает (D52)
             payload["cid"] = cid[:40]
         with self.tx():
             self.emit("message_in", payload, source=channel)
@@ -1174,7 +1174,7 @@ class Core:
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "key": key, "channel": channel}
         if project:
             payload["project"] = project
-        if audio:  # голосовое Арвикса: файл в data_dir/voice, приложение его проигрывает (D51)
+        if audio:  # голосовое Арвикса: файл в data_dir/voice, приложение его проигрывает (D52)
             payload["audio"] = audio
         if buttons:  # приложение показывает те же кнопки под сообщением
             payload["buttons"] = [[[t, d] for t, d in row] for row in buttons]

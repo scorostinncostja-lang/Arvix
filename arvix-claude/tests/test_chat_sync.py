@@ -1,4 +1,4 @@
-"""Чат без сбоев (D51): голова не держит очередь, черновики не пропадают, у каждого чата своя нить,
+"""Чат без сбоев (D52): голова не держит очередь, черновики не пропадают, у каждого чата своя нить,
 голосовое — только то, что стоит послушать, и доходит до приложения."""
 
 from __future__ import annotations
@@ -225,7 +225,7 @@ class ServerAudioTest(test_v04.ServerTest):
 
 class NoCallTest(ArvixCase):
     def test_call_screen_is_gone(self) -> None:
-        """Звонок убран (D51): голова думает 10–60 с, разговора не выходило; вместо него — голосовые по делу и 🔊."""
+        """Звонок убран (D52): голова думает 10–60 с, разговора не выходило; вместо него — голосовые по делу и 🔊."""
         js = (STATIC / "app.js").read_text(encoding="utf-8")
         html = (STATIC / "index.html").read_text(encoding="utf-8")
         for word in ("openTalk", "talkListen", "top-call"):

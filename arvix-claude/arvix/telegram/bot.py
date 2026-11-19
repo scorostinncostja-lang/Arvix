@@ -186,7 +186,7 @@ def foreign_share(text: str) -> float:
 
 
 def voice_note_check(note: str, reply: str, kind: str = "", *, asked: bool = False) -> str:
-    """Голосовое — только когда его стоит послушать (D46, D51). Пустая строка — не отправлять.
+    """Голосовое — только когда его стоит послушать (D46, D52). Пустая строка — не отправлять.
     Решает голова (voice_kind), проверяет код:
     - pronunciation — произношение: в голосовом есть иностранные слова (≥ 25 % латинских букв).
       Совпадать с текстом можно и нужно: прочитал слово — услышал, как оно звучит;
@@ -227,7 +227,7 @@ class Bot:
         self.sleep = sleep or time.sleep
         self.voice_notes_per_day = int(core.cfg.section("tts").get("voice_notes_per_day", 3) or 0)
         self.channel = "telegram"  # приложение (arvix/web) создаёт свой Bot с channel="web"
-        self.lane: Callable[[Callable[[], Any]], None] | None = None  # Hub.think в службе бота (D51)
+        self.lane: Callable[[Callable[[], Any]], None] | None = None  # Hub.think в службе бота (D52)
         self.cid: str | None = None  # метка сообщения из приложения: его черновик в ленте
         self.memory = Memory(core)
         self.first_today = False
@@ -269,7 +269,7 @@ class Bot:
         return message_id
 
     def log_in(self, text: str) -> None:
-        cid, self.cid = self.cid, None  # метка черновика приложения — только первому message_in (D51)
+        cid, self.cid = self.cid, None  # метка черновика приложения — только первому message_in (D52)
         self.core.message_in(text, channel=self.channel, project=self.project, cid=cid)
         self.core.store.kv_set("last_in_at", self.core.now().timestamp())
 
@@ -277,7 +277,7 @@ class Bot:
               voice_note: str = "", voice_kind: str = "", asked_voice: bool = False) -> None:
         """Ответ головы — одним сообщением (D46): абзацы через пустую строку, предложения по строкам,
         квитанция кода — в конце того же сообщения. voice_note — отдельное короткое голосовое,
-        только если его стоит послушать, а не прочитать (voice_note_check, D51)."""
+        только если его стоит послушать, а не прочитать (voice_note_check, D52)."""
         parts = [fmt.sentence_lines(text)] if text.strip() else []
         if receipt.strip():
             parts.append(receipt.strip())
@@ -289,7 +289,7 @@ class Bot:
 
     def send_voice_note(self, note: str, *, asked: bool = False) -> None:
         """Голосовое: в Telegram — голосовым сообщением, в приложении — плеером в ленте; звук
-        сохраняется файлом, и приложение проигрывает голосовые из обоих каналов (D51).
+        сохраняется файлом, и приложение проигрывает голосовые из обоих каналов (D52).
         Без просьбы — не больше [tts] voice_notes_per_day в сутки; попросил сам — лимита нет."""
         if not (self.tts.enabled and self.tts.voice_replies):
             return
@@ -1253,7 +1253,7 @@ class Bot:
     def typing_kept(self, api: Any = None) -> Any:
         """«печатает…» всё время, пока думает голова: Telegram гасит индикатор через 5 с,
         а ответ идёт 5–30 с. Поток трогает только HTTP, базу — нет. api — канал разговора:
-        голова думает в своём потоке, а self.api тем временем мог смениться (D51)."""
+        голова думает в своём потоке, а self.api тем временем мог смениться (D52)."""
         api = api or self.api
         stop = threading.Event()
 
@@ -1330,7 +1330,7 @@ class Bot:
         return ids[-(HISTORY + 1):][0] if ids else None
 
     def snapshot(self) -> tuple[Any, ...]:
-        """Чей это разговор: канал, его API, проект, первое ли сообщение дня. Полоса головы (D51)
+        """Чей это разговор: канал, его API, проект, первое ли сообщение дня. Полоса головы (D52)
         готовит и записывает ответ позже — уже после того, как бот обработал другие апдейты."""
         return (self.channel, self.api, self.sleep, self.project, self.first_today)
 
@@ -1346,7 +1346,7 @@ class Bot:
     def converse(self, text: str, extra: str = "", *, voice: bool = False) -> None:
         """Ответ головы. Без полосы (тесты, CLI) — сразу; в службе бота (`lane` = Hub.think) —
         запрос готовится и ответ пишется в главном потоке, а голова думает в своём: кнопки,
-        таймер и Telegram в это время работают (D51)."""
+        таймер и Telegram в это время работают (D52)."""
         ctx = self.snapshot()
 
         def start() -> Any:

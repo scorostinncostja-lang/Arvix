@@ -13,7 +13,7 @@ GET  /api/graph               граф заметок: узлы, связи, п�
 GET  /api/stream              поток событий: строка {"v": …} при любом изменении (fetch + ReadableStream)
 GET  /api/pair                одноразовая ссылка установки на телефон (только из Mini App)
 GET  /api/pair/claim?code=…   без входа: одноразовый код → ключ приложения (15 мин, один раз)
-GET  /api/audio?name=…        голосовое Арвикса из ленты (ogg; Telegram и приложение, D51)
+GET  /api/audio?name=…        голосовое Арвикса из ленты (ogg; Telegram и приложение, D52)
 POST /api/message {text, cid} · /api/voice (аудио, X-Client-Id) · /api/button {data}
 POST /api/tts {text}          озвучка по кнопке 🔊 (ogg, с кэшем), если [tts] включена; иначе 404 — говорит голос телефона
 POST /api/upload              файл телом запроса (X-File-Name, X-Caption — urlencoded), до 20 МБ
@@ -352,7 +352,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
         # --- разное --------------------------------------------------------------------
 
         def cid(self, body: dict[str, Any] | None = None) -> str | None:
-            """Метка черновика из приложения (D51): по ней лента заменяет «отправляется…» настоящим сообщением."""
+            """Метка черновика из приложения (D52): по ней лента заменяет «отправляется…» настоящим сообщением."""
             raw = str((body or {}).get("cid") or self.headers.get("X-Client-Id") or "")
             return raw[:40] if raw.replace("-", "").isalnum() else None
 
