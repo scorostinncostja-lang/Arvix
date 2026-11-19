@@ -132,25 +132,24 @@ TOOLS: dict[str, dict[str, Any]] = {
     },
     "project": {
         "description": (
-            "Проекты (D43, D44): list (активные с цифрами кода и ⚠️), roadmap (проекты по целям в порядке), show (project — "
-            "карточка, этапы, журнал, источники, каналы, коммиты), set (новый: title, why и/или purposes, kind — любой тип "
-            "словами, expectation, deadline, weekly_min, skills, goal_id, order — место в роадмапе цели, repo owner/name; "
-            "правка: project + поля; status idea|active|paused|done|dropped, done/dropped — с итогом в reason; в работе не больше 3), "
-            "milestone (этап: project, title, dod — критерий обязателен, deadline; отметить: milestone + status done), "
-            "block (блок в план в свободное окно: project, duration_min, date, start), log (журнал: project, text, "
-            "kind update|decision|lesson|blocker|release|feedback|idea, minutes), resource (источник или инструмент: project, "
-            "title, url — только настоящая, kind), channel (канал привлечения людей: project, title, kind free|barter|paid, "
-            "hypothesis; итоги: channel + reach, leads, clients накопленно, status test|works|dropped), "
-            "export (карточка портфолио в 01_Projects). Денег у проекта нет (D44). Код за человека не пишешь."
+            "Проекты (D43, D44, D47): list (активные с цифрами кода и ⚠️), roadmap (проекты по целям), show (project — всё о проекте: "
+            "этапы, учиться, журнал, заметки папки в Obsidian), set (новый: title, why и/или purposes, kind любым словом, expectation, "
+            "deadline, weekly_min, skills, goal_id, order; правка: project + поля; status active|paused|done|dropped, done/dropped — "
+            "с итогом в reason; в работе не больше 3), milestone (project, title, dod — критерий обязателен; отметить: milestone + "
+            "status done), block (блок в свободное окно: project, duration_min, date, start), log (project, text, kind "
+            "update|decision|lesson|blocker|release|feedback|idea, minutes), note (заметка в папке проекта: project, title, text "
+            "Markdown, append), learn (что выучить: project, topic, why, sources; отметить: learn + status done), resource "
+            "(источник, инструмент, пример чужой работы: project, title, url — только настоящая, kind). Работаешь в папке с кодом "
+            "проекта — веди его отсюда: этапы, журнал, заметки. Код за человека не пишешь."
         ),
         "inputSchema": _obj({
-            "action": _enum("list", "roadmap", "show", "set", "milestone", "block", "log", "resource", "channel", "export"),
+            "action": _enum("list", "roadmap", "show", "set", "milestone", "block", "log", "note", "learn", "resource"),
             "project": {**STR, "description": "id проекта или часть названия"}, "milestone": STR, "channel": STR,
             "title": STR, "why": STR, "kind": STR, "expectation": STR, "deadline": STR, "weekly_min": INT,
             "skills": {"type": "array", "items": STR}, "link": STR, "goal_id": STR, "status": STR, "reason": STR,
             "dod": STR, "duration_min": INT, "date": STR, "start": STR, "text": STR, "minutes": INT,
-            "purposes": {"type": "array", "items": STR}, "repo": STR, "order": INT, "url": STR, "hypothesis": STR,
-            "reach": INT, "leads": INT, "clients": INT,
+            "purposes": {"type": "array", "items": STR}, "order": INT, "url": STR, "append": BOOL, "topic": STR, "learn": STR,
+            "sources": {"type": "array", "items": STR},
         }, ["action"]),
     },
     "export": {
@@ -434,16 +433,15 @@ def t_project(core: Core, a: dict[str, Any]) -> str:
     if action == "roadmap":
         return projects.roadmap_text(core)
     if action == "show":
-        p = projects.resolve(core, a.get("project"))
-        found = projects.issues(core, p)
-        return projects.portfolio_md(core, p) + _doubts(found)
-    if action == "export":
-        return f"Карточка проекта записана блоком Арвикса: {projects.export_note(core, a.get('project'))}"
+        return projects.chat_block(core, a.get("project"))
     kind = {"set": "set_project", "milestone": "set_milestone", "block": "plan_project", "log": "project_log",
-            "resource": "project_resource", "channel": "project_channel"}.get(action)
+            "resource": "project_resource", "note": "project_note", "learn": "learn_add"}.get(action)
     if kind is None:
         raise ArvixError(f"Неизвестное действие {action}")
     line, warnings = brain._project_action(core, kind, a, "claude")
+    if kind == "set_project":  # у Claude Code нет панели «План» — несостыковки сразу в ответ
+        target = projects.resolve(core, a.get("project") or a.get("title"))
+        warnings += projects.issues(core, target)[:3]
     return line + _doubts(warnings)
 
 

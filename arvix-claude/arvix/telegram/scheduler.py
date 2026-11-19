@@ -52,7 +52,6 @@ class Scheduler:
 
         self.focus(now)
         self.panel()
-        self.github()
         if silent_days >= 2 and not back:
             self.ignore_protocol(now, silent_days)
             return
@@ -121,18 +120,6 @@ class Scheduler:
         due = when and self._once(key, when, now, timedelta(hours=2)) and self.core.effective_mode() != "red"
         if due and (text := tpl.midday(self.core)):
             self.bot.send(text, key=key)
-
-    def github(self) -> None:
-        """Коммиты привязанных репозиториев — раз в час (github.sync сам держит частоту). Сеть
-        упала — не беда: в следующий час догонит."""
-        if not any(p.get("repo") for p in self.core.state.projects.values()):
-            return
-        from arvix import github
-
-        try:
-            github.sync(self.core)
-        except Exception as exc:  # noqa: BLE001 — GitHub не должен ронять тик планировщика
-            log.info("github: %s", exc)
 
     def projects(self, now: datetime) -> None:
         """Застой проекта (D43): 7+ дней без движения → одно сообщение в неделю на проект, в окно

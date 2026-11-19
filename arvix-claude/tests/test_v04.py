@@ -363,17 +363,17 @@ class ServerTest(BotCase):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.app.token}"}
         titles = []
-        for title in ("Первый проект", "Второй проект"):
-            conn.request("POST", "/api/projects", json.dumps({"title": title, "why": "проверка", "status": "idea"}), headers)
+        for title in ("Первая задача", "Вторая задача"):
+            conn.request("POST", "/api/tasks", json.dumps({"title": title, "start": "18:00"}), headers)
             response = conn.getresponse()
-            titles.append(json.loads(response.read())["project"]["title"])
-        conn.request("GET", "/api/projects", headers=headers)
+            titles.append(json.loads(response.read())["task"]["title"])
+        conn.request("GET", "/api/state", headers=headers)
         response = conn.getresponse()
         body = json.loads(response.read())
         conn.close()
-        self.assertEqual(titles, ["Первый проект", "Второй проект"])
+        self.assertEqual(titles, ["Первая задача", "Вторая задача"])
         self.assertEqual(response.status, 200)
-        self.assertEqual(sorted(p["title"] for p in body["projects"]), ["Второй проект", "Первый проект"])
+        self.assertEqual(sorted(t["title"] for t in body["tasks"]), ["Вторая задача", "Первая задача"])
 
     def test_api_requires_login(self) -> None:
         status, body = self.call("/api/state", token=None)

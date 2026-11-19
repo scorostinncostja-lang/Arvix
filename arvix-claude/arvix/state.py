@@ -101,6 +101,7 @@ class State:
     project_money: list[dict[str, Any]] = field(default_factory=list)
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)
     resources: dict[str, dict[str, Any]] = field(default_factory=dict)  # источники и инструменты проектов (D44)
+    learn_items: dict[str, dict[str, Any]] = field(default_factory=dict)  # «учиться»: очередь тем для проектов и вкладки «Обучение» (D47)
     repos: dict[str, dict[str, Any]] = field(default_factory=dict)  # проект → последнее, что видели в GitHub
     commits: dict[str, dict[str, Any]] = field(default_factory=dict)  # sha → коммит проекта: движение без слов
     last_user_at: str | None = None
@@ -352,6 +353,10 @@ class State:
 
     def _on_channel_set(self, ev: Event, p: dict, day: Day) -> None:
         self.channels[p["id"]] = {**p, "updated": ev.local_date.isoformat()}
+
+    def _on_learn_item_set(self, ev: Event, p: dict, day: Day) -> None:
+        old = self.learn_items.get(p["id"], {})
+        self.learn_items[p["id"]] = {**p, "date": old.get("date") or ev.local_date.isoformat(), "updated": ev.local_date.isoformat()}
 
     def _on_resource_set(self, ev: Event, p: dict, day: Day) -> None:
         self.resources[p["id"]] = {**p, "date": self.resources.get(p["id"], {}).get("date") or ev.local_date.isoformat()}

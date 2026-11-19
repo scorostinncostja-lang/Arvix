@@ -185,7 +185,7 @@ def audio_track(src: Path) -> bytes | None:
         return out.read_bytes() if out.is_file() and out.stat().st_size else None
 
 
-def store(core: Any, data: bytes, name: str, mime: str = "", *, stt: Any = None) -> dict[str, Any]:
+def store(core: Any, data: bytes, name: str, mime: str = "", *, stt: Any = None, folder: str | None = None) -> dict[str, Any]:
     """Положить файл в хранилище и подготовить к чтению. Возвращает описание для головы
     и для журнала: что за файл, где лежит, что из него сделано."""
     if not core.cfg.vault:
@@ -197,9 +197,10 @@ def store(core: Any, data: bytes, name: str, mime: str = "", *, stt: Any = None)
     now = core.now()
     name = safe_name(name)
     kind = classify(name, mime)
-    folder = core.vault.root / folder_for(core, now)
-    folder.mkdir(parents=True, exist_ok=True)
-    path = _unique(folder / f"{now:%H%M%S} {name}")
+    # folder — папка проекта (D47): код и скриншоты проекта лежат рядом с его заметками
+    target = core.vault.resolve(folder) if folder else core.vault.root / folder_for(core, now)
+    target.mkdir(parents=True, exist_ok=True)
+    path = _unique(target / f"{now:%Y-%m-%d %H%M} {name}" if folder else target / f"{now:%H%M%S} {name}")
     path.write_bytes(data)
     vault_rel = core.vault.rel
     info: dict[str, Any] = {"kind": kind, "kind_ru": KIND_RU[kind], "name": name, "size": len(data), "path": vault_rel(path),

@@ -7,7 +7,6 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const view = $("#view");
 const TOKEN_KEY = "arvix_token";
 const state = { tab: "today", data: null, messages: [], history: null, notesDir: "", note: null, thinking: "", seen: 0, version: "" };
-try { state.projView = localStorage.getItem("arvix_projview") || "list"; } catch (_) { state.projView = "list"; }
 
 // --- вход --------------------------------------------------------------------------------------
 /* Привязка телефона: #p=<одноразовый код> из ссылки Арвикса (живёт 15 минут, срабатывает
@@ -168,6 +167,7 @@ function renderTop() {
 }
 
 function render() {
+  view.classList.toggle("full", state.tab === "projects");  // окна проектов — на всю ширину экрана
   if (state.tab === "today") renderToday();
   else if (state.tab === "chat") renderChat();
   else if (state.tab === "notes") renderNotes();
@@ -1578,220 +1578,209 @@ function chartCard(title, days, pick, max, color, target) {
     <div class="legend"><span>${days[0].date.slice(8, 10)}.${days[0].date.slice(5, 7)}</span><span>сегодня</span></div></div>`;
 }
 
-// --- Проекты (D43, D44) ------------------------------------------------------------------------
-/* Цифры — время, темп, прогноз, застой, коммиты, конверсия — считает код (arvix/projects.py).
- * Приложение показывает и отправляет операции в /api/projects/… Денег у проекта нет (D44).
- * Два вида: «Проекты» (карточки) и «Роадмап» (проекты по целям в порядке, роадмап от Арвикса).
- * В 🟥 вкладка без цифр (правило №5). */
+// --- Проекты (D43, D44, D47) -------------------------------------------------------------------------
+/* Проект = чат с Арвиксом + папка в Obsidian. Человек говорит, Арвикс заполняет (D47).
+ * Окна: список проектов (сгруппирован по целям — это и есть роадмап) · чат проекта · панель
+ * «Заметки | План | Учиться». На ноутбуке — рядом, границу можно тянуть, окна прятать; на телефоне —
+ * список, а внутри проекта вкладки. Цифры считает код (arvix/projects.py), в 🟥 вкладка без цифр. */
 const ddmm = (iso) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}` : "");
-const RES_ICON = { source: "📄", doc: "📘", course: "🎓", video: "▶️", tool: "🛠", repo: "💾", design: "🎨", note: "📝", chat: "💬", other: "🔗" };
 const LOG_ICON = { update: "✓", decision: "⚖", lesson: "💡", blocker: "⛔", release: "🚀", feedback: "💬", idea: "✨" };
-const STATUS_DOT = { done: "✓", active: "●", paused: "Ⅱ", idea: "○", dropped: "×" };
+const PROJ_LAYOUT_KEY = "arvix_projlayout";
+const projLayout = (() => {
+  try { return { list: true, side: true, sideW: 400, pane: "chat", tab: "notes", ...JSON.parse(localStorage.getItem(PROJ_LAYOUT_KEY) || "{}") }; }
+  catch (_) { return { list: true, side: true, sideW: 400, pane: "chat", tab: "notes" }; }
+})();
+const saveLayout = () => { try { localStorage.setItem(PROJ_LAYOUT_KEY, JSON.stringify(projLayout)); } catch (_) { /* приватный режим */ } };
+const PROJ_ASK = ["С чего начать?", "Разложи на этапы", "Что мне выучить для этого?", "Проверь мой прогресс", "Найди примеры и источники"];
 
 async function loadProjects() {
   state.projects = await api("projects");
-  if (state.project && !state.projects.gentle) {
+  if (state.projects.gentle) { state.project = null; return; }
+  if (state.project) {
     try { state.project = await api("project?id=" + encodeURIComponent(state.project.id)); } catch (_) { state.project = null; }
   }
-  if (state.projects.gentle) state.project = null;
-}
-
-function projSwitch() {
-  const v = state.projView || "list";
-  return `<div class="seg proj-switch">${[["list", "Проекты"], ["roadmap", "Роадмап"]].map(([k, l]) =>
-    `<button type="button" data-pview="${k}" class="${v === k ? "on" : ""}">${l}</button>`).join("")}</div>`;
 }
 
 function renderProjects() {
   const P = state.projects;
   if (!P) { view.innerHTML = `<div class="empty">Загружаю…</div>`; return; }
   if (P.gentle) { view.innerHTML = `<div class="card note-card">${esc(P.note)}</div>`; return; }
-  if (state.project) { renderProject(); return; }
-  const s = P.summary;
-  let html = `<div class="proj-top">${projSwitch()}<div class="pills proj-actions">
-      <button class="pill primary" data-pact="new">${icon("plus")} Проект</button>
-      <button class="pill" data-pact="github">${icon("github")} Из GitHub</button></div></div>
-    <div class="stats">
-      <div class="stat"><b>${s.active}/${P.max_active}</b><span>в работе</span><div class="bar"><i style="width:${(100 * s.active) / Math.max(1, P.max_active)}%"></i></div></div>
-      <div class="stat"><b>${hm(s.week_min)}</b><span>неделя${s.weekly_min ? " из " + hm(s.weekly_min) : ""}</span><div class="bar deep"><i style="width:${s.weekly_min ? Math.min(100, (100 * s.week_min) / s.weekly_min) : 0}%"></i></div></div>
-      <div class="stat"><b>${s.commits_week}</b><span>коммитов за неделю</span></div></div>`;
-  if (P.load_issue) html += `<div class="card warn-card">⚠️ ${esc(P.load_issue)}</div>`;
-  if (state.thinking && /роадмап/.test(state.thinking)) html += `<div class="card think-card">🗺 Арвикс строит роадмап — придёт сообщением, проекты лягут идеями.</div>`;
-  html += (state.projView === "roadmap") ? roadmapHtml(P) : listHtml(P);
-  view.innerHTML = html;
+  const keep = captureComposer();
+  if (isWide()) {
+    const cols = [projLayout.list ? "var(--pl-w)" : "", "minmax(0,1fr)", projLayout.side && state.project ? "6px var(--ps-w)" : ""].filter(Boolean).join(" ");
+    view.innerHTML = `<div class="pw" style="grid-template-columns:${cols};--ps-w:${projLayout.sideW}px">
+      ${projLayout.list ? `<aside class="pw-list">${projListHtml(P)}</aside>` : ""}
+      <section class="pw-main">${state.project ? projHeadHtml() + projChatHtml() : projWelcomeHtml(P)}</section>
+      ${projLayout.side && state.project ? `<div class="pw-div" id="pw-div" title="Потяни, чтобы изменить ширину"></div><aside class="pw-side">${projSideHtml()}</aside>` : ""}</div>`;
+  } else if (!state.project) {
+    view.innerHTML = `<div class="pm-list">${projListHtml(P)}</div>`;
+  } else {
+    const pane = projLayout.pane;
+    view.innerHTML = `<div class="pm">${projHeadHtml()}
+      <div class="seg pm-tabs">${[["chat", "Чат"], ["notes", "Заметки"], ["plan", "План"], ["learn", "Учиться"]].map(([k, l]) =>
+        `<button type="button" data-ppane="${k}" class="${pane === k ? "on" : ""}">${l}</button>`).join("")}</div>
+      ${pane === "chat" ? projChatHtml() : `<div class="pm-pane">${projPaneHtml(pane)}</div>`}</div>`;
+  }
   bindProjects();
+  restoreComposer(keep);
+  const thread = $("#pc-thread"); if (thread) thread.scrollTop = thread.scrollHeight;
+  if (TG) {
+    TG.BackButton.offClick(projectBack);
+    if (state.project && !isWide()) { TG.BackButton.show(); TG.BackButton.onClick(projectBack); } else if (!state.note) TG.BackButton.hide();
+  }
 }
 
-function listHtml(P) {
-  if (!P.projects.length) return `<div class="empty">Проектов пока нет.<br><span class="small">«+ Проект», «Из GitHub» — или «Роадмап»: Арвикс предложит проекты под твою цель.</span></div>`;
-  const active = P.projects.filter((p) => p.status === "active");
-  const waiting = P.projects.filter((p) => p.status === "idea" || p.status === "paused");
-  const closed = P.projects.filter((p) => p.status === "done" || p.status === "dropped");
-  let html = "";
-  if (active.length) html += `<div class="section-title"><span>В работе</span><span>${active.length}</span></div><div class="proj-list">${active.map(projectCard).join("")}</div>`;
-  if (waiting.length) html += `<div class="section-title"><span>Идеи и пауза</span><span>${waiting.length}</span></div><div class="proj-list">${waiting.map(projectCard).join("")}</div>`;
-  if (closed.length) html += `<details class="card"><summary><b>Завершённые</b> <span class="muted">· ${closed.length}</span></summary>
-    <div class="proj-list" style="margin-top:10px">${closed.map(projectCard).join("")}</div></details>`;
+/* Перерисовка не должна терять набранный текст и фокус. */
+function captureComposer() {
+  const ta = $("#pc-text");
+  return ta ? { value: ta.value, focus: document.activeElement === ta, pos: ta.selectionStart } : null;
+}
+function restoreComposer(keep) {
+  const ta = $("#pc-text");
+  if (!ta || !keep) return;
+  ta.value = keep.value;
+  if (keep.focus) { ta.focus(); try { ta.setSelectionRange(keep.pos, keep.pos); } catch (_) { /* нет */ } }
+}
+
+// --- список: группы по целям = роадмап ---------------------------------------------------------
+function projListHtml(P) {
+  let html = `<button class="btn primary pl-new" data-pact="new">${icon("plus")} Новый проект</button>`;
+  if (P.load_issue) html += `<div class="pl-warn">⚠️ ${esc(P.load_issue)}</div>`;
+  if (!P.count) html += `<p class="muted small pl-hint">Напиши, что хочешь сделать, — Арвикс сам разложит проект, заведёт папку в Obsidian и будет вести его с тобой.</p>`;
+  for (const g of P.groups) {
+    html += `<div class="pl-group"><div class="pl-ghead"><span>${g.goal ? (g.goal.kind === "main" ? "★ " : "") + esc(g.goal.title) : "Без цели"}</span>
+      ${g.goal ? `<button class="link small" data-proadmap="${esc(g.goal.id)}" title="Арвикс предложит проекты к этой цели">✨ предложить</button>` : ""}</div>
+      ${g.projects.length ? g.projects.map(projItemHtml).join("") : `<div class="muted small pl-empty">проектов к цели пока нет</div>`}</div>`;
+  }
+  if (P.closed.length) html += `<details class="pl-group"><summary class="pl-ghead"><span>Завершённые · ${P.closed.length}</span></summary>${P.closed.map(projItemHtml).join("")}</details>`;
   return html;
 }
 
-function projectCard(p) {
-  const ms = p.milestones_total ? Math.round((100 * p.milestones_done) / p.milestones_total) : 0;
-  const week = p.weekly_min ? Math.min(100, (100 * p.week_min) / p.weekly_min) : 0;
-  const chips = [`<span class="chip">${esc(p.kind_ru)}</span>`];
-  if (p.status !== "active") chips.push(`<span class="chip ${p.status === "done" ? "green" : ""}">${esc(p.status_ru)}</span>`);
-  if (p.goal_title) chips.push(`<span class="chip accent">→ ${esc(p.goal_title)}</span>`);
+function projItemHtml(p) {
+  const on = state.project && state.project.id === p.id;
+  const sub = p.group === "closed" ? p.status_ru : p.group === "later" ? "отложен" + (p.by === "arvix" ? " · предложил Арвикс" : "")
+    : p.idle_days >= 7 ? `<span class="warn">${p.idle_days} дн без движения</span>` : p.next ? "→ " + esc(p.next.title) : "этапов нет";
+  return `<div class="pl-item${on ? " on" : ""} ${p.group}" data-proj="${esc(p.id)}" role="button" tabindex="0">
+    <span class="pl-dot"></span><div class="grow"><div class="pl-title">${esc(p.title)}</div><div class="pl-sub">${sub}</div></div></div>`;
+}
+
+function projWelcomeHtml(P) {
+  return `<div class="pw-welcome"><h2>Что хочешь сделать?</h2>
+    <p class="muted">Опиши, как другу: что, зачем, к какому сроку. Арвикс заведёт проект, разложит на этапы, скажет, что выучить, и создаст папку в Obsidian.</p>
+    <textarea id="pn-text" rows="4" placeholder="Например: хочу сделать бота, который напоминает классу про домашку. Хочу научиться Python и чтобы им пользовались хотя бы 10 человек. К Новому году."></textarea>
+    ${(P.goals || []).length ? `<select id="pn-goal" class="input"><option value="">Цель — пусть решит Арвикс</option>${P.goals.map((g) => `<option value="${esc(g.id)}">${esc(g.title)}</option>`).join("")}</select>` : ""}
+    <button class="btn primary" id="pn-go">${icon("send")} Начать проект</button></div>`;
+}
+
+// --- проект: шапка и чат ---------------------------------------------------------------------------
+function projHeadHtml() {
+  const p = state.project;
+  const chips = [`<span class="chip ${p.status === "active" ? "accent" : p.group === "closed" ? "green" : ""}">${esc(p.status_ru)}</span>`];
+  if (p.goal_title) chips.push(`<span class="chip">→ ${esc(p.goal_title)}</span>`);
   if (p.deadline) chips.push(`<span class="chip">до ${ddmm(p.deadline)}</span>`);
   if (p.status === "active" && p.idle_days >= 7) chips.push(`<span class="chip yellow">${p.idle_days} дн без движения</span>`);
-  if (p.pace && p.pace.behind) chips.push(`<span class="chip red">отстаёт</span>`);
-  if (p.repo) chips.push(`<span class="chip">${icon("github")} ${p.commits_week}</span>`);
-  if (p.by === "arvix") chips.push(`<span class="chip">от Арвикса</span>`);
-  const next = p.next ? `<div class="proj-next">${icon("chevron")}<span>${esc(p.next.title)}</span></div>`
-    : `<div class="proj-next muted">${p.milestones_total ? "все этапы пройдены" : "этапов нет — разложи на шаги"}</div>`;
-  return `<div class="card proj-card" role="button" tabindex="0" data-proj="${esc(p.id)}">
-    <div class="proj-title"><b>${esc(p.title)}</b></div>
-    ${p.purposes_ru.length ? `<div class="muted small">${p.purposes_ru.map(esc).join(" · ")}</div>` : ""}
-    <div class="meta">${chips.join("")}</div>${p.status === "active" || p.status === "paused" ? next : ""}
-    ${p.status === "active" ? `<div class="proj-bars"><div><span class="muted small">этапы ${p.milestones_done}/${p.milestones_total}</span><div class="bar"><i style="width:${ms}%"></i></div></div>
-      <div><span class="muted small">неделя ${hm(p.week_min)}${p.weekly_min ? " / " + hm(p.weekly_min) : ""}</span><div class="bar deep"><i style="width:${week}%"></i></div></div></div>` : ""}</div>`;
+  if (p.milestones_total) chips.push(`<span class="chip">этапы ${p.milestones_done}/${p.milestones_total}</span>`);
+  return `<div class="ph">${isWide() ? "" : `<button class="icon-btn sm" data-pact="back" aria-label="К списку">${icon("back")}</button>`}
+    <div class="grow ph-text"><div class="ph-title">${esc(p.title)}</div><div class="meta">${chips.join("")}</div></div>
+    <div class="ph-acts">${p.group !== "closed" ? `<button class="pill primary small-pill" data-pact="block">${icon("play")} Блок</button>` : ""}
+      <a class="pill small-pill" href="${obsidianUrl(p.main_note)}" title="Открыть папку проекта в Obsidian">${icon("notes")}${isWide() ? " Obsidian" : ""}</a>
+      ${isWide() ? `<button class="icon-btn sm" data-layout="list" title="Список проектов">◧</button><button class="icon-btn sm" data-layout="side" title="Заметки, план, учиться">◨</button>` : ""}
+      <button class="icon-btn sm" data-pact="menu" aria-label="Ещё">${icon("more")}</button></div></div>`;
 }
 
-function roadmapHtml(P) {
-  const blocks = P.roadmap || [];
-  if (!blocks.some((b) => b.goal)) {
-    return `<div class="card"><h3>Роадмап</h3><p>Роадмап строится под цель, а целей пока нет.</p>
-      <p class="muted small">Скажи Арвиксу в чате: «моя главная цель — …, к такому-то сроку». Потом здесь — «Роадмап от Арвикса».</p></div>`
-      + blocks.map(roadmapBlock).join("");
+function obsidianUrl(path) {
+  const vault = (state.projects && state.projects.vault) || "";
+  return `obsidian://open?vault=${encodeURIComponent(vault)}&file=${encodeURIComponent(String(path || "").replace(/\.md$/, ""))}`;
+}
+
+function projChatHtml() {
+  const p = state.project, msgs = p.messages || [];
+  const thinking = state.thinking && (!msgs.length || msgs[msgs.length - 1].who === "me");
+  return `<div class="pc"><div class="pc-thread" id="pc-thread">
+      ${msgs.length ? msgs.map((m) => `<div class="msg ${m.who === "me" ? "me" : ""}">${linkify(esc(m.text))}</div>`).join("")
+        : `<div class="pc-empty muted small">Здесь разговор только про «${esc(p.title)}». Арвикс видит этапы, заметки папки, время и присланные файлы — и сам всё записывает.</div>`}
+      ${thinking ? `<div class="msg typing">Арвикс думает…</div>` : ""}</div>
+    ${msgs.length < 3 ? `<div class="aw-chips">${PROJ_ASK.map((q) => `<button class="chip" data-ask="${esc(q)}">${esc(q)}</button>`).join("")}</div>` : ""}
+    <div class="pc-compose"><button class="icon-btn" id="pc-file" aria-label="Прислать файл: код, скриншот, PDF">${icon("clip")}</button>
+      <textarea id="pc-text" rows="1" placeholder="Сообщение Арвиксу о проекте"></textarea>
+      <button class="icon-btn go" id="pc-send" aria-label="Отправить">${icon("send")}</button>
+      <input type="file" id="pc-input" multiple hidden></div></div>`;
+}
+
+// --- панель: заметки · план · учиться -----------------------------------------------------------------
+function projSideHtml() {
+  const tab = projLayout.tab;
+  return `<div class="seg ps-tabs">${[["notes", "Заметки"], ["plan", "План"], ["learn", "Учиться"]].map(([k, l]) =>
+    `<button type="button" data-ptab="${k}" class="${tab === k ? "on" : ""}">${l}</button>`).join("")}</div>
+    <div class="ps-body">${projPaneHtml(tab)}</div>`;
+}
+
+function projPaneHtml(kind) {
+  if (kind === "notes") return projNotesHtml();
+  if (kind === "plan") return projPlanHtml();
+  return projLearnHtml();
+}
+
+function projNotesHtml() {
+  const p = state.project, n = state.projNote;
+  if (n && n.path) {
+    return `<div class="pn-bar"><button class="link small" data-pnote-close>${icon("back")} Заметки</button>
+        <b class="grow">${esc(noteName(n.path))}</b>
+        ${n.edit ? `<button class="pill small-pill primary" data-pnote-save>Сохранить</button><button class="pill small-pill" data-pnote-cancel>Отмена</button>`
+          : `<button class="pill small-pill" data-pnote-edit>${icon("pencil")}</button><a class="pill small-pill" href="${obsidianUrl(n.path)}">Obsidian</a>`}</div>
+      ${n.edit ? `<textarea id="pn-edit" class="pn-edit">${esc(n.text)}</textarea>` : (() => {
+        const doc = obsidian(n.text);
+        return `<div class="obs pn-view">${doc.props.length ? propsHtml(doc.props) : ""}${doc.html || `<p class="muted">Пустая заметка — ✎, чтобы написать.</p>`}</div>`;
+      })()}`;
   }
-  return blocks.map(roadmapBlock).join("");
+  const files = p.files || [];
+  return `<div class="pn-head"><span class="muted small">${esc(p.folder)}</span><button class="link small" data-pnote-new>+ заметка</button></div>
+    ${files.length ? files.map((f) => `<div class="pn-file${f.main ? " main" : ""}" ${f.note ? `data-pnote="${esc(f.path)}"` : `data-pfile="${esc(f.path)}"`} role="button" tabindex="0">
+      <span class="pn-ico">${f.main ? "★" : f.note ? "📝" : "📎"}</span><div class="grow"><div>${esc(f.name)}</div>
+      <div class="muted small">${f.sub ? esc(f.sub) + " · " : ""}${new Date(f.modified * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}</div></div></div>`).join("")
+      : `<div class="muted small">Папка пустая. Попроси Арвикса: «заведи заметку с планом» — или пришли файл в чат.</div>`}`;
 }
 
-function roadmapBlock(b) {
-  const g = b.goal;
-  const list = b.projects.length ? `<ol class="rm">${b.projects.map((p, i) => `<li class="rm-item ${p.status}">
-      <span class="rm-dot" title="${esc(p.status_ru)}">${STATUS_DOT[p.status] || "○"}</span>
-      <div class="rm-body" data-proj="${esc(p.id)}" role="button" tabindex="0"><div class="rm-title">${esc(p.title)}</div>
-        <div class="muted small">${[p.kind_ru, p.status_ru, p.weeks ? `~${p.weeks} нед` : "", p.milestones_total ? `этапы ${p.milestones_done}/${p.milestones_total}` : "",
-          p.by === "arvix" ? "от Арвикса" : ""].filter(Boolean).map(esc).join(" · ")}</div>
-        ${p.expectation ? `<div class="small">${esc(p.expectation)}</div>` : ""}
-        ${p.status === "idea" ? `<button class="pill small-pill rm-take" data-ptake="${esc(p.id)}">В работу</button>` : ""}</div>
-      <div class="rm-acts"><button class="icon-btn sm" data-pmove="${esc(p.id)}" data-step="-1" aria-label="Выше" ${i === 0 ? "disabled" : ""}>↑</button>
-        <button class="icon-btn sm" data-pmove="${esc(p.id)}" data-step="1" aria-label="Ниже" ${i === b.projects.length - 1 ? "disabled" : ""}>↓</button></div></li>`).join("")}</ol>`
-    : `<div class="muted small">Проектов к этой цели нет.</div>`;
-  return `<div class="card rm-card"><div class="rm-head"><div><div class="muted small">${g ? (g.kind === "main" ? "★ главная цель" : "цель") : ""}</div>
-      <h3 class="rm-goal">${g ? esc(g.title) : "Вне целей"}</h3>${g && g.deadline ? `<div class="muted small">до ${ddmm(g.deadline)}</div>` : ""}</div>
-      ${g ? `<button class="pill" data-proadmap="${esc(g.id)}">${icon("map")} Роадмап от Арвикса</button>` : ""}</div>
-    ${list}${!g && b.projects.length ? `<div class="muted small">Привяжи к цели в «Изменить» — проект встанет в её роадмап.</div>` : ""}</div>`;
-}
-
-function renderProject() {
-  const p = state.project, P = state.projects;
-  const today = (state.data && state.data.date) || new Date().toLocaleDateString("sv-SE");
-  const left = p.deadline ? Math.round((new Date(p.deadline) - new Date(today)) / 86400000) : null;
-  const chips = [`<span class="chip">${esc(p.kind_ru)}</span>`, `<span class="chip ${p.status === "active" ? "accent" : p.status === "done" ? "green" : ""}">${esc(p.status_ru)}</span>`];
-  if (p.goal_title) chips.push(`<span class="chip accent">→ ${esc(p.goal_title)}</span>`);
-  if (p.deadline) chips.push(`<span class="chip ${left < 0 ? "red" : left <= 7 ? "yellow" : ""}">до ${ddmm(p.deadline)} · ${left < 0 ? "срок прошёл" : left + " дн"}</span>`);
-  if (p.forecast) chips.push(`<span class="chip ${p.deadline && p.forecast > p.deadline ? "red" : ""}">прогноз ${ddmm(p.forecast)}</span>`);
-  if (p.pace) chips.push(`<span class="chip ${p.pace.behind ? "red" : "green"}">${p.pace.behind ? "отстаёт" : "по графику"}: этапы ${Math.round(100 * p.pace.done_share)}% · время ${Math.round(100 * p.pace.time_share)}%</span>`);
-  const live = p.status === "active" || p.status === "paused" || p.status === "idea";
-  let html = `<div class="proj-bar"><button class="pill" data-pact="back">${icon("back")} Проекты</button></div>
-    <div class="card proj-hero"><h2>${esc(p.title)}</h2><div class="meta">${chips.join("")}</div>
-      ${p.purposes_ru.length || p.why ? `<div class="proj-why"><span class="muted small">Зачем</span><div>${p.purposes_ru.map((x) => `<span class="chip">${esc(x)}</span>`).join(" ")}${p.why ? `<div style="margin-top:4px">${esc(p.why)}</div>` : ""}</div></div>` : ""}
-      ${p.expectation ? `<div class="proj-why"><span class="muted small">Ожидание</span><div>${esc(p.expectation)}</div></div>` : ""}
-      ${p.skills.length ? `<div class="meta" style="margin-top:8px">${p.skills.map((x) => `<span class="chip accent">${esc(x)}</span>`).join("")}</div>` : ""}
-      ${p.link ? `<div class="small" style="margin-top:8px"><a href="${esc(p.link)}" target="_blank" rel="noopener">${esc(p.link)}</a></div>` : ""}
-      <div class="pills">
-        ${live ? `<button class="pill primary" data-pact="block">${icon("play")} Блок в план</button>
-        <button class="pill" data-pact="log">${icon("pencil")} Записать</button>` : ""}
-        ${p.status === "idea" ? `<button class="pill" data-ptake="${esc(p.id)}">В работу</button>` : ""}
-        <button class="pill" data-pact="edit">Изменить</button>
-        <button class="pill" data-pact="status">Статус…</button>
-        <button class="pill" data-pact="export">${icon("notes")} В Obsidian</button></div></div>`;
-  if (p.issues.length) html += `<div class="card warn-card"><h3>Арвикс видит</h3>${p.issues.map((x) => `<div>⚠️ ${esc(x)}</div>`).join("")}</div>`;
-  html += `<div class="proj-grid"><div class="proj-main">`;
-  html += arvixWindow(p);
-  html += `<div class="card"><h3>Этапы · ${p.milestones_done}/${p.milestones_total}</h3>
-    ${p.milestones.length ? p.milestones.map((m) => `<div class="ms ${m.status}">
-      <button class="ms-check" data-ms="${esc(m.id)}" aria-label="${m.status === "done" ? "Вернуть в работу" : "Этап пройден"}">${m.status === "done" ? icon("check") : ""}</button>
-      <div class="ms-body" data-ms-edit="${esc(m.id)}"><div class="ms-title">${esc(m.title)}</div>
-        <div class="muted small">готово, когда: ${esc(m.dod)}${m.due ? ` · до ${ddmm(m.due)}` : ""}${m.done_date ? ` · пройден ${ddmm(m.done_date)}` : ""}</div></div></div>`).join("")
-      : `<div class="muted small">Разложи проект на 3–7 шагов, у каждого — проверяемый результат. Или спроси Арвикса в окне выше.</div>`}
-    <button class="btn" data-pact="milestone">${icon("plus")} Этап</button></div>`;
-  const open = p.tasks.filter((t) => t.open), past = p.tasks.filter((t) => !t.open).slice(0, 8);
-  html += `<div class="card"><h3>Блоки в плане</h3>${open.length ? open.map(projTaskRow).join("") : `<div class="muted small">Впереди блоков нет. «Блок в план» поставит его в свободное окно.</div>`}
-    ${past.length ? `<details style="margin-top:8px"><summary class="muted small">Прошлые · ${past.length}</summary>${past.map(projTaskRow).join("")}</details>` : ""}</div>`;
-  html += `<div class="card"><h3>Журнал</h3>${p.log.length ? p.log.slice(0, 25).map((x) => `<div class="log-row">
-      <span class="log-ico">${LOG_ICON[x.kind] || "•"}</span>
-      <div class="grow"><div>${esc(x.text)}</div><div class="muted small">${ddmm(x.date)} · ${esc((P.log_kinds || {})[x.kind] || x.kind)}${x.minutes ? " · " + hm(x.minutes) + " со слов" : ""}</div></div></div>`).join("")
-    : `<div class="muted small">Решения, уроки, стопоры, релизы — из этого собирается портфолио и разбор.</div>`}
-    ${live ? `<button class="btn" data-pact="log">${icon("plus")} Запись</button>` : ""}</div>`;
-  html += `</div><div class="proj-side">`;
-  html += `<div class="card"><h3>Время</h3>
-    <div class="row"><span>Неделя</span><b>${hm(p.week_min)}${p.weekly_min ? " из " + hm(p.weekly_min) : ""}</b></div>
-    ${p.weekly_min ? `<div class="bar deep"><i style="width:${Math.min(100, (100 * p.week_min) / p.weekly_min)}%"></i></div>` : ""}
-    <div class="row" style="margin-top:6px"><span>Всего</span><b>${hm(p.minutes)}</b></div>
-    <div class="muted small">задачи и таймер ${hm(p.task_min)}${p.said_min ? ` · со слов ${hm(p.said_min)}` : ""} · начат ${ddmm(p.started)}${p.last_move ? ` · движение ${ddmm(p.last_move)}` : ""}</div></div>`;
-  html += githubCard(p);
-  html += `<div class="card"><h3>Источники и инструменты</h3>${p.resources.length ? p.resources.map((r) => `<div class="res-row">
-      <span class="res-ico">${RES_ICON[r.kind] || "🔗"}</span>
-      <div class="grow">${r.url ? (r.url.endsWith(".md") && !/^https?:/.test(r.url) ? `<a href="#" data-rnote="${esc(r.url)}">${esc(r.title)}</a>` : `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a>`) : `<b>${esc(r.title)}</b>`}
-        <div class="muted small">${esc((P.resource_kinds || {})[r.kind] || r.kind)}${r.by === "arvix" ? " · от Арвикса — проверь" : ""}${r.note ? " · " + esc(r.note) : ""}</div></div>
-      <button class="icon-btn sm" data-rdel="${esc(r.id)}" aria-label="Убрать">${icon("x")}</button></div>`).join("")
-    : `<div class="muted small">Документация, курсы, видео, Figma, Notion, чат команды, заметки — всё, чем работаешь, в одном месте.</div>`}
-    <button class="btn" data-pact="resource">${icon("plus")} Источник или инструмент</button></div>`;
-  html += `<div class="card"><h3>Люди и трафик</h3>${p.channels.length ? p.channels.map((c) => `<div class="chan" data-ch="${esc(c.id)}" role="button" tabindex="0">
-      <div class="row"><b>${esc(c.name)}</b><span class="chip ${c.status === "works" ? "green" : c.status === "dropped" ? "red" : "yellow"}">${esc(P.channel_statuses[c.status] || c.status)}</span></div>
-      <div class="muted small">${esc(P.channel_types[c.type] || c.type)} · ${esc(c.hypothesis)}</div>
-      <div class="chan-nums"><span>охват <b>${c.reach || 0}</b></span><span>отклики <b>${c.leads}</b></span><span>пришли <b>${c.clients}</b></span>
-        ${c.response != null ? `<span class="muted">отклик ${c.response}%</span>` : ""}${c.conversion != null ? `<span class="muted">конверсия ${c.conversion}%</span>` : ""}</div></div>`).join("")
-    : `<div class="muted small">Откуда приходят пользователи, зрители, единомышленники. Канал — эксперимент: гипотеза с числом и сроком → охват → отклики → пришли.</div>`}
-    <button class="btn" data-pact="channel">${icon("plus")} Канал</button></div>`;
-  html += `</div></div>`;
-  view.innerHTML = html;
-  bindProjects();
-  if (TG) { TG.BackButton.show(); TG.BackButton.offClick(projectBack); TG.BackButton.onClick(projectBack); }
-}
-
-/* Окно Арвикса: вопрос про этот проект уходит голове с id проекта (она видит его цифры в контексте);
- * ответ — последний обмен про проект из общей переписки. Один вызов L1, как любое сообщение. */
-const ASK_CHIPS = ["Какой следующий шаг?", "Разложи на этапы", "Проверь, готов ли этап", "Где я застрял и что делать?", "Подскажи источники и инструменты"];
-function arvixWindow(p) {
-  const tag = `[${p.id}]`, msgs = state.messages || [];
-  let start = -1;
-  for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].who === "me" && msgs[i].text.includes(tag)) { start = i; break; }
-  const thread = start >= 0 ? msgs.slice(start, start + 6).filter((m, i) => i === 0 || m.who === "arvix" || !m.text.includes("[")) : [];
-  const shown = thread.length ? thread.map((m) => `<div class="aw-msg ${m.who}">${linkify(esc(m.who === "me" ? m.text.replace(/^Проект «[^»]*» \[[^\]]+\]:\s*/, "") : m.text))}</div>`).join("") : "";
-  const wait = state.thinking && thread.length && thread[thread.length - 1].who === "me";
-  return `<div class="card aw"><h3>${icon("chat")} Арвикс по проекту</h3>
-    ${shown ? `<div class="aw-thread">${shown}${wait ? `<div class="aw-msg arvix muted">думаю…</div>` : ""}</div>` : `<div class="muted small">Спроси про этот проект — Арвикс видит его этапы, время, коммиты и источники. Может сам поставить блок, этап или запись.</div>`}
-    <div class="aw-chips">${ASK_CHIPS.map((q) => `<button class="chip" data-ask="${esc(q)}">${esc(q)}</button>`).join("")}</div>
-    <div class="aw-input"><input id="aw-q" placeholder="Вопрос про «${esc(p.title)}»" maxlength="2000"><button class="icon-btn go" id="aw-send" aria-label="Отправить">${icon("send")}</button></div></div>`;
-}
-
-function githubCard(p) {
-  if (!p.repo) {
-    return `<div class="card"><h3>${icon("github")} GitHub</h3><div class="muted small">Привяжи репозиторий — коммиты станут движением проекта и строкой портфолио, без отметок вручную.</div>
-      <button class="btn" data-pact="repo">${icon("github")} Привязать репозиторий</button></div>`;
+function projPlanHtml() {
+  const p = state.project;
+  let html = "";
+  if (p.issues.length) html += `<div class="pp-sec warn-card"><b>Арвикс видит</b>${p.issues.map((x) => `<div class="small">⚠️ ${esc(x)}</div>`).join("")}</div>`;
+  if (p.expectation) html += `<div class="pp-sec"><div class="muted small">Результат</div><div>${esc(p.expectation)}</div></div>`;
+  html += `<div class="pp-sec"><div class="pp-h"><b>Этапы ${p.milestones_done}/${p.milestones_total}</b><button class="link small" data-pact="milestone">+ этап</button></div>
+    ${p.milestones.length ? p.milestones.map((m) => `<div class="ms ${m.status}"><button class="ms-check" data-ms="${esc(m.id)}" aria-label="Отметить">${m.status === "done" ? icon("check") : ""}</button>
+      <div class="ms-body"><div class="ms-title">${esc(m.title)}</div><div class="muted small">готово, когда: ${esc(m.dod)}${m.due ? ` · до ${ddmm(m.due)}` : ""}</div></div></div>`).join("")
+      : `<div class="muted small">Этапов нет — попроси в чате «разложи на этапы».</div>`}</div>`;
+  const open = p.tasks.filter((t) => t.open);
+  html += `<div class="pp-sec"><div class="pp-h"><b>Блоки</b><button class="link small" data-pact="block">+ блок</button></div>
+    ${open.length ? open.map((t) => `<div class="row small"><span>${ddmm(t.date)} ${esc(t.start || "")} · ${esc(t.title)}</span><span>${hm(t.duration_min)}</span></div>`).join("")
+      : `<div class="muted small">Впереди блоков нет.</div>`}
+    <div class="muted small" style="margin-top:6px">Неделя ${hm(p.week_min)}${p.weekly_min ? " из " + hm(p.weekly_min) : ""} · всего ${hm(p.minutes)}${p.forecast ? " · прогноз финиша " + ddmm(p.forecast) : ""}</div></div>`;
+  html += `<div class="pp-sec"><div class="pp-h"><b>Журнал</b><button class="link small" data-pact="log">+ запись</button></div>
+    ${p.log.length ? p.log.slice(0, 12).map((x) => `<div class="log-row"><span class="log-ico">${LOG_ICON[x.kind] || "•"}</span><div class="grow small">${esc(x.text)}<div class="muted">${ddmm(x.date)}</div></div></div>`).join("")
+      : `<div class="muted small">Отчёты по блокам проекта попадают сюда сами.</div>`}</div>`;
+  if (p.resources.length) {
+    html += `<div class="pp-sec"><b>Источники и примеры</b>${p.resources.map((r) => `<div class="small res-row"><div class="grow">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : esc(r.title)}
+      <span class="muted">${r.by === "arvix" ? " · проверь" : ""}${r.note ? " · " + esc(r.note) : ""}</span></div><button class="icon-btn sm" data-rdel="${esc(r.id)}" aria-label="Убрать">${icon("x")}</button></div>`).join("")}</div>`;
   }
-  const m = p.repo_meta || {};
-  return `<div class="card"><h3>${icon("github")} GitHub</h3>
-    <div class="row"><a href="https://github.com/${esc(p.repo)}" target="_blank" rel="noopener"><b>${esc(p.repo)}</b></a><span class="muted small">${esc(m.language || "")}</span></div>
-    <div class="chan-nums"><span>коммитов за неделю <b>${p.commits_week}</b></span><span>всего <b>${p.commits_total}</b></span>
-      ${m.stars != null ? `<span>★ <b>${m.stars}</b></span>` : ""}${m.issues ? `<span>issues <b>${m.issues}</b></span>` : ""}</div>
-    ${(p.commits || []).slice(0, 6).map((c) => `<div class="row small"><span>${ddmm(c.date)} · ${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.message)}</a>` : esc(c.message)}</span><code class="muted">${esc(c.sha.slice(0, 7))}</code></div>`).join("")
-      || `<div class="muted small">Коммитов ещё не видел${m.synced ? "" : " — нажми «Обновить»"}.</div>`}
-    <div class="pills"><button class="pill" data-pact="gsync">↻ Обновить</button><button class="pill" data-pact="repo">Сменить</button></div>
-    <div class="muted small">Сам проверяю раз в час.</div></div>`;
+  return html;
 }
 
-function projTaskRow(t) {
-  const status = t.status === "done" ? `<span class="chip green">✓ ${t.done_pct < 100 ? t.done_pct + "%" : ""}</span>` : t.status === "failed" || t.status === "debt"
-    ? `<span class="chip red">не сделано</span>` : t.status === "active" ? `<span class="chip accent">идёт</span>` : "";
-  return `<div class="row small"><span>${ddmm(t.date)} ${esc(t.start || "")} · ${esc(t.title)}</span><span>${hm(t.duration_min)} ${status}</span></div>`;
+function projLearnHtml() {
+  const items = state.project.learn || [];
+  const todo = items.filter((x) => x.status === "todo"), done = items.filter((x) => x.status === "done");
+  return `<div class="pp-h"><b>Что выучить для проекта</b><button class="link small" data-plearn-add>+ тема</button></div>
+    ${todo.length ? todo.map((x) => `<div class="lr"><button class="ms-check" data-plearn-done="${esc(x.id)}" aria-label="Выучено"></button>
+      <div class="grow"><div class="ms-title">${esc(x.topic)}</div>${x.why ? `<div class="muted small">${esc(x.why)}</div>` : ""}
+        ${(x.sources || []).length ? `<div class="small">${x.sources.map((s) => /^https?:/.test(s) ? `<a href="${esc(s)}" target="_blank" rel="noopener">${esc(s)}</a>` : esc(s)).join(" · ")}</div>` : ""}
+        ${x.task_status && x.task_status !== "done" ? `<div class="muted small">урок ${ddmm(x.task_date)} — в «Сегодня»</div>` : `<button class="pill small-pill" data-plearn-start="${esc(x.id)}">${icon("play")} Учить сейчас</button>`}</div></div>`).join("")
+      : `<div class="muted small">Тем нет. Спроси в чате: «что мне выучить для этого?» — Арвикс добавит сам.</div>`}
+    ${done.length ? `<details style="margin-top:8px"><summary class="muted small">Выучено · ${done.length}</summary>${done.map((x) => `<div class="small">✓ ${esc(x.topic)}</div>`).join("")}</details>` : ""}
+    <p class="muted small" style="margin-top:12px">«Учить сейчас» ставит учебный блок: план по минутам, таймер и проверка из 3 вопросов. Эти же темы возьмёт будущая вкладка «Обучение».</p>`;
 }
 
+// --- действия ----------------------------------------------------------------------------------
 function projectBack() {
-  state.project = null;
+  state.project = null; state.projNote = null;
   if (TG) { TG.BackButton.offClick(projectBack); TG.BackButton.hide(); }
   renderProjects(); window.scrollTo(0, 0);
 }
@@ -1799,15 +1788,13 @@ function projectBack() {
 async function openProject(id) {
   try {
     state.project = await api("project?id=" + encodeURIComponent(id));
-    const r = await api("messages").catch(() => null);
-    if (r) { state.messages = r.messages; state.thinking = r.thinking || ""; }
-    renderProjects(); window.scrollTo(0, 0);
+    state.projNote = null;
+    renderProjects(); if (!isWide()) window.scrollTo(0, 0);
   } catch (err) { toast(err.message); }
 }
 
 async function projectOp(op, body, msg) {
-  const p = state.project;
-  const r = await api(`projects/${p.id}/${op}`, { json: body });
+  const r = await api(`projects/${state.project.id}/${op}`, { json: body });
   state.project = r.project; notify("success");
   if (msg) toast(typeof msg === "function" ? msg(r) : msg);
   state.projects = await api("projects");
@@ -1815,248 +1802,208 @@ async function projectOp(op, body, msg) {
   return r;
 }
 
-async function askArvix(text) {
-  const p = state.project;
+async function projectSend(text) {
   text = String(text || "").trim();
   if (!text) return;
-  await api("message", { json: { text: `Проект «${p.title}» [${p.id}]: ${text}` } });
+  const p = state.project;
+  p.messages = [...(p.messages || []), { who: "me", text, at: new Date().toISOString() }];
   state.thinking = "думаю";
-  const r = await api("messages").catch(() => null);
-  if (r) state.messages = r.messages;
-  renderProject();
-}
-
-async function takeProject(id) {
-  const p = (state.projects.projects || []).find((x) => x.id === id);
-  if (!p) return;
-  const r = await api(`projects/${id}/status`, { json: { status: "active" } });
-  notify("success"); toast(`«${p.title}» — в работе`);
-  state.projects = await api("projects");
-  if (state.project && state.project.id === id) state.project = r.project;
   renderProjects();
+  try { await api(`projects/${p.id}/chat`, { json: { text } }); } catch (err) { toast(err.message); }
 }
 
-function bindProjects() {
-  view.querySelectorAll("[data-proj]").forEach((el) => {
-    const go = () => { haptic(); openProject(el.dataset.proj); };
-    el.addEventListener("click", go);
-    el.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
-  });
-  view.querySelectorAll("[data-pview]").forEach((el) => el.addEventListener("click", () => {
-    haptic("soft"); state.projView = el.dataset.pview;
-    try { localStorage.setItem("arvix_projview", state.projView); } catch (_) { /* приватный режим */ }
-    renderProjects();
-  }));
-  view.querySelectorAll("[data-ptake]").forEach((el) => el.addEventListener("click", async (e) => {
-    e.stopPropagation(); haptic();
-    try { await takeProject(el.dataset.ptake); } catch (err) { notify("error"); toast(err.message); }
-  }));
-  view.querySelectorAll("[data-pmove]").forEach((el) => el.addEventListener("click", async (e) => {
-    e.stopPropagation(); haptic("soft");
-    try { await api(`projects/${el.dataset.pmove}/move`, { json: { step: +el.dataset.step } }); state.projects = await api("projects"); renderProjects(); }
-    catch (err) { toast(err.message); }
-  }));
-  view.querySelectorAll("[data-proadmap]").forEach((el) => el.addEventListener("click", async () => {
-    haptic();
+async function projectFiles(files) {
+  const p = state.project;
+  for (const f of files) {
+    if (f.size > MAX_FILE) { toast(`«${f.name}» больше 20 МБ`); continue; }
+    const caption = ($("#pc-text") && $("#pc-text").value.trim()) || "";
     try {
-      await api("projects/roadmap", { json: { goal: el.dataset.proadmap } });
-      state.thinking = "строю роадмап"; toast("Арвикс строит роадмап — минуту-две. Придёт сообщением, проекты лягут идеями.");
-      renderProjects();
+      await api(`projects/${p.id}/upload`, { body: f, headers: { "Content-Type": f.type || "application/octet-stream",
+        "X-File-Name": encodeURIComponent(f.name), "X-Caption": encodeURIComponent(caption) } });
+      if ($("#pc-text")) $("#pc-text").value = "";
+      p.messages = [...(p.messages || []), { who: "me", text: "📎 " + f.name, at: new Date().toISOString() }];
+      state.thinking = "смотрю файл"; renderProjects();
     } catch (err) { toast(err.message); }
-  }));
-  view.querySelectorAll("[data-ms]").forEach((el) => el.addEventListener("click", async () => {
-    const m = state.project.milestones.find((x) => x.id === el.dataset.ms); if (!m) return;
-    haptic();
-    if (m.status !== "done" && !confirm(`Этап «${m.title}» пройден?\nКритерий: ${m.dod}`)) return;
-    try { await projectOp("milestone", { milestone: m.id, status: m.status === "done" ? "open" : "done" }, m.status === "done" ? "Этап снова в работе" : "✓ Этап пройден"); }
-    catch (err) { toast(err.message); }
-  }));
-  view.querySelectorAll("[data-ms-edit]").forEach((el) => el.addEventListener("click", () => {
-    const m = state.project.milestones.find((x) => x.id === el.dataset.msEdit); if (m) openMilestoneSheet(m);
-  }));
-  view.querySelectorAll("[data-ch]").forEach((el) => el.addEventListener("click", () => {
-    const c = state.project.channels.find((x) => x.id === el.dataset.ch); if (c) openChannelSheet(c);
-  }));
-  view.querySelectorAll("[data-rdel]").forEach((el) => el.addEventListener("click", async () => {
-    if (!confirm("Убрать из проекта?")) return;
-    try { await projectOp("resource", { resource: el.dataset.rdel, status: "removed" }, "Убрал"); } catch (err) { toast(err.message); }
-  }));
-  view.querySelectorAll("[data-rnote]").forEach((el) => el.addEventListener("click", (e) => { e.preventDefault(); setTab("notes"); openNote(el.dataset.rnote); }));
-  view.querySelectorAll("[data-ask]").forEach((el) => el.addEventListener("click", async () => {
-    haptic(); try { await askArvix(el.dataset.ask); } catch (err) { toast(err.message); }
-  }));
-  const q = $("#aw-q");
-  if (q) {
-    const send = async () => { const t = q.value; q.value = ""; try { await askArvix(t); } catch (err) { toast(err.message); } };
-    $("#aw-send").onclick = send;
-    q.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); send(); } });
   }
-  view.querySelectorAll("[data-pact]").forEach((el) => el.addEventListener("click", async () => {
-    const act = el.dataset.pact, p = state.project;
-    haptic();
-    try {
-      if (act === "new") openProjectSheet();
-      else if (act === "github") openGithubSheet();
-      else if (act === "back") projectBack();
-      else if (act === "edit") openProjectSheet(p);
-      else if (act === "block") openBlockSheet();
-      else if (act === "milestone") openMilestoneSheet();
-      else if (act === "log") openLogSheet();
-      else if (act === "resource") openResourceSheet();
-      else if (act === "channel") openChannelSheet();
-      else if (act === "status") openStatusSheet();
-      else if (act === "repo") openGithubSheet(p);
-      else if (act === "gsync") {
-        const r = await api("github/sync", { json: {} });
-        toast(r.new ? `+${r.new} коммит(ов)` : "Новых коммитов нет");
-        await loadProjects(); renderProjects();
-      } else if (act === "export") {
-        const r = await projectOp("export", {}, (x) => "Карточка в " + x.path);
-        if (r.path && confirm("Открыть заметку проекта?")) { setTab("notes"); openNote(r.path); }
-      }
-    } catch (err) { notify("error"); toast(err.message); }
-  }));
 }
 
-/* Выбор из подсказок + своё значение. multi — несколько сразу (цели проекта). */
-function chipsPick(id, options, selected, multi) {
-  const known = Object.keys(options);
-  const extra = selected.filter((v) => v && !known.includes(v));
-  return `<div class="seg wrap pick" data-pick="${id}" data-multi="${multi ? 1 : 0}">
-    ${known.map((k) => `<button type="button" data-v="${esc(k)}" class="${selected.includes(k) ? "on" : ""}">${esc(options[k])}</button>`).join("")}
-    ${extra.map((v) => `<button type="button" data-v="${esc(v)}" class="on">${esc(v)}</button>`).join("")}
-    <button type="button" data-own="1">${icon("pencil")} своё</button></div>`;
-}
-function bindPick(root, form) {
-  root.querySelectorAll("[data-pick]").forEach((g) => g.addEventListener("click", (e) => {
-    const b = e.target.closest("button"); if (!b) return;
-    const key = g.dataset.pick, multi = g.dataset.multi === "1";
-    haptic("soft");
-    if (b.dataset.own) {
-      const v = (prompt(multi ? "Своя причина — коротко" : "Свой тип — коротко", "") || "").trim().slice(0, 40);
-      if (!v) return;
-      const nb = document.createElement("button"); nb.type = "button"; nb.dataset.v = v; nb.textContent = v;
-      g.insertBefore(nb, b); b.previousSibling.click(); return;
-    }
-    if (multi) { b.classList.toggle("on"); form[key] = [...g.querySelectorAll("button.on")].map((x) => x.dataset.v); }
-    else { g.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b)); form[key] = b.dataset.v; }
-  }));
+async function openProjNote(path) {
+  try { const n = await api("note?path=" + encodeURIComponent(path)); state.projNote = { path: n.path, text: n.text, sha: n.sha, edit: false }; renderProjects(); }
+  catch (err) { toast(err.message); }
 }
 
-function openProjectSheet(p = null, prefill = {}) {
-  const P = state.projects;
-  const src = p || prefill;
-  const kinds = { ...P.kinds };
-  P.projects.forEach((x) => { if (x.kind && !kinds[x.kind] && x.kind_ru) kinds[x.kind] = x.kind_ru; });  // свои типы из прошлых проектов
-  const form = { kind: src.kind || "", purposes: src.purposes || [], weekly_min: String(p ? p.weekly_min : 180), status: "active" };
-  const goals = P.goals || [];
-  openSheet(`<h2>${p ? "Проект" : "Новый проект"}</h2>
-    <div class="field"><input id="pj-title" placeholder="Название: бот расписания, канал про ОГЭ, подкаст…" value="${esc(src.title || "")}" maxlength="120"></div>
-    <div class="field"><label>Что это</label>${chipsPick("kind", kinds, form.kind ? [form.kind] : [], false)}</div>
-    <div class="field"><label>Зачем — можно несколько</label>${chipsPick("purposes", P.purposes, form.purposes, true)}
-      <textarea id="pj-why" rows="2" placeholder="Своими словами, если хочется: что именно хочешь получить" style="margin-top:8px">${esc(src.why || "")}</textarea></div>
-    <div class="field"><label>Ожидание — что будет в конце, проверяемо</label><textarea id="pj-exp" rows="2" placeholder="Бот работает у 10 одноклассников; 100 подписчиков; выступил на конференции">${esc(src.expectation || "")}</textarea></div>
-    ${goals.length ? `<div class="field"><label>Работает на цель — встанет в её роадмап</label><select id="pj-goal" class="input"><option value="">— без цели —</option>${goals.map((g) => `<option value="${esc(g.id)}" ${src.goal_id === g.id ? "selected" : ""}>${esc(g.title)}</option>`).join("")}</select></div>` : ""}
-    <div class="field"><label>Срок</label><input id="pj-deadline" type="date" value="${esc(src.deadline || "")}"></div>
-    <div class="field"><label>Часов в неделю</label>${seg("weekly_min", ["0", "60", "120", "180", "300", "480"], form.weekly_min, (v) => (v === "0" ? "без нормы" : hm(+v)))}</div>
-    <div class="field"><label>Навыки, которые даст проект</label><input id="pj-skills" placeholder="Python, монтаж, публичные выступления — через запятую" value="${esc((src.skills || []).join(", "))}"></div>
-    <div class="field"><label>Ссылка (сайт, канал, документ)</label><input id="pj-link" placeholder="https://…" value="${esc(src.link || "")}"></div>
-    <div class="field"><label>Репозиторий GitHub</label><input id="pj-repo" placeholder="owner/name или ссылка" value="${esc(src.repo || "")}"></div>
-    ${p ? "" : `<div class="field"><label>Сразу в работу?</label>${seg("status", ["active", "idea"], "active", (v) => (v === "active" ? "в работу" : "пока идея"))}</div>
-    <div class="field"><label>Первый этап</label><input id="pj-ms" placeholder="Например: MVP — бот отвечает на /today"><input id="pj-ms-dod" placeholder="Готово, когда… (ссылка, число, отзыв)" style="margin-top:6px"></div>`}
-    <button class="btn primary" id="pj-save">${p ? "Сохранить" : "Создать"}</button>`, (root) => {
-    bindSeg(root, form); bindPick(root, form);
-    if (!p) setTimeout(() => $("#pj-title").focus(), 50);
-    $("#pj-save").onclick = async () => {
-      const body = { title: $("#pj-title").value.trim(), why: $("#pj-why").value.trim(), kind: form.kind, purposes: form.purposes,
-        expectation: $("#pj-exp").value.trim(), deadline: $("#pj-deadline").value || null, weekly_min: +form.weekly_min,
-        skills: $("#pj-skills").value, link: $("#pj-link").value.trim(), repo: $("#pj-repo").value.trim() };
-      if ($("#pj-goal")) body.goal_id = $("#pj-goal").value;
-      if (p) body.id = p.id; else body.status = form.status;
-      const msTitle = !p && $("#pj-ms").value.trim(), msDod = !p && $("#pj-ms-dod").value.trim();
-      if (msTitle && !msDod) { toast("У этапа нужен критерий: как проверить, что он сделан"); return; }
-      try {
-        const r = await api("projects", { json: body });
-        if (msTitle) await api(`projects/${r.project.id}/milestone`, { json: { title: msTitle, dod: msDod } });
-        notify("success"); closeSheet();
-        state.projects = await api("projects");
-        await openProject(r.project.id);  // проверки — уже с первым этапом
-        const found = (state.project && state.project.issues) || [];
-        toast(p ? "Сохранил" : "+ " + r.project.title + (found.length ? "\n⚠️ " + found.slice(0, 2).join("\n⚠️ ") : ""));
-      } catch (err) { toast(err.message); }
-    };
-  });
-}
-
-/* GitHub: без проекта — «Из GitHub» (репозиторий → новый проект), с проектом — привязка. */
-async function openGithubSheet(project = null) {
-  openSheet(`<h2>${icon("github")} GitHub</h2><div id="gh-body" class="muted">Загружаю…</div>`);
-  let data;
-  try { data = await api("github"); } catch (err) { $("#gh-body").textContent = err.message; return; }
-  const body = $("#gh-body"); if (!body) return;
-  if (!data.user && !data.token) {
-    body.classList.remove("muted");
-    body.innerHTML = `<p>Твой ник на GitHub — увижу публичные репозитории. Для приватных нужен токен в конфиге сервера (<code>[github] token</code>).</p>
-      <div class="field"><input id="gh-user" placeholder="ник или ссылка github.com/…"></div><button class="btn primary" id="gh-save">Подключить</button>
-      ${project ? `<div class="field" style="margin-top:12px"><label>Или вручную</label><input id="gh-manual" placeholder="owner/name"></div><button class="btn" id="gh-link">Привязать</button>` : ""}`;
-    $("#gh-save").onclick = async () => {
-      try { await api("github/user", { json: { user: $("#gh-user").value } }); openGithubSheet(project); } catch (err) { toast(err.message); }
-    };
-    $("#gh-link") && ($("#gh-link").onclick = () => linkRepo(project, $("#gh-manual").value));
-    return;
-  }
-  body.classList.remove("muted");
-  const repos = data.repos.filter((r) => !r.archived);
-  body.innerHTML = `<div class="row small"><span class="muted">${esc(data.user || "по токену")} · ${repos.length} репозиториев</span>
-      <button class="link small" id="gh-fresh">↻</button></div>
-    ${project ? `<div class="field"><input id="gh-manual" placeholder="owner/name — вручную"></div>` : ""}
-    <div class="gh-list">${repos.map((r) => `<div class="gh-row">
-      <div class="grow"><b>${esc(r.name)}</b>${r.private ? " 🔒" : ""}${r.fork ? ` <span class="muted small">fork</span>` : ""}
-        <div class="muted small">${[r.language, r.pushed_at ? "push " + ddmm(r.pushed_at.slice(0, 10)) : "", r.stars ? "★" + r.stars : "", r.project ? "→ " + r.project : ""].filter(Boolean).map(esc).join(" · ")}</div>
-        ${r.description ? `<div class="small">${esc(r.description)}</div>` : ""}</div>
-      ${project ? `<button class="pill" data-ghlink="${esc(r.repo)}">Привязать</button>` : r.project ? "" : `<button class="pill" data-ghnew="${esc(r.repo)}">Проект</button>`}</div>`).join("") || `<div class="muted">Репозиториев нет.</div>`}</div>
-    <button class="link small" id="gh-change">Сменить ник</button>`;
-  $("#gh-fresh").onclick = async () => { await api("github?fresh=1").catch((e) => toast(e.message)); openGithubSheet(project); };
-  $("#gh-change").onclick = async () => {
-    const v = prompt("Ник на GitHub (пусто — отключить)", data.user || "");
-    if (v === null) return;
-    try { await api("github/user", { json: { user: v } }); openGithubSheet(project); } catch (err) { toast(err.message); }
-  };
-  if (project && $("#gh-manual")) $("#gh-manual").addEventListener("keydown", (e) => { if (e.key === "Enter") linkRepo(project, e.target.value); });
-  body.querySelectorAll("[data-ghlink]").forEach((b) => b.addEventListener("click", () => linkRepo(project, b.dataset.ghlink)));
-  body.querySelectorAll("[data-ghnew]").forEach((b) => b.addEventListener("click", () => {
-    const r = repos.find((x) => x.repo === b.dataset.ghnew);
-    closeSheet();
-    openProjectSheet(null, { title: r.name, why: r.description, repo: r.repo, link: r.url, kind: "code", purposes: ["skill", "portfolio"] });
-  }));
-}
-
-async function linkRepo(project, repo) {
+async function openProjFile(path) {
   try {
-    await api("projects", { json: { id: project.id, repo: String(repo || "").trim() } });
-    await api("github/sync", { json: {} }).catch(() => null);
-    closeSheet(); toast("Репозиторий привязан"); await openProject(project.id);
+    const res = await fetch("/api/file?path=" + encodeURIComponent(path), { headers: authHeaders() });
+    if (!res.ok) throw new Error("Файл не открылся");
+    window.open(URL.createObjectURL(await res.blob()), "_blank");
   } catch (err) { toast(err.message); }
 }
 
-function openMilestoneSheet(m = null) {
-  openSheet(`<h2>${m ? "Этап" : "Новый этап"}</h2><p class="muted small">${esc(state.project.title)}</p>
-    <div class="field"><input id="ms-title" placeholder="Что сделать: лендинг, первая версия, 10 роликов" value="${esc(m ? m.title : "")}"></div>
-    <div class="field"><label>Готово, когда…</label><textarea id="ms-dod" rows="2" placeholder="Проверяемо: страница открывается по ссылке и 3 человека оставили отзыв">${esc(m ? m.dod : "")}</textarea></div>
-    <div class="field"><label>Срок этапа</label><input id="ms-due" type="date" value="${esc(m && m.due ? m.due : "")}"></div>
-    <button class="btn primary" id="ms-save">${m ? "Сохранить" : "Добавить"}</button>
-    ${m && m.status !== "dropped" ? `<button class="btn danger" id="ms-drop">Убрать этап</button>` : ""}`, () => {
-    if (!m) setTimeout(() => $("#ms-title").focus(), 50);
-    $("#ms-save").onclick = async () => {
-      try {
-        await projectOp("milestone", { milestone: m ? m.id : null, title: $("#ms-title").value.trim(), dod: $("#ms-dod").value.trim(), due: $("#ms-due").value || null }, m ? "Сохранил" : "+ этап");
-        closeSheet();
-      } catch (err) { toast(err.message); }
+function bindProjects() {
+  const on = (sel, fn) => view.querySelectorAll(sel).forEach((el) => el.addEventListener("click", (e) => { haptic("soft"); fn(el, e); }));
+  view.querySelectorAll("[data-proj]").forEach((el) => {
+    el.addEventListener("click", () => { haptic(); openProject(el.dataset.proj); });
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter") openProject(el.dataset.proj); });
+  });
+  on("[data-ppane]", (el) => { projLayout.pane = el.dataset.ppane; saveLayout(); renderProjects(); });
+  on("[data-ptab]", (el) => { projLayout.tab = el.dataset.ptab; saveLayout(); renderProjects(); });
+  on("[data-layout]", (el) => { projLayout[el.dataset.layout] = !projLayout[el.dataset.layout]; saveLayout(); renderProjects(); });
+  on("[data-ask]", (el) => projectSend(el.dataset.ask));
+  on("[data-proadmap]", async (el) => {
+    try { await api("projects/roadmap", { json: { goal: el.dataset.proadmap } }); toast("Арвикс подбирает проекты к цели — придёт сообщением, лягут в «отложены»"); }
+    catch (err) { toast(err.message); }
+  });
+  on("[data-pnote]", (el) => openProjNote(el.dataset.pnote));
+  on("[data-pfile]", (el) => openProjFile(el.dataset.pfile));
+  on("[data-pnote-close]", () => { state.projNote = null; renderProjects(); });
+  on("[data-pnote-edit]", () => { state.projNote.edit = true; renderProjects(); setTimeout(() => $("#pn-edit") && $("#pn-edit").focus(), 30); });
+  on("[data-pnote-cancel]", () => { state.projNote.edit = false; renderProjects(); });
+  on("[data-pnote-save]", async () => {
+    const n = state.projNote, text = $("#pn-edit").value;
+    try { const r = await api("note", { json: { path: n.path, text, sha: n.sha } }); state.projNote = { path: r.path, text: r.text, sha: r.sha, edit: false }; toast("Сохранено в Obsidian"); renderProjects(); }
+    catch (err) { if (err.status === 409) { toast("Заметку изменили — открыл свежую"); openProjNote(n.path); } else toast(err.message); }
+  });
+  on("[data-pnote-new]", async () => {
+    const name = (prompt("Название заметки", "") || "").trim(); if (!name) return;
+    try { const r = await api("note/new", { json: { dir: state.project.folder, name } }); await loadProjects(); state.projNote = { path: r.path, text: r.text, sha: r.sha, edit: true }; renderProjects(); }
+    catch (err) { toast(err.message); }
+  });
+  on("[data-ms]", async (el) => {
+    const m = state.project.milestones.find((x) => x.id === el.dataset.ms); if (!m) return;
+    if (m.status !== "done" && !confirm(`Этап «${m.title}» пройден?\nКритерий: ${m.dod}`)) return;
+    try { await projectOp("milestone", { milestone: m.id, status: m.status === "done" ? "open" : "done" }, m.status === "done" ? "Этап снова в работе" : "✓ Этап пройден"); }
+    catch (err) { toast(err.message); }
+  });
+  on("[data-rdel]", async (el) => {
+    if (!confirm("Убрать из проекта?")) return;
+    try { await projectOp("resource", { resource: el.dataset.rdel, status: "removed" }, "Убрал"); } catch (err) { toast(err.message); }
+  });
+  on("[data-plearn-add]", async () => {
+    const topic = (prompt("Что выучить? Например: asyncio, SQL JOIN, композиция кадра", "") || "").trim(); if (!topic) return;
+    try { await projectOp("learn", { topic }, "+ тема"); } catch (err) { toast(err.message); }
+  });
+  on("[data-plearn-done]", async (el) => { try { await projectOp("learn", { item: el.dataset.plearnDone, status: "done" }, "✓ Выучено"); } catch (err) { toast(err.message); } });
+  on("[data-plearn-start]", async (el) => {
+    try { await projectOp("learn_start", { item: el.dataset.plearnStart, minutes: 45 }, (r) => `Учебный блок ${ddmm(r.task.date)} в ${r.task.start} — ▶ в «Сегодня» начнёт урок`); state.data = await api("state"); }
+    catch (err) { toast(err.message); }
+  });
+  view.querySelectorAll("[data-pact]").forEach((el) => el.addEventListener("click", async () => {
+    haptic();
+    const act = el.dataset.pact;
+    try {
+      if (act === "new") openNewProjectSheet();
+      else if (act === "back") projectBack();
+      else if (act === "block") openBlockSheet();
+      else if (act === "milestone") openMilestoneSheet();
+      else if (act === "log") openLogSheet();
+      else if (act === "menu") openProjectMenu();
+    } catch (err) { toast(err.message); }
+  }));
+  if ($("#pn-go")) $("#pn-go").onclick = () => createProject($("#pn-text").value, $("#pn-goal") ? $("#pn-goal").value : "");
+  const ta = $("#pc-text");
+  if (ta) {
+    const grow = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 180) + "px"; };
+    ta.addEventListener("input", grow); grow();
+    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && isWide()) { e.preventDefault(); const t = ta.value; ta.value = ""; projectSend(t); } });
+    $("#pc-send").onclick = () => { const t = ta.value; ta.value = ""; projectSend(t); };
+    $("#pc-file").onclick = () => $("#pc-input").click();
+    $("#pc-input").onchange = (e) => { projectFiles([...e.target.files]); e.target.value = ""; };
+  }
+  // [[ссылки]] в заметке проекта: заметка из той же папки откроется тут же, остальные — поиском во вкладке «Заметки»
+  view.querySelectorAll(".pn-view [data-wiki]").forEach((a) => a.addEventListener("click", (e) => {
+    e.preventDefault();
+    const name = a.dataset.wiki.split("|")[0].split("#")[0].trim();
+    const hit = (state.project.files || []).find((f) => f.note && (f.name === name || f.path.replace(/\.md$/, "").endsWith(name)));
+    if (hit) openProjNote(hit.path); else { setTab("notes"); toast("Ищи «" + name + "» во вкладке «Заметки»"); }
+  }));
+  const pv = view.querySelector(".pn-view"); if (pv) hydrateAssets(pv);
+  const div = $("#pw-div");
+  if (div) div.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); div.setPointerCapture(e.pointerId);
+    const grid = div.parentElement, right = grid.getBoundingClientRect().right;
+    const move = (ev) => { projLayout.sideW = Math.round(Math.max(300, Math.min(right - ev.clientX, grid.clientWidth * 0.62))); grid.style.setProperty("--ps-w", projLayout.sideW + "px"); };
+    const up = () => { div.removeEventListener("pointermove", move); div.removeEventListener("pointerup", up); saveLayout(); };
+    div.addEventListener("pointermove", move); div.addEventListener("pointerup", up);
+  });
+}
+
+async function createProject(text, goal) {
+  text = String(text || "").trim();
+  if (text.length < 3) { toast("Пара слов — что хочешь сделать"); return; }
+  try {
+    const r = await api("projects/new", { json: { text, goal: goal || null } });
+    closeSheet(); notify("success");
+    state.projects = await api("projects");
+    state.project = await api("project?id=" + encodeURIComponent(r.project.id));
+    state.thinking = "думаю"; projLayout.pane = "chat"; projLayout.tab = "plan"; saveLayout();
+    renderProjects();
+    toast(r.project.status === "active" ? "Арвикс заполняет проект…" : "В работе уже 3 проекта — этот пока отложен. Арвикс всё равно его разложит.");
+  } catch (err) { toast(err.message); }
+}
+
+function openNewProjectSheet() {
+  const P = state.projects;
+  openSheet(`<h2>Новый проект</h2>
+    <div class="field"><textarea id="ns-text" rows="5" placeholder="Что хочешь сделать и зачем? К какому сроку? Например: хочу снять серию роликов про подготовку к ОГЭ, чтобы научиться монтажу и найти единомышленников. До февраля."></textarea></div>
+    ${(P.goals || []).length ? `<div class="field"><select id="ns-goal" class="input"><option value="">Цель — пусть решит Арвикс</option>${P.goals.map((g) => `<option value="${esc(g.id)}">${esc(g.title)}</option>`).join("")}</select></div>` : ""}
+    <button class="btn primary" id="ns-go">${icon("send")} Начать</button>
+    <p class="muted small">Дальше Арвикс сам: название, результат, этапы, что выучить, папка в Obsidian. Поправишь словами в чате проекта.</p>`, () => {
+    setTimeout(() => $("#ns-text").focus(), 50);
+    $("#ns-go").onclick = () => createProject($("#ns-text").value, $("#ns-goal") ? $("#ns-goal").value : "");
+  });
+}
+
+function openProjectMenu() {
+  const p = state.project, P = state.projects;
+  openSheet(`<h2>${esc(p.title)}</h2>
+    <div class="field"><label>Название</label><input id="pm-title" value="${esc(p.title)}"></div>
+    <div class="field"><label>Результат — что будет в конце</label><textarea id="pm-exp" rows="2">${esc(p.expectation)}</textarea></div>
+    <div class="field" style="display:flex;gap:8px"><div style="flex:1"><label>Срок</label><input id="pm-deadline" type="date" value="${esc(p.deadline || "")}"></div>
+      <div style="flex:1"><label>Часов в неделю</label><input id="pm-weekly" type="number" min="0" max="40" step="0.5" value="${p.weekly_min ? p.weekly_min / 60 : ""}"></div></div>
+    ${(P.goals || []).length ? `<div class="field"><label>Цель</label><select id="pm-goal" class="input"><option value="">— без цели —</option>${P.goals.map((g) => `<option value="${esc(g.id)}" ${p.goal_id === g.id ? "selected" : ""}>${esc(g.title)}</option>`).join("")}</select></div>` : ""}
+    <button class="btn primary" id="pm-save">Сохранить</button>
+    <div class="sheet-actions" style="margin-top:12px">
+      ${p.status === "active" ? `<button class="btn" data-pst="paused">⏸ Отложить</button>` : p.group !== "closed" ? `<button class="btn" data-pst="active">▶ В работу</button>` : `<button class="btn" data-pst="active">↺ Вернуть в работу</button>`}
+      ${p.group !== "closed" ? `<button class="btn" data-pst="done">✓ Завершить…</button>` : ""}
+      ${p.goal_id ? `<div style="display:flex;gap:8px"><button class="btn" data-pmove="-1">↑ Раньше в роадмапе</button><button class="btn" data-pmove="1">↓ Позже</button></div>` : ""}
+    </div>`, (root) => {
+    $("#pm-save").onclick = async () => {
+      const body = { title: $("#pm-title").value.trim(), expectation: $("#pm-exp").value.trim(), deadline: $("#pm-deadline").value || null,
+        weekly_min: $("#pm-weekly").value === "" ? null : Math.round(+$("#pm-weekly").value * 60) };
+      if ($("#pm-goal")) body.goal_id = $("#pm-goal").value;
+      try { await projectOp("save", body, "Сохранил"); closeSheet(); } catch (err) { toast(err.message); }
     };
-    $("#ms-drop") && ($("#ms-drop").onclick = async () => {
-      if (!confirm("Убрать этап из проекта?")) return;
-      try { await projectOp("milestone", { milestone: m.id, status: "dropped" }, "Этап убран"); closeSheet(); } catch (err) { toast(err.message); }
-    });
+    root.querySelectorAll("[data-pst]").forEach((b) => b.addEventListener("click", async () => {
+      const status = b.dataset.pst;
+      let reason = "";
+      if (status === "done") {
+        reason = (prompt("Итог: что получилось, что нет и почему? (попадёт в заметку проекта)", "") || "").trim();
+        if (!reason) return;
+        if (!confirm("Результат достигнут?\nОК — да, «Отмена» — закрыть без результата")) {
+          try { await projectOp("status", { status: "dropped", reason }, "Проект закрыт — итог записан"); closeSheet(); } catch (err) { toast(err.message); }
+          return;
+        }
+      }
+      try { await projectOp("status", { status, reason }, status === "active" ? "В работе" : status === "paused" ? "Отложен" : "Завершён 🎉"); closeSheet(); }
+      catch (err) { toast(err.message); }
+    }));
+    root.querySelectorAll("[data-pmove]").forEach((b) => b.addEventListener("click", async () => {
+      try { await projectOp("move", { step: +b.dataset.pmove }, "Порядок изменён"); } catch (err) { toast(err.message); }
+    }));
+  });
+}
+
+function openMilestoneSheet() {
+  openSheet(`<h2>Новый этап</h2><p class="muted small">${esc(state.project.title)} · проще — попросить Арвикса в чате</p>
+    <div class="field"><input id="ms-title" placeholder="Что сделать"></div>
+    <div class="field"><label>Готово, когда…</label><textarea id="ms-dod" rows="2" placeholder="Проверяемо: ссылка, число, отзыв"></textarea></div>
+    <button class="btn primary" id="ms-save">Добавить</button>`, () => {
+    setTimeout(() => $("#ms-title").focus(), 50);
+    $("#ms-save").onclick = async () => {
+      try { await projectOp("milestone", { title: $("#ms-title").value.trim(), dod: $("#ms-dod").value.trim() }, "+ этап"); closeSheet(); }
+      catch (err) { toast(err.message); }
+    };
   });
 }
 
@@ -2067,10 +2014,10 @@ function openBlockSheet() {
     <div class="field"><label>Когда</label><div style="display:flex;gap:8px">${seg("day", ["today", "tomorrow"], "today", (v) => (v === "today" ? "сегодня" : "завтра"))}
       <input id="bk-start" type="time" style="flex:1"></div></div>
     <button class="btn primary" id="bk-save">${icon("play")} Поставить</button>
-    <p class="muted small">Время пустое — первое свободное окно: мимо задач, школы и не позже чем за час до отбоя. За 5 минут придёт напоминание.</p>`, (root) => {
+    <p class="muted small">Время пустое — первое свободное окно. За 5 минут придёт напоминание, отчёт по блоку сам ляжет в журнал проекта.</p>`, (root) => {
     bindSeg(root, form);
     $("#bk-save").onclick = async () => {
-      try {  // «today»/«tomorrow» — по часам сервера, а не телефона
+      try {
         await projectOp("block", { minutes: +form.minutes, date: form.day, start: $("#bk-start").value || null },
           (r) => `+ ${r.task.title} · ${r.task.start}` + (r.warnings && r.warnings.length ? "\n⚠️ " + r.warnings.join("\n⚠️ ") : ""));
         closeSheet(); state.data = await api("state");
@@ -2080,74 +2027,15 @@ function openBlockSheet() {
 }
 
 function openLogSheet() {
-  const kinds = state.projects.log_kinds, form = { kind: "update", minutes: "0" };
-  openSheet(`<h2>Запись в журнал</h2><p class="muted small">${esc(state.project.title)}</p>
+  const kinds = state.projects.log_kinds, form = { kind: "update" };
+  openSheet(`<h2>Запись в журнал</h2><p class="muted small">${esc(state.project.title)} · попадёт в «Журнал» в Obsidian</p>
     <div class="field">${seg("kind", Object.keys(kinds), "update", (v) => LOG_ICON[v] + " " + kinds[v])}</div>
     <div class="field"><textarea id="lg-text" rows="3" placeholder="Что сделал, что решил, чему научился, что мешает"></textarea></div>
-    <div class="field"><label>Сколько работал вне плана</label>${seg("minutes", ["0", "15", "30", "60", "90", "120"], "0", (v) => (v === "0" ? "не считать" : hm(+v)))}</div>
     <button class="btn primary" id="lg-save">Записать</button>`, (root) => {
     bindSeg(root, form);
     setTimeout(() => $("#lg-text").focus(), 50);
     $("#lg-save").onclick = async () => {
-      try { await projectOp("log", { kind: form.kind, text: $("#lg-text").value.trim(), minutes: +form.minutes }, "Записал"); closeSheet(); }
-      catch (err) { toast(err.message); }
-    };
-  });
-}
-
-function openResourceSheet() {
-  const kinds = state.projects.resource_kinds, form = { kind: "doc" };
-  openSheet(`<h2>Источник или инструмент</h2><p class="muted small">${esc(state.project.title)}</p>
-    <div class="field">${seg("kind", Object.keys(kinds), "doc", (v) => RES_ICON[v] + " " + kinds[v])}</div>
-    <div class="field"><input id="rs-url" placeholder="Ссылка: https://… или путь к заметке .md"></div>
-    <div class="field"><input id="rs-title" placeholder="Название (пусто — возьму ссылку)"></div>
-    <div class="field"><input id="rs-note" placeholder="Зачем: «раздел про авторизацию», «макет главной»"></div>
-    <button class="btn primary" id="rs-save">Добавить</button>`, (root) => {
-    bindSeg(root, form);
-    setTimeout(() => $("#rs-url").focus(), 50);
-    $("#rs-save").onclick = async () => {
-      try {
-        await projectOp("resource", { kind: form.kind, url: $("#rs-url").value.trim(), title: $("#rs-title").value.trim(), note: $("#rs-note").value.trim() }, "+ источник");
-        closeSheet();
-      } catch (err) { toast(err.message); }
-    };
-  });
-}
-
-function openChannelSheet(c = null) {
-  const P = state.projects, form = { type: c ? c.type : "free", status: c ? c.status : "test" };
-  const num = (id, label, v) => `<div><label class="muted small">${label}</label><input id="${id}" type="number" inputmode="numeric" min="0" step="1" value="${c ? v || 0 : ""}" placeholder="0"></div>`;
-  openSheet(`<h2>${c ? esc(c.name) : "Канал"}</h2><p class="muted small">${esc(state.project.title)} · откуда приходят люди</p>
-    ${c ? "" : `<div class="field"><input id="ch-name" placeholder="Reels, Telegram-канал, школьный чат, Хабр, сарафан"></div>`}
-    <div class="field"><label>Тип</label>${seg("type", Object.keys(P.channel_types), form.type, (v) => P.channel_types[v])}</div>
-    <div class="field"><label>Гипотеза — число и срок</label><textarea id="ch-hyp" rows="2" placeholder="5 роликов за 2 недели → 20 откликов, 5 человек попробуют бота">${esc(c ? c.hypothesis : "")}</textarea></div>
-    <div class="field"><label>Итоги накопленно — всего с начала</label><div class="num-grid three">
-      ${num("ch-reach", "охват", c && c.reach)}${num("ch-leads", "отклики", c && c.leads)}${num("ch-clients", "пришли", c && c.clients)}</div></div>
-    <div class="field"><label>Вывод</label>${seg("status", Object.keys(P.channel_statuses), form.status, (v) => P.channel_statuses[v])}</div>
-    <button class="btn primary" id="ch-save">${c ? "Обновить" : "Добавить"}</button>`, (root) => {
-    bindSeg(root, form);
-    $("#ch-save").onclick = async () => {
-      const v = (id) => ($("#" + id).value === "" ? null : $("#" + id).value);
-      try {
-        await projectOp("channel", { channel: c ? c.id : null, name: c ? "" : $("#ch-name").value.trim(), type: form.type, hypothesis: $("#ch-hyp").value.trim(),
-          reach: v("ch-reach"), leads: v("ch-leads"), clients: v("ch-clients"), status: form.status }, c ? "Обновил" : "+ канал");
-        closeSheet();
-      } catch (err) { toast(err.message); }
-    };
-  });
-}
-
-function openStatusSheet() {
-  const p = state.project, form = { status: p.status };
-  const S = state.projects.statuses;
-  openSheet(`<h2>Статус</h2><p class="muted small">${esc(p.title)} · сейчас ${esc(p.status_ru)}</p>
-    <div class="field">${seg("status", Object.keys(S), p.status, (v) => S[v])}</div>
-    <div class="field"><label>Итог — для «готов» и «закрыт» обязателен</label><textarea id="st-reason" rows="3" placeholder="Что получилось, что нет и почему. Это попадёт в портфолио и разбор."></textarea></div>
-    <button class="btn primary" id="st-save">Сохранить</button>
-    <p class="muted small">Пауза и закрытие — решения, а не провал. В работе — не больше ${state.projects.max_active}.</p>`, (root) => {
-    bindSeg(root, form);
-    $("#st-save").onclick = async () => {
-      try { await projectOp("status", { status: form.status, reason: $("#st-reason").value.trim() }, "Статус: " + S[form.status]); closeSheet(); }
+      try { await projectOp("log", { kind: form.kind, text: $("#lg-text").value.trim() }, "Записал"); closeSheet(); }
       catch (err) { toast(err.message); }
     };
   });
@@ -2204,8 +2092,7 @@ function onChange(ev) {
         if (state.tab === "progress") { state.history = await api("history?days=30"); renderProgress(); }
         if (state.tab === "projects") {
           await loadProjects();
-          if (state.project) { const r = await api("messages"); state.messages = r.messages; state.thinking = r.thinking || ""; }
-          renderProjects();
+          if (!(state.projNote && state.projNote.edit)) renderProjects();  // правку заметки не сбиваем
         }
       }
     } catch (err) { if (err.auth) renderLogin(); }
@@ -2224,7 +2111,8 @@ document.addEventListener("keydown", (e) => {
     if (!$("#sheet").classList.contains("hidden")) { closeSheet(); return; }
     if (talk.on) { closeTalk(); return; }
     if (state.tab === "notes" && state.note) { e.preventDefault(); noteBack(); return; }
-    if (state.tab === "projects" && state.project) { e.preventDefault(); projectBack(); return; }
+    if (state.tab === "projects" && state.projNote) { e.preventDefault(); state.projNote = null; renderProjects(); return; }
+    if (state.tab === "projects" && state.project && !isWide()) { e.preventDefault(); projectBack(); return; }
     if (typing) e.target.blur();
     return;
   }

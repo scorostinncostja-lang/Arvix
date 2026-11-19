@@ -168,8 +168,10 @@ claude -p <сообщение> --system-prompt <слои 1–8> --output-format 
 `log_sleep`, `log_expense`, `log_social`, `remember`, `note`, `profile_set`, `set_goal`, `add_trait`,
 `declare_reason`, `learning_question`, `safety_flag`, `set_template` и шесть проектных (D43): `set_project`,
 `set_milestone` (этап только с `dod`), `plan_project` (блок в первое свободное окно — время ищет код), `project_log`,
-`project_resource` (только настоящая ссылка), `project_channel`; у `add_task` — поле `project`; у `set_project` —
-`purposes`, `repo`, `order` (D44). `defer_task` — с точным временем `start` («на 19:45»), минуты до него считает
+`project_resource` (только настоящая ссылка; чужой репозиторий как пример — `kind=example`), `project_note` (заметка в
+папке проекта: своя — перезаписать, правленная человеком — дописать), `learn_add` (тема в очередь «учиться»); у
+`add_task` — поле `project`; у `set_project` — `purposes`, `order` (D44, D47). В окне проекта голова получает блок
+`<project>` со всем о проекте и путями файлов его папки; в новом — ещё `<new_project>`: заполнить проект самой. `defer_task` — с точным временем `start` («на 19:45»), минуты до него считает
 код; `minutes` — только если человек сам назвал сдвиг; без времени перенос отказан в квитанции, а не «+15 молча» (D46). Цифры проекта модель видит в блоке ПРОЕКТЫ
 контекста вместе с ⚠️ несостыковками, которые обязана поднять сама. Плюс действия интерфейса (`brain.UI_ACTIONS`,
 их исполняет бот, [05-INTERFACES.md §2.1](05-INTERFACES.md#21-без-команд--намерение-из-текста--d23)), среди них

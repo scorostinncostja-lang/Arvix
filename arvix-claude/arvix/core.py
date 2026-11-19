@@ -471,6 +471,14 @@ class Core:
             if doubts:
                 payload["doubts"] = doubts  # отчёт записан, но сомнение видно в журнале и разборе
             self.emit("task_completed", payload, source=source, entity_id=task.id)
+            if task.project and report:
+                # Отчёт о блоке проекта — сразу запись журнала проекта (D47): прогресс виден без второго ввода.
+                self.emit("project_logged", {"project_id": task.project, "kind": "update", "text": report[:2000], "minutes": 0,
+                                             "task_id": task.id}, source=source, entity_id=task.project)
+        if task.project:
+            from arvix import projects
+
+            projects.sync_notes(self, task.project)
         self.recompute_mode(source="l0")
         return {"task": task, "debt_closed": task.debt_since is not None, "warnings": doubts}
 
@@ -682,12 +690,12 @@ class Core:
         return self._note_event(result, "fields", source) if result["changed"] else result
 
     def receive_file(self, data: bytes, name: str, mime: str = "", *, stt: Any = None, caption: str = "",
-                     source: str = "telegram") -> dict[str, Any]:
+                     source: str = "telegram", folder: str | None = None) -> dict[str, Any]:
         """Файл от человека — в хранилище (arvix/files.py), факт — в журнал. Читает его голова."""
         from arvix import files
 
         try:
-            info = files.store(self, data, name, mime, stt=stt)
+            info = files.store(self, data, name, mime, stt=stt, folder=folder)
         except files.FileError as exc:
             raise ArvixError(str(exc)) from exc
         with self.tx():
@@ -1069,13 +1077,18 @@ class Core:
     # Раньше ответ резался до 600 символов — и через неделю он «забывал» собственные объяснения.
     MESSAGE_LIMIT = 16000
 
-    def message_in(self, text: str, *, channel: str = "telegram") -> None:
+    def message_in(self, text: str, *, channel: str = "telegram", project: str | None = None) -> None:
+        payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "channel": channel}
+        if project:
+            payload["project"] = project  # чат проекта (D47): своя нить в общей переписке
         with self.tx():
-            self.emit("message_in", {"text": text[: self.MESSAGE_LIMIT], "channel": channel}, source=channel)
+            self.emit("message_in", payload, source=channel)
 
     def message_out(self, text: str, *, key: str | None = None, channel: str = "telegram",
-                    buttons: list[list[tuple[str, str]]] | None = None) -> None:
+                    buttons: list[list[tuple[str, str]]] | None = None, project: str | None = None) -> None:
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "key": key, "channel": channel}
+        if project:
+            payload["project"] = project
         if buttons:  # приложение показывает те же кнопки под сообщением
             payload["buttons"] = [[[t, d] for t, d in row] for row in buttons]
         with self.tx():

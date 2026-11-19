@@ -31,7 +31,7 @@ ACTION_TYPES = (
     "log_sleep", "log_expense", "log_social", "remember", "note", "profile_set",
     "set_goal", "add_trait", "declare_reason", "learning_question", "safety_flag", "set_template",
     # Проекты (D43): карточка, этап с критерием, блок в план, журнал, деньги, канал привлечения.
-    "set_project", "set_milestone", "plan_project", "project_log", "project_resource", "project_channel",
+    "set_project", "set_milestone", "plan_project", "project_log", "project_resource", "project_note", "learn_add",
 ) + (
     # Действия интерфейса: их исполняет бот после ответа, а не ядро (05-INTERFACES §2.1).
     # Так человек говорит словами, а не командами: «давай позанимаемся физикой» → урок.
@@ -45,7 +45,7 @@ ACTION_RU = {
     "note": "заметка", "profile_set": "профиль", "set_goal": "цель", "add_trait": "черта", "declare_reason": "причина дня",
     "learning_question": "учебный вопрос", "safety_flag": "safety", "set_template": "распорядок",
     "set_project": "проект", "set_milestone": "этап проекта", "plan_project": "блок проекта", "project_log": "журнал проекта",
-    "project_resource": "источник проекта", "project_channel": "канал привлечения",
+    "project_resource": "источник проекта", "project_note": "заметка проекта", "learn_add": "учиться",
 }
 
 _ACTION_FIELDS = {
@@ -68,9 +68,9 @@ _ACTION_FIELDS = {
     "goal_id": {"type": "string", "description": "для set_goal: id существующей цели — исправить её (kind, deadline, metric, status=dropped)"},
     "parent_id": {"type": "string", "description": "для set_goal: id цели, этапом которой становится эта"},
     "metric": {"type": "string", "description": "для set_goal: как проверить достижение — число, оценка, результат"},
-    "status": {"type": "string", "enum": ["active", "done", "dropped", "idea", "paused", "open", "test", "works"],
-               "description": "цель: active/done/dropped; проект: idea/active/paused/done/dropped (done и dropped — с итогом в reason); "
-                              "этап: open/done/dropped; канал: test/works/dropped"},
+    "status": {"type": "string", "enum": ["active", "done", "dropped", "idea", "paused", "open", "todo"],
+               "description": "цель: active/done/dropped; проект: active / paused (отложен) / done / dropped (done и dropped — с итогом в reason); "
+                              "этап: open/done/dropped; тема learn_add: todo/done/dropped"},
     "weekdays": {"type": "array", "items": {"type": "integer"}, "description": "для set_template: 0=пн … 6=вс"},
     "day_type": {"type": "string", "enum": ["study", "work", "deep", "recovery", "silent"]},
     "project": {"type": "string", "description": "id проекта из блока ПРОЕКТЫ: для add_task — блок работает на проект; для set_project — правка"},
@@ -81,12 +81,11 @@ _ACTION_FIELDS = {
     "skills": {"type": "array", "items": {"type": "string"}, "description": "для set_project: навыки, которые даёт проект"},
     "purposes": {"type": "array", "items": {"type": "string"},
                  "description": "для set_project: зачем — skill, portfolio, experience, people, career, admission, earn, brand, help, idea, fun, health или своё"},
-    "repo": {"type": "string", "description": "для set_project: репозиторий GitHub owner/name — коммиты станут движением проекта"},
     "order": {"type": "integer", "description": "для set_project: место в роадмапе цели (1 — первый)"},
-    "url": {"type": "string", "description": "для project_resource: ссылка — только настоящая"},
-    "hypothesis": {"type": "string", "description": "для project_channel: что ждём от канала, с числом и сроком"},
-    "reach": {"type": "integer"}, "leads": {"type": "integer"}, "clients": {"type": "integer"},
-    "channel": {"type": "string", "description": "для project_channel: id канала — обновить итоги"},
+    "url": {"type": "string", "description": "для project_resource: ссылка — только настоящая; чужой репозиторий как пример — kind=example"},
+    "append": {"type": "boolean", "description": "для project_note: дописать в конец, а не создать или перезаписать свою"},
+    "learn": {"type": "string", "description": "для learn_add: id темы — отметить (status=done) или исправить"},
+    "sources": {"type": "array", "items": {"type": "string"}, "description": "для learn_add: источники темы — учебник и глава, документация, курс"},
     "link": {"type": "string"},
     "blocks": {
         "type": "array",
@@ -387,7 +386,7 @@ def _start_from_deadline(action: dict[str, Any]) -> str | None:
     return f"{max(total, 0) // 60:02d}:{max(total, 0) % 60:02d}"
 
 
-PROJECT_ACTIONS = frozenset({"set_project", "set_milestone", "plan_project", "project_log", "project_resource", "project_channel"})
+PROJECT_ACTIONS = frozenset({"set_project", "set_milestone", "plan_project", "project_log", "project_resource", "project_note", "learn_add"})
 
 
 def _project_action(core: Core, kind: str, a: dict[str, Any], source: str) -> tuple[str, list[str]]:
@@ -399,11 +398,12 @@ def _project_action(core: Core, kind: str, a: dict[str, Any], source: str) -> tu
             core, a.get("title", ""), project_id=a.get("project") or None, why=a.get("why", ""), kind=a.get("kind"),
             purposes=a.get("purposes"), expectation=a.get("expectation") or a.get("metric") or "", deadline=a.get("deadline"),
             weekly_min=a.get("weekly_min"), goal_id=a.get("goal_id") or None, status=a.get("status"), skills=a.get("skills"),
-            link=a.get("link", ""), repo=a.get("repo"), order=a.get("order"), reason=a.get("reason") or a.get("report") or "",
+            link=a.get("link", ""), order=a.get("order"), reason=a.get("reason") or a.get("report") or "",
             source=source,
         )
         p = core.state.projects[pid]
-        return f"проект «{p['title']}» · {projects.STATUSES[p['status']]}", [f"проект «{p['title']}»: {i}" for i in projects.issues(core, p)[:3]]
+        # Несостыковки проекта модель и так видит в контексте, человек — в «Плане»: в квитанции не дублируем
+        return f"проект «{p['title']}» · {projects.STATUSES[p['status']]}", []
     project = projects.resolve(core, a.get("project") or a.get("goal_id") or "")
     if kind == "set_milestone":
         status = a.get("status") if a.get("status") in projects.MILESTONE_STATUSES else None
@@ -425,11 +425,14 @@ def _project_action(core: Core, kind: str, a: dict[str, Any], source: str) -> tu
         projects.set_resource(core, project["id"], a.get("title", ""), url=a.get("url") or a.get("link") or "", kind=a.get("kind"),
                               note=a.get("text", ""), by="arvix", source=source)
         return f"источник «{a.get('title') or a.get('url')}» · {project['title']}", []
-    projects.set_channel(core, project["id"], a.get("title", ""), channel_id=a.get("channel") or None, type=a.get("kind"),
-                         hypothesis=a.get("hypothesis", ""), reach=a.get("reach"), leads=a.get("leads"), clients=a.get("clients"),
-                         status=a.get("status") if a.get("status") in projects.CHANNEL_STATUSES else None,
-                         note=a.get("text", ""), source=source)
-    return f"канал «{a.get('title') or a.get('channel')}» · {project['title']}", []
+    if kind == "project_note":
+        rel = projects.write_note(core, project["id"], a.get("title") or a.get("name") or "", a.get("text") or a.get("content") or "",
+                                  append=bool(a.get("append")), source=source)
+        return f"заметка {rel}", []
+    status = a.get("status") if a.get("status") in ("todo", "done", "dropped") else None
+    projects.set_learn(core, a.get("topic") or a.get("title") or "", item_id=a.get("learn") or None, project_ref=project["id"],
+                       why=a.get("why", ""), sources=a.get("sources"), status=status, source=source)
+    return f"учиться: {a.get('topic') or a.get('title') or 'тема'}" + (" · пройдено" if status == "done" else ""), []
 
 
 def apply_actions(
