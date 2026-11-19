@@ -361,6 +361,34 @@ class OneMessageTest(BotCase):
         self.assertNotIn("пересекается", self.api.last)
         self.assertIn("⏳ Математика → 20:40", self.api.last)
 
+    def test_defer_to_exact_time_matches_the_reply(self) -> None:
+        """Баг 19.11: «переношу на 19:45», а блок уехал на 19:09 — модель не дала minutes, код молча добавил 15.
+        Теперь голова называет время (start), минуты считает код (D45)."""
+        self.at(moscow(2026, 11, 19, 18, 54))
+        math = self.core.add_task("Математика: блок 45 минут", start="18:54", duration_min=45, importance=3)
+        self.brain.answers.append({"reply": "Переношу блок на 19:45, до 20:30.", "actions": [
+            {"type": "defer_task", "task": math.id, "start": "19:45"},
+        ]})
+        self.text("пойду погуляю, сяду в 19:45")
+        self.assertEqual(self.core.state.tasks[math.id].start, "19:45")
+        self.assertIn("⏳ Математика: блок 45 минут → 19:45", self.api.last)
+
+    def test_defer_without_time_is_refused_not_plus_fifteen(self) -> None:
+        self.at(moscow(2026, 11, 19, 18, 54))
+        math = self.core.add_task("Математика", start="19:00", duration_min=45, importance=3)
+        self.brain.answers.append({"reply": "Переношу на 19:45.", "actions": [{"type": "defer_task", "task": math.id}]})
+        self.text("перенеси")
+        self.assertEqual(self.core.state.tasks[math.id].start, "19:00")  # не 19:15
+        self.assertIn("⚠️ Не выполнено", self.api.last)
+
+    def test_defer_into_the_past_is_refused(self) -> None:
+        self.at(moscow(2026, 11, 19, 18, 54))
+        math = self.core.add_task("Математика", start="19:00", duration_min=45, importance=3)
+        self.brain.answers.append({"reply": "Ок.", "actions": [{"type": "defer_task", "task": math.id, "start": "18:30"}]})
+        self.text("перенеси на 18:30")
+        self.assertEqual(self.core.state.tasks[math.id].start, "19:00")
+        self.assertIn("уже прошло", self.api.last)
+
     def test_receipt_alone_when_reply_is_empty(self) -> None:
         task = self.core.add_task("Английский", importance=2, start="12:00")
         self.brain.answers.append({"reply": "", "actions": [{"type": "complete_task", "task": task.id}]})
