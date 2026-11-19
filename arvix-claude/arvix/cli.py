@@ -74,7 +74,12 @@ def cmd_add(args: argparse.Namespace) -> None:
 
 
 def cmd_done(args: argparse.Namespace) -> None:
-    result = _core().complete_task(args.task, done_pct=args.pct, report=args.report, source=CLI)
+    try:
+        result = _core().complete_task(args.task, done_pct=args.pct, report=args.report, source=CLI)
+    except ArvixError as exc:
+        if "требует отчёта" in str(exc) and not args.report:
+            raise ArvixError(f"{exc} Так: arvix done \"{args.task}\" --report \"что сделано\"") from exc
+        raise
     print(f"✅ {result['task'].title}" + (" · долг закрыт" if result["debt_closed"] else ""))
 
 

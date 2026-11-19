@@ -7,11 +7,10 @@ catch_up() идемпотентен: его безопасно звать из �
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
 from arvix import load, rules
-from arvix.config import parse_hhmm
 
 log = logging.getLogger("arvix.daily")
 MAX_CATCH_UP_DAYS = 14
@@ -19,8 +18,8 @@ MAX_CATCH_UP_DAYS = 14
 
 def catch_up(core: Any) -> None:
     now = core.now()
-    rollover = parse_hhmm(core.cfg.schedule("rollover")) or datetime.min.time()
-    last_closable = now.date() - timedelta(days=1 if now.time() >= rollover else 2)
+    past_rollover = f"{now:%H:%M}" >= core.rollover()
+    last_closable = now.date() - timedelta(days=1 if past_rollover else 2)
     first = core.state.first_date
     if first is not None:
         d = max(first, last_closable - timedelta(days=MAX_CATCH_UP_DAYS - 1))
@@ -30,7 +29,7 @@ def catch_up(core: Any) -> None:
                 close_day(core, d)
             d += timedelta(days=1)
     review_budget(core)
-    if now.time() >= rollover:
+    if past_rollover:
         materialize(core, now.date())
     core.recompute_mode()
 

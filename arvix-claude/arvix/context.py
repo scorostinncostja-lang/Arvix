@@ -151,6 +151,9 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
         lines.append(f"СЕГОДНЯ: {done}/{len(tasks)} задач{pct} · глубокая {hm(day.deep_min if day else 0)} из {hm(deep_target)}{sleep}")
     if tasks:
         lines.append("ЗАДАЧИ:\n" + "\n".join("  " + task_line(t) for t in tasks))
+    if late := core.open_yesterday():
+        lines.append("ВЧЕРА НЕ ЗАКРЫТО (день закроется в 04:00; «сделал» сейчас — скорее про них):\n"
+                     + "\n".join("  " + task_line(t) for t in late))
     if reports := report_lines(core, tasks):
         lines.append("ОТЧЁТЫ СЕГОДНЯ (слова человека; фото открой Read, если важно, что на них):\n" + "\n".join(reports))
     if busy := core.fixed_blocks(today):

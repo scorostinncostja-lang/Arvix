@@ -249,7 +249,10 @@ function renderToday() {
   html += `</div><div class="today-main">`;
   const items = [...(d.tasks || []).map((t) => ({ ...t, kind: "task" })), ...(d.busy || []).map((b) => ({ ...b, kind: "busy" }))]
     .sort((a, b) => (a.start || "99").localeCompare(b.start || "99"));
-  html += `<div class="section-title first"><span>План дня</span><span>${d.day_type ? esc(d.day_type) : ""}</span></div>`;
+  if (d.yesterday && d.yesterday.length) {  // после полуночи, до 04:00: вчерашнее ещё можно закрыть
+    html += `<div class="section-title first"><span>Вчера — не закрыто</span><span>до 04:00</span></div>` + d.yesterday.map((t) => taskRow(t)).join("");
+  }
+  html += `<div class="section-title${d.yesterday && d.yesterday.length ? "" : " first"}"><span>План дня</span><span>${d.day_type ? esc(d.day_type) : ""}</span></div>`;
   html += items.length ? items.map((t) => (t.kind === "busy" ? busyRow(t) : taskRow(t))).join("") :
     `<div class="empty">На сегодня задач нет.<br><span class="small">Нажми «+»${isWide() ? " (Alt+N)" : ""} или напиши Арвиксу: «добавь физику в 18:00 на час».</span></div>`;
   if (d.debts && d.debts.length) {
@@ -340,7 +343,7 @@ function taskRow(t, debt = false) {
 
 function findTask(id) {
   const d = state.data || {};
-  return [...(d.tasks || []), ...(d.debts || []), ...(d.tomorrow || [])].find((t) => t.id === id);
+  return [...(d.tasks || []), ...(d.yesterday || []), ...(d.debts || []), ...(d.tomorrow || [])].find((t) => t.id === id);
 }
 
 function bindFocusSetup() {
