@@ -64,6 +64,19 @@ def task_line(task: Any, with_id: bool = True) -> str:
     return " ".join(bits) + " · " + " ".join(meta)
 
 
+def report_lines(core: Any, tasks: list[Any]) -> list[str]:
+    """Отчёты закрытых задач и фото к ним (D49): без этого голова видела только «✅», а не что сделано."""
+    out = []
+    for t in tasks:
+        if t.status != "done" or not (t.report or t.report_photos):
+            continue
+        line = f"  [{t.id}] {t.title}: «{(t.report or '').strip()[:400]}»"
+        if t.report_photos:
+            line += " · фото: " + ", ".join(str(core.vault.root / p) for p in t.report_photos)
+        out.append(line)
+    return out
+
+
 def _facts(state: Any, message: str, today: date | None = None, limit: int = 8) -> list[str]:
     """Топ важных фактов всегда + совпадения по словам сообщения (вместо векторов).
     Факт с истёкшим valid_until («сессия до пятницы») в контекст больше не попадает."""
@@ -138,6 +151,8 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
         lines.append(f"СЕГОДНЯ: {done}/{len(tasks)} задач{pct} · глубокая {hm(day.deep_min if day else 0)} из {hm(deep_target)}{sleep}")
     if tasks:
         lines.append("ЗАДАЧИ:\n" + "\n".join("  " + task_line(t) for t in tasks))
+    if reports := report_lines(core, tasks):
+        lines.append("ОТЧЁТЫ СЕГОДНЯ (слова человека; фото открой Read, если важно, что на них):\n" + "\n".join(reports))
     if busy := core.fixed_blocks(today):
         lines.append("ЗАНЯТО: " + " · ".join(f"{b['start']}–{end_time(b['start'], b.get('duration', 60))} {b['title']}" for b in busy))
     debts = st.debts()

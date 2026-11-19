@@ -288,10 +288,10 @@ class WebApiTest(BotCase):
         self.assertEqual([m["channel"] for m in messages[-2:]], ["web", "web"])
         self.assertIn("Я тут.", messages[-1]["text"])
 
-    def test_focus_from_app_also_lives_in_telegram(self) -> None:
+    def test_focus_from_app_stays_in_the_app(self) -> None:
         result = self.run_main(web_api.focus_start(25, None))
         self.assertEqual(result["focus"]["minutes"], 25)
-        self.assertIn("Фокус", self.api.last)  # сообщение с обратным отсчётом — в Telegram
+        self.assertEqual(self.api.sent, [])  # таймер из приложения в Telegram не пишет (D50)
         self.run_main(web_api.focus_stop())
         self.assertIsNone(self.core.store.kv_get("focus"))
 

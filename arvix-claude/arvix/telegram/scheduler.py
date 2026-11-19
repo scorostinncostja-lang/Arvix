@@ -67,6 +67,7 @@ class Scheduler:
             if full or back:
                 self.bedtime(now, gentle=red)
             self.brief(now, prefix=tpl.IGNORE_DAY2 if silent_days == 1 and not back else "")
+            self.sleep_question(now, day)
             self.retro(now)
         self.debrief(now)
 
@@ -146,6 +147,15 @@ class Scheduler:
         if when <= now < until and not self.core.sent(f"debrief:{now.date().isoformat()}"):
             self.bot.send_debrief()
 
+    def sleep_question(self, now: datetime, day: Any) -> None:
+        """Сон не записан, человек уже что-то сделал этим утром — спросить с догадкой (D48).
+        До первого действия не спрашиваем: подъёма ещё не видно, а вопрос в пустоту — шум."""
+        until = self.core.cfg.mech("sleep_ask_until", "14:00")
+        end = self.core.night_end()
+        if day.sleep_min or f"{now:%H:%M}" >= until or not any(end <= t < until for t in day.user_times):
+            return
+        self.bot.ask_sleep()
+
     def bedtime(self, now: datetime, gentle: bool = False) -> None:
         target = self.core.state.profile.get("bedtime_target")
         if not target:
@@ -157,7 +167,7 @@ class Scheduler:
         key = f"bed:{now.date().isoformat()}"
         tail = "Сон сейчас важнее всего." if gentle else "Экран убрать, задачи закрыть."
         if self._once(key, bed - timedelta(minutes=warn), now, timedelta(minutes=warn)):
-            self.bot.send(f"🌙 Через {warn} минут отбой ({target}). {tail}", key=key)
+            self.bot.send(f"🌙 Через {warn} минут отбой ({target}). {tail}", tpl.BED_BUTTONS, key=key)
 
     def retro(self, now: datetime) -> None:
         core = self.core

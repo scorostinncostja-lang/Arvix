@@ -67,6 +67,8 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `task_cancelled` | `id, reason` | человек, модель |
 | `debt_written_off` | `id, justification` | человек, модель |
 | `sleep_recorded` | `duration_min, bedtime, wake, date, source` — `wake` с 0.6: длительность из отбоя и подъёма считает код | человек, модель |
+| `bedtime_noted` | `at, night` — «ложусь» (D48): `night` — дата утра, к которому относится ночь; сон из этого не пишется, только догадка | человек |
+| `task_completed.photos` | пути фото отчёта в хранилище (D49), только внутри хранилища; `report` без слов — «фото-отчёт» | человек |
 | `focus_session` | `duration_min, task_id, topic?` — с задачей копится в `Task.focus_min`, без задачи (тема «физика») идёт в глубокую работу дня; сессии дня — `Day.focus` | человек |
 | `focus_noted` | `focus_event_id, date, note` — «что успел» к прошедшей сессии; сама сессия не меняется | человек |
 | `file_received` | `name, kind, size, path, read, caption` — файл от человека в хранилище (`arvix/files.py`) | человек |

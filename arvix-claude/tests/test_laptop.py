@@ -88,6 +88,19 @@ class LaptopLayoutTest(unittest.TestCase):
         self.assertIn('class="brand"', html)
         self.assertEqual(html.count("data-tab="), 5)  # Сегодня · Арвикс · Заметки · Проекты (D43) · Прогресс
 
+    def test_sidebar_collapses(self) -> None:
+        """Панель сворачивается в полосу значков кнопкой (касание, не наведение) и Ctrl+B; выбор помнится."""
+        html = (STATIC / "index.html").read_text()
+        css = (STATIC / "app.css").read_text()
+        js = (STATIC / "app.js").read_text()
+        self.assertIn('id="side-toggle"', html)
+        self.assertIn("aria-expanded", html)
+        self.assertIn(":root.side-mini { --side-w:", css)
+        self.assertIn('"arvix_side_mini"', js)
+        self.assertIn('e.code === "KeyB"', js)
+        # Свёрнутая панель не прячет разделы: значки остаются, подписи уходят в title
+        self.assertEqual(html.count('class="lbl"'), 5)
+
 
 class TabletLayoutTest(unittest.TestCase):
     """Планшет (Lenovo Tab P11): «portrait» в манифесте заставлял Android рисовать WebAPK полосой с обоями по бокам."""

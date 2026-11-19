@@ -30,12 +30,12 @@
   <main id="view"></main>
 
   <nav class="tabs" id="tabs">
-    <div class="brand"><img src="icon.svg" alt="" width="28" height="28"><span>Арвикс</span></div>
-    <button data-tab="today" class="active" title="Ctrl+1"><span class="ico" data-ic="today"></span><span>Сегодня</span><kbd>1</kbd></button>
-    <button data-tab="chat" title="Ctrl+2"><span class="ico" data-ic="chat"></span><span>Арвикс</span><kbd>2</kbd><i id="chat-dot" class="dot hidden"></i></button>
-    <button data-tab="notes" title="Ctrl+3"><span class="ico" data-ic="notes"></span><span>Заметки</span><kbd>3</kbd></button>
-    <button data-tab="projects" title="Ctrl+4"><span class="ico" data-ic="projects"></span><span>Проекты</span><kbd>4</kbd></button>
-    <button data-tab="progress" title="Ctrl+5"><span class="ico" data-ic="progress"></span><span>Прогресс</span><kbd>5</kbd></button>
+    <div class="brand"><img src="icon.svg" alt="" width="28" height="28"><span class="brand-name">Арвикс</span><button id="side-toggle" class="side-toggle" aria-expanded="true" aria-label="Свернуть панель" title="Свернуть панель (Ctrl+B)"><span class="ico" data-ic="sidebar"></span></button></div>
+    <button data-tab="today" class="active" title="Ctrl+1"><span class="ico" data-ic="today"></span><span class="lbl">Сегодня</span><kbd>1</kbd></button>
+    <button data-tab="chat" title="Ctrl+2"><span class="ico" data-ic="chat"></span><span class="lbl">Арвикс</span><kbd>2</kbd><i id="chat-dot" class="dot hidden"></i></button>
+    <button data-tab="notes" title="Ctrl+3"><span class="ico" data-ic="notes"></span><span class="lbl">Заметки</span><kbd>3</kbd></button>
+    <button data-tab="projects" title="Ctrl+4"><span class="ico" data-ic="projects"></span><span class="lbl">Проекты</span><kbd>4</kbd></button>
+    <button data-tab="progress" title="Ctrl+5"><span class="ico" data-ic="progress"></span><span class="lbl">Прогресс</span><kbd>5</kbd></button>
     <div class="side-hint">Ctrl+1…5 — разделы<br>Alt+N — задача · / — поиск<br>Esc — закрыть</div>
   </nav>
 </div>

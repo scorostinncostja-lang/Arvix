@@ -46,6 +46,8 @@ def inline_markup(buttons: Buttons) -> dict[str, Any]:
 def reply_markup(keyboard: list[list[str]], app_url: str = "") -> dict[str, Any]:
     """Постоянная клавиатура под полем ввода: кнопки шлют свой текст как сообщение.
     Кнопка «📱 …» при заданном app_url открывает приложение внутри Telegram."""
+    if not keyboard:
+        return {"remove_keyboard": True}
     rows = []
     for row in keyboard:
         rows.append([{"text": t, "web_app": {"url": app_url}} if app_url and t.startswith("📱") else {"text": t} for t in row])
@@ -149,7 +151,7 @@ class TelegramAPI:
             params["parse_mode"] = parse_mode
         if buttons:
             params["reply_markup"] = inline_markup(buttons)
-        elif keyboard:
+        elif keyboard is not None:  # [] — снять старую клавиатуру (D50)
             params["reply_markup"] = reply_markup(keyboard, self.app_url)
         result = self.call("sendMessage", **params)
         return (result or {}).get("message_id")

@@ -27,11 +27,11 @@ HELP = """Команды не нужны — пиши или говори гол
 — «Найди в моих заметках алгоритм обучения» — поищу в Obsidian
 — «Почему так, а не иначе?» — поспорю с аргументами
 
-Кнопки внизу — быстрые действия: 📋 день, ✅ сделал, 🎯 фокус, 😴 сон, ➕ задача, 📊 итоги.
-📱 — приложение: задачи, таймер, заметки и прогресс в одном экране."""
+Задачи, таймер фокуса, отчёты с фото, заметки и прогресс — в приложении (кнопка 📱 внизу).
+Здесь — разговор и напоминания."""
 
-# Постоянная клавиатура под полем ввода (05-INTERFACES §2.7). Кнопка шлёт свой текст —
-# бот узнаёт его по MENU и выполняет действие без модели.
+# Клавиатура под полем ввода (05-INTERFACES §2.7). С D50 в ней только «📱 Приложение»: день, фокус,
+# отчёт — в приложении. Тексты прежних кнопок бот понимает по MENU, пока у человека старая клавиатура.
 MENU_DAY, MENU_DONE, MENU_FOCUS = "📋 День", "✅ Сделал", "🎯 Фокус"
 MENU_SLEEP, MENU_ADD, MENU_STATUS = "😴 Сон", "➕ Задача", "📊 Итоги"
 MENU_STATUS_OLD = "📊 Статус"  # клавиатура, присланная до 0.6, шлёт старый текст — понимаем и его
@@ -44,8 +44,8 @@ MENU = {MENU_DAY: "day", MENU_DONE: "done", MENU_FOCUS: "focus", MENU_SLEEP: "sl
 
 
 def keyboard(app_url: str = "") -> list[list[str]]:
-    """С приложением — третий ряд «📱 Приложение» (открывает Mini App прямо в Telegram)."""
-    return APP_KEYBOARD if app_url else KEYBOARD
+    """Одна кнопка «📱 Приложение» (Mini App прямо в Telegram); без адреса приложения — [] снимает клавиатуру (D50)."""
+    return [[MENU_APP]] if app_url else []
 
 # Меню «/» в Telegram пустое: с Арвиксом говорят словами (D23). Команды остались
 # скрытыми запасными путями (/mentor on — только так, safety; остальные — по старой памяти).
@@ -123,6 +123,26 @@ def red_buttons(refresh: bool = True) -> list[list[tuple[str, str]]]:
     if refresh:
         rows.append([("🎯 15 мин", "f:go:15"), ("🔄", "p:refresh")])
     return rows
+
+
+BED_BUTTONS = [[("🌙 Ложусь", "z:bed")]]
+ASK_SLEEP = "🛌 Как спал? Ответь «7:20» или словами — «лёг в час, встал в 8:30»."
+SLEEP_EDIT = "Напиши, как было: «лёг в час, встал в 8:30» или просто «7:20»."
+_BED_SRC = {"noted": "ты написал, что ложишься", "last": "последнее сообщение"}
+
+
+def goodnight(at: str) -> str:
+    return f"Спокойной ночи. Отбой — {at}, утром сверю с подъёмом."
+
+
+def sleep_question(guess: dict[str, Any] | None) -> tuple[str, list[list[tuple[str, str]]] | None]:
+    """Утренний вопрос о сне (D48): с догадкой — одна кнопка «Да», без неё — обычный вопрос."""
+    if not guess:
+        return ASK_SLEEP, None
+    span = f"{guess['bedtime']}-{guess['wake']}"
+    text = (f"🛌 Ночь: отбой ≈{guess['bedtime']} ({_BED_SRC[guess['bed_src']]}), подъём ≈{guess['wake']} (первое сообщение) "
+            f"→ {hm(guess['duration_min'])}. Так?\nЕсли нет — напиши, как было.")
+    return text, [[(f"✅ Да, {hm(guess['duration_min'])}", f"z:ok:{span}"), ("✏️ Иначе", "z:edit")]]
 
 
 def sleep_logged(result: dict[str, Any]) -> str:
@@ -262,8 +282,6 @@ def brief(core: Any) -> str:
         missing = [f"{QUOTA_RU.get(k, k)} {week['quotas'].get(k, 0)}/{v}" for k, v in quotas.items() if week["quotas"].get(k, 0) < v]
         if missing:
             lines.append("Квоты недели: " + " · ".join(missing))
-    if not (day and day.sleep_min):
-        lines.append("\nСон не записан: ответь «7:20» или словами — «лёг в час, встал в 8:30».")
     if st.profile.get("bedtime_target"):
         lines.append(f"Отбой сегодня в {st.profile['bedtime_target']}. Не обсуждается.")
     if not st.templates:
