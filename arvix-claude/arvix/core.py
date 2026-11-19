@@ -472,7 +472,7 @@ class Core:
                 payload["doubts"] = doubts  # отчёт записан, но сомнение видно в журнале и разборе
             self.emit("task_completed", payload, source=source, entity_id=task.id)
             if task.project and report:
-                # Отчёт о блоке проекта — сразу запись журнала проекта (D45): прогресс виден без второго ввода.
+                # Отчёт о блоке проекта — сразу запись журнала проекта (D47): прогресс виден без второго ввода.
                 self.emit("project_logged", {"project_id": task.project, "kind": "update", "text": report[:2000], "minutes": 0,
                                              "task_id": task.id}, source=source, entity_id=task.project)
         if task.project:
@@ -505,13 +505,25 @@ class Core:
             self.emit("task_reason", {"id": task.id, "reason": reason[:500]}, source=source, entity_id=task.id)
         return task
 
-    def defer_task(self, ref: Any, minutes: int = 15, *, source: str = "claude") -> Task:
+    def defer_task(self, ref: Any, minutes: int | None = 15, *, to: Any = None, day: Any = None, source: str = "claude") -> Task:
+        """Перенос: на minutes вперёд (кнопки «+15») или на точное время to («на 19:45»).
+        Точное время — для головы (D46): «переношу на 19:45» и minutes, посчитанные моделью, расходились."""
         with self.tx():
             task = self.resolve_task(ref)
             if task.status != "planned":
                 raise ArvixError(f"Отложить можно только запланированную задачу, а «{task.title}» {STATUS_RU[task.status]}")
-            base = self.at(task.local_date, task.start) if task.start else self.now()
-            moved = max(base, self.now().replace(second=0, microsecond=0)) + timedelta(minutes=int(minutes))
+            now = self.now().replace(second=0, microsecond=0)
+            if (target := parse_hhmm(to)) is not None:
+                moved = self.at(self.parse_day(day) if day else task.local_date, target)
+                if moved < now:
+                    raise ArvixError(f"{target} уже прошло — перенести «{task.title}» можно только вперёд")
+                base = self.at(task.local_date, task.start) if task.start else now
+                minutes = int((moved - base).total_seconds() // 60)
+            elif minutes:
+                base = self.at(task.local_date, task.start) if task.start else now
+                moved = max(base, now) + timedelta(minutes=int(minutes))
+            else:
+                raise ArvixError(f"Перенос «{task.title}» без времени — скажи, на сколько или во сколько")
             self.emit(
                 "task_deferred",
                 {"id": task.id, "from": task.start, "to": moved.strftime("%H:%M"), "date": moved.date().isoformat(), "minutes": int(minutes)},
@@ -1068,7 +1080,7 @@ class Core:
     def message_in(self, text: str, *, channel: str = "telegram", project: str | None = None) -> None:
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "channel": channel}
         if project:
-            payload["project"] = project  # чат проекта (D45): своя нить в общей переписке
+            payload["project"] = project  # чат проекта (D47): своя нить в общей переписке
         with self.tx():
             self.emit("message_in", payload, source=channel)
 

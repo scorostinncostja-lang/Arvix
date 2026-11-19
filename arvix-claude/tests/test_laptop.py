@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -86,6 +87,28 @@ class LaptopLayoutTest(unittest.TestCase):
         html = (STATIC / "index.html").read_text()
         self.assertIn('class="brand"', html)
         self.assertEqual(html.count("data-tab="), 5)  # Сегодня · Арвикс · Заметки · Проекты (D43) · Прогресс
+
+
+class TabletLayoutTest(unittest.TestCase):
+    """Планшет (Lenovo Tab P11): «portrait» в манифесте заставлял Android рисовать WebAPK полосой с обоями по бокам."""
+
+    def test_manifest_does_not_lock_orientation(self) -> None:
+        manifest = json.loads((STATIC / "manifest.webmanifest").read_text())
+        self.assertIn(manifest.get("orientation", "any"), ("any", "natural"))
+
+    def test_portrait_tablet_fills_the_width(self) -> None:
+        css = (STATIC / "app.css").read_text()
+        block = css.split("@media (min-width: 600px) and (max-width: 899.98px)", 1)
+        self.assertEqual(len(block), 2, "нет раскладки для планшета вертикально")
+        self.assertIn("#app { max-width: none; }", block[1])
+
+    def test_hover_styles_only_for_a_real_pointer(self) -> None:
+        """На сенсорном экране :hover залипает после касания — правила наведения только под (hover: hover)."""
+        css = (STATIC / "app.css").read_text()
+        hover_block = css.split("@media (min-width: 900px) and (hover: hover)", 1)
+        self.assertEqual(len(hover_block), 2)
+        outside = hover_block[0] + hover_block[1].split("\n}\n", 1)[1]
+        self.assertNotIn(":hover", outside)
 
 
 if __name__ == "__main__":

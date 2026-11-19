@@ -101,7 +101,7 @@ def sessions_view(core: Any, d: Any) -> list[dict[str, Any]]:
 def messages_view(core: Any, *, before: int | None = None, limit: int = 60) -> list[dict[str, Any]]:
     """Переписка из журнала — все каналы: Telegram, приложение, терминал."""
     start = max(0, (before or core.state.last_event_id + 1) - 3000)
-    # Нити чатов проектов живут в своих окнах (D45) — в общем чате их нет
+    # Нити чатов проектов живут в своих окнах (D47) — в общем чате их нет
     events = [e for e in core.store.read(start) if e.kind in ("message_in", "message_out") and (before is None or e.id < before)
               and not e.payload.get("project")]
     out = []
@@ -189,7 +189,7 @@ def heatmap_view(core: Any, weeks: int = 53) -> dict[str, Any]:
     return {"days": days, "active": active, "start": start.isoformat()}
 
 
-# --- проекты (D43–D45): окна над папкой проекта в Obsidian и чатом проекта --------------------------
+# --- проекты (D43, D44, D47): окна над папкой проекта в Obsidian и чатом проекта --------------------------
 
 def _project_card(core: Any, p: dict[str, Any]) -> dict[str, Any]:
     from arvix import projects

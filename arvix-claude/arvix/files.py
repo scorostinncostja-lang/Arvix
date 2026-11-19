@@ -197,7 +197,7 @@ def store(core: Any, data: bytes, name: str, mime: str = "", *, stt: Any = None,
     now = core.now()
     name = safe_name(name)
     kind = classify(name, mime)
-    # folder — папка проекта (D45): код и скриншоты проекта лежат рядом с его заметками
+    # folder — папка проекта (D47): код и скриншоты проекта лежат рядом с его заметками
     target = core.vault.resolve(folder) if folder else core.vault.root / folder_for(core, now)
     target.mkdir(parents=True, exist_ok=True)
     path = _unique(target / f"{now:%Y-%m-%d %H%M} {name}" if folder else target / f"{now:%H%M%S} {name}")

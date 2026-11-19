@@ -101,7 +101,7 @@ class State:
     project_money: list[dict[str, Any]] = field(default_factory=list)
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)
     resources: dict[str, dict[str, Any]] = field(default_factory=dict)  # источники и инструменты проектов (D44)
-    learn_items: dict[str, dict[str, Any]] = field(default_factory=dict)  # «учиться»: очередь тем для проектов и вкладки «Обучение» (D45)
+    learn_items: dict[str, dict[str, Any]] = field(default_factory=dict)  # «учиться»: очередь тем для проектов и вкладки «Обучение» (D47)
     repos: dict[str, dict[str, Any]] = field(default_factory=dict)  # проект → последнее, что видели в GitHub
     commits: dict[str, dict[str, Any]] = field(default_factory=dict)  # sha → коммит проекта: движение без слов
     last_user_at: str | None = None

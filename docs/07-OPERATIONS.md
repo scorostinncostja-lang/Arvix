@@ -48,7 +48,6 @@ arvix setup --telegram --yes        # только привязать бота: 
 | `timezone` | `Europe/Moscow` | часовой пояс; профиль (`profile.timezone` из интервью) важнее |
 | `vault` · `home` | — · `~/Arvix` | хранилище Obsidian · дом Арвикса для Claude Code |
 | `[telegram] token · owner_id` | — | бот и единственный человек, которого он слушает |
-| `[telegram] bubble_pause_sec · bubble_pause_per_char · bubble_pause_max_sec · bubbles_max` | `0.6` · `0.012` · `2.5` · `4` | ответ головы абзацами-сообщениями с паузой «набирает…»; `bubble_pause_sec = 0` — одним сообщением |
 | `[vault_paths]` | `05_System/…`, `03_Resources/…` | места профиля, целей, роадмапов, конспектов, недель, Inbox, системной папки, ежедневных заметок и их шаблона |
 | `[schedule] brief` | `auto` | брифинг: подъём из профиля + 15 мин, или `"07:30"` |
 | `[schedule] midday · debrief` | `15:00` · `22:30` | чек-ин при выполнении < 40 % · разбор |
@@ -191,7 +190,7 @@ ssh -t arvix@HOST '~/.local/bin/arvix setup --stt command --yes && systemctl --u
 ```
 `base` быстрее, `small` точнее по-русски и медленнее в 2–3 раза.
 
-**Голос Арвикса (ответ голосовым, звонок в приложении, D36)** — Gemini TTS, бесплатный тариф Google AI Studio:
+**Голос Арвикса (голосовые по делу в Telegram — D46, звонок в приложении — D36)** — Gemini TTS, бесплатный тариф Google AI Studio:
 1. Ключ: aistudio.google.com → Get API key → Create API key (из России — через VPN; сам сервер ходит в Google из Финляндии).
 2. На сервере (ключ — скрытым вводом, в чат не попадает):
 ```bash
@@ -206,6 +205,9 @@ ssh -t arvix@HOST '~/.local/bin/arvix setup --tts gemini --yes'
 
 Локально и без сети — Piper (`deploy/tts-local.sh irina`): голос механический; как запасной —
 `[tts] fallback_command`. Без голоса сервера звонок говорит голосом телефона.
+
+Голосовые в Telegram — только когда голова сочла, что это стоит послушать, не больше `[tts] voice_notes_per_day = 3` в сутки;
+`[tts] voice_replies = false` — только текст. Ответ на голосовое человека — всегда текстом, без озвучки того же текста (D46).
 
 **Аватар бота** — `arvix avatar [файл.png]` (по умолчанию `deploy/avatar.png`, исходник `deploy/avatar.svg`); Bot API
 `setMyProfilePhoto`, BotFather не нужен.

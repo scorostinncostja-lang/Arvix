@@ -60,7 +60,7 @@ TOOLS: dict[str, dict[str, Any]] = {
             "action": _enum("add", "complete", "fail", "defer", "cancel", "start", "write_off"),
             "task": {**STR, "description": "id задачи (8 символов) или часть названия"},
             "title": STR, "sphere": _enum(*rules.SPHERES), "importance": {**INT, "minimum": 1, "maximum": 5},
-            "difficulty": {**INT, "minimum": 1, "maximum": 5}, "start": {**STR, "description": "ЧЧ:ММ"},
+            "difficulty": {**INT, "minimum": 1, "maximum": 5}, "start": {**STR, "description": "ЧЧ:ММ; для defer — новое время блока"},
             "duration_min": INT, "deep_work": BOOL, "date": STR, "tags": {"type": "array", "items": STR},
             "done_pct": {**INT, "minimum": 1, "maximum": 100}, "report": {**STR, "description": "что именно сделано — словами человека"},
             "reason": STR, "minutes": INT,
@@ -132,7 +132,7 @@ TOOLS: dict[str, dict[str, Any]] = {
     },
     "project": {
         "description": (
-            "Проекты (D43–D45): list (активные с цифрами кода и ⚠️), roadmap (проекты по целям), show (project — всё о проекте: "
+            "Проекты (D43, D44, D47): list (активные с цифрами кода и ⚠️), roadmap (проекты по целям), show (project — всё о проекте: "
             "этапы, учиться, журнал, заметки папки в Obsidian), set (новый: title, why и/или purposes, kind любым словом, expectation, "
             "deadline, weekly_min, skills, goal_id, order; правка: project + поля; status active|paused|done|dropped, done/dropped — "
             "с итогом в reason; в работе не больше 3), milestone (project, title, dod — критерий обязателен; отметить: milestone + "
@@ -197,7 +197,7 @@ def t_task(core: Core, a: dict[str, Any]) -> str:
         r = core.fail_task(a["task"], reason=a.get("reason", ""))
         return f"Не сделано: {r['task'].title}" + (" · ушла в долг" if r["debt"] else "")
     if action == "defer":
-        t = core.defer_task(a["task"], int(a.get("minutes") or 15))
+        t = core.defer_task(a["task"], int(a.get("minutes") or 0) or (None if a.get("start") else 15), to=a.get("start"), day=a.get("date"))
         return f"Отложена: {t.title} → {t.local_date} {t.start}"
     if action == "cancel":
         return f"Отменена: {core.cancel_task(a['task'], reason=a.get('reason', '')).title}"

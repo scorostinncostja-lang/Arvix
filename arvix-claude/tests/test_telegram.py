@@ -268,7 +268,7 @@ class InboxTest(BotCase):
         self.voice("abc")
         self.assertEqual(self.bot.stt.seen, [b"OGG:abc"])
         self.assertFalse(any(t.startswith("🎙") for t in self.api.texts), self.api.texts)
-        self.assertEqual(self.api.texts, ["Шесть часов — мало.", "сон 6ч00м"])
+        self.assertEqual(self.api.texts, ["Шесть часов — мало.\n\nсон 6ч00м"])  # одно сообщение, квитанция в конце (D46)
         self.assertEqual(self.brain.calls[-1]["prompt"], "спал шесть часов, лёг в час")
         self.assertEqual(self.core.state.days[self.core.today()].sleep_min, 360)
         heard = [e for e in self.core.store.read(0) if e.kind == "message_in"][-1]
@@ -325,33 +325,29 @@ class InboxTest(BotCase):
         self.assertEqual(self.core.state.days[self.core.today()].sleep_min, 440)
 
 
-class BubblesTest(BotCase):
-    """Ответ головы уходит абзацами — отдельными сообщениями, квитанция кода — последним, без id."""
+class OneMessageTest(BotCase):
+    """Ответ головы — одно сообщение (D46): абзацы через пустую строку, квитанция — в конце, без id."""
 
-    def test_paragraphs_become_separate_messages_with_pauses(self) -> None:
+    def test_paragraphs_stay_in_one_readable_message(self) -> None:
         self.brain.answers.append({"reply": "Прогулка не засчитана: телефон был в кармане.\n\nПушкин завтра, ставлю на 19:30.\n\n\nСегодня 0 из 3.", "actions": []})
         self.text("гулял с телефоном")
-        self.assertEqual(self.api.texts[-3:], ["Прогулка не засчитана: телефон был в кармане.", "Пушкин завтра, ставлю на 19:30.", "Сегодня 0 из 3."])
-        self.assertEqual(len(self.pauses), 2)  # пауза перед вторым и третьим, «набирает…» между ними
-        self.assertTrue(all(0 < p <= 2.5 for p in self.pauses), self.pauses)
-        self.assertEqual(self.api.typing_calls, 3)  # один перед головой, два между пузырьками
+        self.assertEqual(len(self.api.sent), 1)  # прежде — три сообщения подряд
+        self.assertEqual(self.api.last, "Прогулка не засчитана: телефон был в кармане.\n\nПушкин завтра, ставлю на 19:30.\n\nСегодня 0 из 3.")
+        self.assertEqual(self.pauses, [])  # без искусственных пауз «набирает…»
         outs = [e for e in self.core.store.read(0) if e.kind == "message_out"]
-        self.assertEqual(len(outs), 1)  # в журнале и истории — одно сообщение целиком
-        self.assertIn("Сегодня 0 из 3.", outs[-1].payload["text"])
+        self.assertEqual(len(outs), 1)
+        self.assertEqual(outs[-1].payload["text"], self.api.last)
 
-    def test_too_many_paragraphs_are_merged_and_receipt_is_last_without_ids(self) -> None:
-        from arvix.telegram.bot import bubbles
-
-        self.assertEqual(bubbles("а\n\nб\n\nв\n\nг\n\nд\n\nе"), ["а", "б", "в", "г\n\nд\n\nе"])
-        self.assertEqual(bubbles("   "), [])
+    def test_receipt_is_at_the_end_of_the_same_message_without_ids(self) -> None:
         self.brain.answers.append({"reply": "Ставлю Пушкина на 19:30, блок математики сдвигаю на 20:40.", "actions": [
             {"type": "add_task", "title": "Русский: биография Пушкина", "start": "19:30", "duration_min": 60, "importance": 4},
         ]})
         self.text("пушкин завтра сдаётся")
-        receipt = self.api.last
-        self.assertIn("+ Русский: биография Пушкина · 19:30, 60 мин", receipt)
-        self.assertNotRegex(receipt, r"\[[0-9a-f]{8}\]")  # id задач — для модели, не для человека
-        self.assertEqual(len(self.api.sent), 2)
+        self.assertEqual(len(self.api.sent), 1)
+        message = self.api.last
+        self.assertTrue(message.startswith("Ставлю Пушкина на 19:30"))
+        self.assertIn("\n\n+ Русский: биография Пушкина · 19:30, 60 мин", message)
+        self.assertNotRegex(message, r"\[[0-9a-f]{8}\]")  # id задач — для модели, не для человека
 
     def test_doubts_are_checked_after_all_actions(self) -> None:
         """Модель добавляет блок и тем же ответом сдвигает соседний: проверка внахлёст — по итогу, а не по ходу."""
@@ -364,6 +360,34 @@ class BubblesTest(BotCase):
         self.text("пушкин первым")
         self.assertNotIn("пересекается", self.api.last)
         self.assertIn("⏳ Математика → 20:40", self.api.last)
+
+    def test_defer_to_exact_time_matches_the_reply(self) -> None:
+        """Баг 19.11: «переношу на 19:45», а блок уехал на 19:09 — модель не дала minutes, код молча добавил 15.
+        Теперь голова называет время (start), минуты считает код (D46)."""
+        self.at(moscow(2026, 11, 19, 18, 54))
+        math = self.core.add_task("Математика: блок 45 минут", start="18:54", duration_min=45, importance=3)
+        self.brain.answers.append({"reply": "Переношу блок на 19:45, до 20:30.", "actions": [
+            {"type": "defer_task", "task": math.id, "start": "19:45"},
+        ]})
+        self.text("пойду погуляю, сяду в 19:45")
+        self.assertEqual(self.core.state.tasks[math.id].start, "19:45")
+        self.assertIn("⏳ Математика: блок 45 минут → 19:45", self.api.last)
+
+    def test_defer_without_time_is_refused_not_plus_fifteen(self) -> None:
+        self.at(moscow(2026, 11, 19, 18, 54))
+        math = self.core.add_task("Математика", start="19:00", duration_min=45, importance=3)
+        self.brain.answers.append({"reply": "Переношу на 19:45.", "actions": [{"type": "defer_task", "task": math.id}]})
+        self.text("перенеси")
+        self.assertEqual(self.core.state.tasks[math.id].start, "19:00")  # не 19:15
+        self.assertIn("⚠️ Не выполнено", self.api.last)
+
+    def test_defer_into_the_past_is_refused(self) -> None:
+        self.at(moscow(2026, 11, 19, 18, 54))
+        math = self.core.add_task("Математика", start="19:00", duration_min=45, importance=3)
+        self.brain.answers.append({"reply": "Ок.", "actions": [{"type": "defer_task", "task": math.id, "start": "18:30"}]})
+        self.text("перенеси на 18:30")
+        self.assertEqual(self.core.state.tasks[math.id].start, "19:00")
+        self.assertIn("уже прошло", self.api.last)
 
     def test_receipt_alone_when_reply_is_empty(self) -> None:
         task = self.core.add_task("Английский", importance=2, start="12:00")
@@ -593,7 +617,7 @@ class LessonTest(BotCase):
         self.assertIn("проверка 67%", receipt)
         self.assertIn("В карточки и журнал ошибок: при удвоении R ток уменьшается вдвое", receipt)
         self.assertIn("📝 Заметка своими словами: 06_Feyn Concept/Закон Ома.md", receipt)
-        self.assertIn("Следующий блок: 5 задач №8", self.api.texts[-2])
+        self.assertIn("Следующий блок: 5 задач №8", receipt)  # отзыв и квитанция — одним сообщением (D46)
         self.assertIsNone(self.core.store.kv_get("lesson"))
         self.assertEqual(self.core.state.lessons[-1]["score"], 67)
         from arvix.context import build_context

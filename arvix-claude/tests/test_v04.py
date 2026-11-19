@@ -113,6 +113,7 @@ class DialogTest(BotCase):
         self.brain.answers += [{"reply": "Привет.", "actions": []}, {"reply": "Ок.", "actions": []}]
         self.text("как дела")
         self.assertIn("Первое сообщение человека за сегодня", self.system())
+        self.assertNotIn("отдельным сообщением", self.system())  # приветствие — первой строкой того же ответа (D46)
         self.text("понял")
         self.assertNotIn("Первое сообщение человека за сегодня", self.system())
 
