@@ -113,7 +113,7 @@ def messages_view(core: Any, *, before: int | None = None, limit: int = 60) -> l
         out.append({
             "id": event.id, "at": event.at.astimezone(core.tz).isoformat(), "who": "me" if event.kind == "message_in" else "arvix",
             "text": text, "channel": event.payload.get("channel") or "telegram",
-            "buttons": event.payload.get("buttons") or [],
+            "buttons": event.payload.get("buttons") or [], "audio": event.payload.get("audio"), "cid": event.payload.get("cid"),
         })
     return out
 
@@ -251,7 +251,7 @@ def project_messages(core: Any, project_id: str, limit: int = 80) -> list[dict[s
     for event in core.store.read(start):
         if event.kind in ("message_in", "message_out") and event.payload.get("project") == project_id:
             out.append({"id": event.id, "at": event.at.astimezone(core.tz).isoformat(), "who": "me" if event.kind == "message_in" else "arvix",
-                        "text": str(event.payload.get("text") or "")})
+                        "text": str(event.payload.get("text") or ""), "audio": event.payload.get("audio"), "cid": event.payload.get("cid")})
     return out[-limit:]
 
 
@@ -292,7 +292,7 @@ def project_new(text: str, goal_id: str | None) -> Any:
     return run
 
 
-def project_chat(project_id: str, text: str, *, kickoff: bool = False) -> Any:
+def project_chat(project_id: str, text: str, *, kickoff: bool = False, cid: str | None = None) -> Any:
     """Сообщение в чат проекта: тот же путь, что у обычного (safety, голова, actions), но в нити проекта
     и с блоком <project> в запросе. Ожидаемые ответы (сон, отчёт) здесь не перехватываются — это разговор о проекте."""
     def run(bot: Any) -> None:
@@ -300,6 +300,7 @@ def project_chat(project_id: str, text: str, *, kickoff: bool = False) -> Any:
 
         bot.core.refresh()
         with bot.via("web", SINK), bot.in_project(project_id):
+            bot.cid = cid
             bot.log_in(text)
             if safety.detect(text):
                 bot.safety_protocol(text)
@@ -464,10 +465,11 @@ def focus_note(event_id: int, note: str) -> Any:
     return run
 
 
-def chat(text: str, *, voice: bool = False) -> Any:
+def chat(text: str, *, voice: bool = False, cid: str | None = None) -> Any:
     def run(bot: Any) -> None:
         bot.core.refresh()
         with bot.via("web", SINK):
+            bot.cid = cid
             bot.on_text(text, voice=voice)
     return run
 
@@ -479,11 +481,12 @@ def button(data: str) -> Any:
     return run
 
 
-def voice(audio: bytes, filename: str) -> Any:
+def voice(audio: bytes, filename: str, cid: str | None = None) -> Any:
     def run(bot: Any) -> None:
         from arvix.stt import STTError
 
         with bot.via("web", SINK):
+            bot.cid = cid
             if not bot.stt.enabled:
                 bot.log_in("[голосовое — распознавание не настроено]")
                 bot.send(tpl.VOICE_OFF)
@@ -494,17 +497,21 @@ def voice(audio: bytes, filename: str) -> Any:
                 bot.log_in("[голосовое — не распознано]")
                 bot.send(f"Голосовое не распознал: {exc}. Напиши текстом.")
                 return
-            if text.strip():
-                bot.core.refresh()
-                bot.on_text(text, voice=True)
+            if not text.strip():
+                bot.log_in("[голосовое — пусто]")
+                bot.send("В голосовом не разобрал слов. Повтори или напиши текстом.")
+                return
+            bot.core.refresh()
+            bot.on_text(text, voice=True)
     return run
 
 
-def upload(data: bytes, name: str, mime: str, caption: str) -> Any:
+def upload(data: bytes, name: str, mime: str, caption: str, cid: str | None = None) -> Any:
     """Файл из приложения — тот же путь, что из Telegram: хранилище, журнал, голова."""
     def run(bot: Any) -> None:
         bot.core.refresh()
         with bot.via("web", SINK):
+            bot.cid = cid
             bot.on_file({"file_name": name, "mime_type": mime}, caption=caption, data=data)
     return run
 
@@ -654,7 +661,7 @@ class SinkAPI:
     def edit(self, *a: Any, **k: Any) -> None:
         return None
 
-    pin = unpin = typing = answer_callback = drop_buttons = edit
+    pin = unpin = typing = answer_callback = drop_buttons = send_voice = edit
 
     def download(self, file_id: str) -> bytes:
         raise ArvixError("В приложении файлы приходят напрямую")

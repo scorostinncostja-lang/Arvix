@@ -65,8 +65,13 @@ async function api(path, opts = {}) {
 // --- утилиты -----------------------------------------------------------------------------------
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const hm = (min) => { min = Math.round(min || 0); const h = Math.floor(min / 60), m = min % 60; return h ? `${h}ч${m ? " " + m + "м" : ""}` : `${m}м`; };
-const haptic = (kind = "light") => { try { TG && TG.HapticFeedback.impactOccurred(kind); } catch (_) { /* нет */ } };
-const notify = (kind) => { try { TG && TG.HapticFeedback.notificationOccurred(kind); } catch (_) { /* нет */ } };
+/* Тактильный отклик: в Telegram — его HapticFeedback, в установленном приложении на Android — вибромотор
+ * (navigator.vibrate). Короткие импульсы на нажатие, узор — на итог: успех, предупреждение, ошибка. */
+const VIBRATE = { light: 8, soft: 6, medium: 14, rigid: 10, heavy: 22, success: [10, 50, 16], warning: [20, 70, 20], error: [30, 50, 30, 50, 30] };
+const buzz = (kind) => { try { if (!TG && navigator.vibrate && !matchMedia("(hover: hover)").matches) navigator.vibrate(VIBRATE[kind] || 8); } catch (_) { /* нет */ } };
+const haptic = (kind = "light") => { try { if (TG) TG.HapticFeedback.impactOccurred(kind); else buzz(kind); } catch (_) { /* нет */ } };
+const notify = (kind) => { try { if (TG) TG.HapticFeedback.notificationOccurred(kind); else buzz(kind); } catch (_) { /* нет */ } };
+const selectTick = () => { try { if (TG) TG.HapticFeedback.selectionChanged(); else buzz("soft"); } catch (_) { /* нет */ } };
 let toastTimer;
 function toast(text) {
   const el = $("#toast");
@@ -77,8 +82,6 @@ function toast(text) {
 const ICON_PATHS = {
   mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>',
   clip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
-  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
-  phoneOff: '<path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><path d="M22 2 2 22"/>',
   send: '<path d="M14.54 21.69a.5.5 0 0 0 .94-.03l6.5-19a.5.5 0 0 0-.64-.64l-19 6.5a.5.5 0 0 0-.03.94l7.93 3.18a2 2 0 0 1 1.11 1.11z"/><path d="m21.85 2.15-10.94 10.94"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>',
   today: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/><path d="m9 16 2 2 4-4"/>',
@@ -90,6 +93,7 @@ const ICON_PATHS = {
   check: '<path d="M20 6 9 17l-5-5"/>',
   more: '<circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/><circle cx="5" cy="12" r="1.2" fill="currentColor"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  volume: '<path d="M11 4.7a.7.7 0 0 0-1.2-.5L6.4 7.6A1.4 1.4 0 0 1 5.4 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.4a1.4 1.4 0 0 1 1 .4l3.4 3.4a.7.7 0 0 0 1.2-.5z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.4 18.4a9 9 0 0 0 0-12.8"/>',
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
   pencil: '<path d="M21.17 6.81a1 1 0 0 0-3.98-3.98L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/>',
   back: '<path d="m15 18-6-6 6-6"/>',
@@ -117,14 +121,11 @@ WIDE.addEventListener("change", () => { if (token() || TG) render(); });
 
 // --- каркас ------------------------------------------------------------------------------------
 document.querySelectorAll("[data-ic]").forEach((el) => { el.innerHTML = icon(el.dataset.ic); });
-$("#top-call").innerHTML = icon("phone");
-$("#top-call").onclick = () => { haptic(); openTalk(); };
 
 function setTab(tab) {
   state.tab = tab;
-  $("#top-call").classList.toggle("hidden", tab !== "chat");
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
-  if (tab === "chat") { $("#chat-dot").classList.add("hidden"); }
+  if (tab !== "chat") stopAudio();
   state.note = tab === "notes" ? state.note : null;
   if (tab !== "projects" && state.project) { state.project = null; if (TG) { TG.BackButton.offClick(projectBack); TG.BackButton.hide(); } }
   render();
@@ -151,7 +152,7 @@ $("#side-toggle").onclick = () => { haptic(); toggleSide(); };
 
 $("#tabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-tab]");
-  if (b) { haptic(); setTab(b.dataset.tab); }
+  if (b) { selectTick(); setTab(b.dataset.tab); }
 });
 
 async function load(tab = state.tab) {
@@ -159,9 +160,7 @@ async function load(tab = state.tab) {
     if (tab === "today" || !state.data) state.data = await api("state");
     if (tab === "chat") {
       const r = await api("messages");
-      const last = r.messages.length ? r.messages[r.messages.length - 1].id : 0;
-      state.messages = r.messages; state.thinking = r.thinking || "";
-      state.seen = Math.max(state.seen, last);
+      state.messages = r.messages; state.thinking = r.thinking || ""; state.hasOlder = undefined;
     }
     if (tab === "progress") state.history = await api("history?days=30");
     if (tab === "projects") await loadProjects();
@@ -581,42 +580,141 @@ function openReportSheet(t, after = null) {
 }
 
 // --- Чат ---------------------------------------------------------------------------------------
-function renderChat() {
-  let html = `<div class="chat" id="chat">`;
-  let lastDay = "";
-  for (const m of state.messages) {
-    const at = new Date(m.at);
-    const day = at.toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
-    if (day !== lastDay) { html += `<div class="day-sep">${day}</div>`; lastDay = day; }
-    const btns = (m.buttons || []).flat().filter((b) => b && b[1] && !String(b[1]).startsWith("app:"));
-    html += `<div class="msg ${m.who === "me" ? "me" : ""}">${linkify(esc(m.text))}${btns.length ? `<div class="btns">${btns.map((b) =>
-      String(b[1]).startsWith("url:") ? `<a class="pill" href="${esc(String(b[1]).slice(4))}" target="_blank" rel="noopener">${esc(b[0])}</a>` :
-      `<button data-btn="${esc(b[1])}">${esc(b[0])}</button>`).join("")}</div>` : ""}<time>${at.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}${m.channel === "telegram" ? "" : " · " + esc(m.channel)}</time></div>`;
+/* Лента = журнал сервера + свои черновики. Черновик несёт метку (cid): сервер пишет её в сообщение,
+ * и черновик исчезает, только когда настоящее сообщение уже в ленте, — раньше он пропадал при первом
+ * же обновлении, пока Арвикс был занят (D51). Не ушло — «не отправлено · повторить». */
+const newCid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+state.pending = [];
+
+function pendingFor(list, project = null) {
+  const seen = new Set(list.map((m) => m.cid).filter(Boolean));
+  state.pending = state.pending.filter((p) => !seen.has(p.cid) || p.status === "failed");
+  return state.pending.filter((p) => (p.project || null) === project && !seen.has(p.cid));
+}
+
+async function deliver(p) {
+  p.status = "sending"; rerenderThread(p.project);
+  try { await p.send(p.cid); p.status = "sent"; }
+  catch (err) { p.status = "failed"; notify("error"); toast(err.message); }
+  rerenderThread(p.project);
+}
+
+function queueMessage(text, send, { project = null, thinking = "думаю" } = {}) {
+  const p = { cid: newCid(), id: 0, at: new Date().toISOString(), who: "me", text, channel: "web", buttons: [], status: "sending", send, project };
+  state.pending.push(p);
+  state.thinking = thinking;
+  deliver(p);
+  return p;
+}
+
+function rerenderThread(project) {
+  if (project) { if (state.tab === "projects" && state.project && state.project.id === project) renderProjects(); }
+  else if (state.tab === "chat") renderChat();
+}
+
+const timeOf = (iso) => new Date(iso).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+
+/* Одно сообщение — в общем чате и в чате проекта одинаково: текст, кнопки, голосовое плеером, 🔊 «послушать». */
+function msgHtml(m, { buttons = true, channel = true } = {}) {
+  const me = m.who === "me";
+  let body = linkify(esc(m.text));
+  if (m.audio) {
+    const caption = String(m.text || "").replace(/^🔊\s*/, "");
+    body = `<button class="voice" data-audio="${esc(m.audio)}" aria-label="Слушать голосовое">${icon("play")}<span class="voice-wave"></span>
+      <span class="voice-label">голосовое</span></button><div class="voice-text">${linkify(esc(caption))}</div>`;
   }
-  if (state.thinking) html += `<div class="typing" title="${esc(state.thinking)}"><i></i><i></i><i></i></div>`;
-  if (!state.messages.length && !state.thinking) html += `<div class="empty">Напиши или скажи что угодно — как в Telegram.</div>`;
-  html += `</div>`;
-  view.innerHTML = html;
-  if (!$(".composer")) {
-    const c = document.createElement("div");
-    c.className = "composer";
-    c.innerHTML = `<button class="round ghost" id="attach" aria-label="Прислать файл">${icon("clip")}</button>
-      <input type="file" id="file" multiple hidden>
-      <textarea id="msg" rows="1" placeholder="Сообщение Арвиксу"></textarea>
-      <button class="round send" id="send" aria-label="Голосовое сообщение" data-mode="mic">${icon("mic")}</button>`;
-    document.body.appendChild(c);
-    const ta = $("#msg");
-    ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(140, ta.scrollHeight) + "px"; composerMode(); });
-    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !("ontouchstart" in window)) { e.preventDefault(); sendMessage(); } });
-    $("#send").onclick = () => ($("#send").dataset.mode === "send" ? sendMessage() : toggleRecord());
-    $("#attach").onclick = () => $("#file").click();
-    $("#file").onchange = (e) => { sendFiles([...e.target.files]); e.target.value = ""; };
-  }
-  view.querySelectorAll("[data-btn]").forEach((b) => b.addEventListener("click", async () => {
-    haptic(); b.disabled = true;
-    try { await api("button", { json: { data: b.dataset.btn } }); state.thinking = "думаю"; renderChat(); } catch (err) { toast(err.message); }
+  const btns = buttons ? (m.buttons || []).flat().filter((b) => b && b[1] && !String(b[1]).startsWith("app:")) : [];
+  const status = m.status === "failed" ? ` · <button class="retry" data-retry="${esc(m.cid)}">не отправлено — повторить</button>`
+    : m.status === "sending" ? " · отправляю…" : m.status === "sent" ? " · ✓" : "";
+  const listen = !me && !m.audio && m.id && canSpeak() && m.text.length > 1
+    ? `<button class="listen" data-listen="${m.id}" aria-label="Послушать">${icon("volume")}</button>` : "";
+  return `<div class="msg ${me ? "me" : ""}${m.status ? " pending " + m.status : ""}" data-id="${m.id || ""}">${body}${btns.length ? `<div class="btns">${btns.map((b) =>
+    String(b[1]).startsWith("url:") ? `<a class="pill" href="${esc(String(b[1]).slice(4))}" target="_blank" rel="noopener">${esc(b[0])}</a>` :
+    `<button data-btn="${esc(b[1])}">${esc(b[0])}</button>`).join("")}</div>` : ""}<time>${listen}${timeOf(m.at)}${channel && m.channel && m.channel !== "telegram" && !m.status ? " · " + esc(m.channel) : ""}${status}</time></div>`;
+}
+
+function bindMessages(root, list) {
+  root.querySelectorAll("[data-retry]").forEach((b) => b.addEventListener("click", () => {
+    const p = state.pending.find((x) => x.cid === b.dataset.retry); if (p) { haptic("medium"); deliver(p); }
   }));
-  window.scrollTo(0, document.body.scrollHeight);
+  root.querySelectorAll("[data-audio]").forEach((b) => b.addEventListener("click", () => { haptic(); playAudio(b, { name: b.dataset.audio }); }));
+  root.querySelectorAll("[data-listen]").forEach((b) => b.addEventListener("click", () => {
+    const m = list.find((x) => String(x.id) === b.dataset.listen); if (m) { haptic(); playAudio(b, { text: m.text }); }
+  }));
+}
+
+const PAGE = 60;  // столько сообщений отдаёт /api/messages за раз
+const nearBottom = () => window.innerHeight + window.scrollY >= document.body.scrollHeight - 160;
+
+function renderChat() {
+  const stick = !$("#chat") || nearBottom() || state.chatStick;
+  state.chatStick = false;
+  const list = [...state.messages, ...pendingFor(state.messages)];
+  let html = `<div class="chat" id="chat">`;
+  if (state.messages.length >= PAGE && state.hasOlder !== false) html += `<button class="older" id="older">Ранее</button>`;  // меньше страницы — это вся история
+  let lastDay = "";
+  for (const m of list) {
+    const day = new Date(m.at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
+    if (day !== lastDay) { html += `<div class="day-sep">${day}</div>`; lastDay = day; }
+    html += msgHtml(m);
+  }
+  if (state.thinking) html += `<div class="typing" title="${esc(state.thinking)}"><i></i><i></i><i></i><span>${esc(state.thinking)}…</span></div>`;
+  if (!list.length && !state.thinking) html += `<div class="empty">Напиши или скажи что угодно — как в Telegram.<br><span class="muted small">Спроси «как это звучит?» — Арвикс пришлёт голосовое.</span></div>`;
+  html += `</div><button class="to-new hidden" id="to-new" aria-label="К новым сообщениям">↓</button>`;
+  const y = window.scrollY;
+  view.innerHTML = html;
+  ensureComposer();
+  bindMessages(view, list);
+  view.querySelectorAll("[data-btn]").forEach((b) => b.addEventListener("click", async () => {
+    haptic("medium"); b.disabled = true;
+    try { await api("button", { json: { data: b.dataset.btn } }); state.thinking = "думаю"; state.chatStick = true; renderChat(); } catch (err) { notify("error"); toast(err.message); }
+  }));
+  const older = $("#older"); if (older) older.onclick = loadOlder;
+  $("#to-new").onclick = () => { haptic(); window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" }); };
+  if (stick) window.scrollTo(0, document.body.scrollHeight); else window.scrollTo(0, y);
+  markSeen();
+}
+
+async function loadOlder() {
+  const first = state.messages.find((m) => m.id);
+  if (!first) return;
+  haptic();
+  try {
+    const r = await api("messages?before=" + first.id);
+    if (!r.messages.length) { state.hasOlder = false; renderChat(); return; }
+    const h = document.body.scrollHeight, y = window.scrollY;
+    state.messages = [...r.messages, ...state.messages];
+    if (r.messages.length < PAGE) state.hasOlder = false;
+    renderChat();
+    window.scrollTo(0, y + document.body.scrollHeight - h);  // остаёмся на том же сообщении
+  } catch (err) { toast(err.message); }
+}
+
+window.addEventListener("scroll", () => {
+  const b = $("#to-new"); if (b && state.tab === "chat") b.classList.toggle("hidden", nearBottom());
+}, { passive: true });
+
+function ensureComposer() {
+  if ($(".composer")) return;
+  const c = document.createElement("div");
+  c.className = "composer";
+  c.innerHTML = `<button class="round ghost" id="attach" aria-label="Прислать файл">${icon("clip")}</button>
+    <input type="file" id="file" multiple hidden>
+    <textarea id="msg" rows="1" placeholder="Сообщение Арвиксу"></textarea>
+    <span class="rec-time hidden" id="rec-time"></span>
+    <button class="round send" id="send" aria-label="Голосовое сообщение" data-mode="mic">${icon("mic")}</button>`;
+  document.body.appendChild(c);
+  const ta = $("#msg");
+  try { ta.value = sessionStorage.getItem("arvix_chat_draft") || ""; } catch (_) { /* приватный режим */ }
+  ta.addEventListener("input", () => {
+    ta.style.height = "auto"; ta.style.height = Math.min(140, ta.scrollHeight) + "px"; composerMode();
+    try { sessionStorage.setItem("arvix_chat_draft", ta.value); } catch (_) { /* приватный режим */ }
+  });
+  ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !("ontouchstart" in window)) { e.preventDefault(); sendMessage(); } });
+  $("#send").onclick = () => ($("#send").dataset.mode === "send" ? sendMessage() : toggleRecord());
+  $("#attach").onclick = () => $("#file").click();
+  $("#file").onchange = (e) => { sendFiles([...e.target.files]); e.target.value = ""; };
+  composerMode();
 }
 
 function linkify(html) {
@@ -628,23 +726,25 @@ function linkify(html) {
 /* Как в Telegram: пустое поле — микрофон, есть текст — «отправить», идёт запись — стоп. */
 function composerMode() {
   const b = $("#send"), ta = $("#msg"); if (!b || !ta) return;
-  const recording = recorder && recorder.state === "recording";
+  const recording = !!(recorder && recorder.state === "recording");
   const mode = recording ? "rec" : ta.value.trim() ? "send" : "mic";
+  ta.classList.toggle("hidden", recording);
+  $("#rec-time") && $("#rec-time").classList.toggle("hidden", !recording);
   if (b.dataset.mode === mode) return;
   b.dataset.mode = mode;
-  b.innerHTML = icon(mode === "rec" ? "stop" : mode);
+  b.innerHTML = icon(mode === "rec" ? "send" : mode);
   b.classList.toggle("rec", recording);
-  b.setAttribute("aria-label", { rec: "Остановить запись", send: "Отправить", mic: "Голосовое сообщение" }[mode]);
+  b.setAttribute("aria-label", { rec: "Отправить голосовое", send: "Отправить", mic: "Голосовое сообщение" }[mode]);
 }
 
-async function sendMessage() {
+function sendMessage() {
   const ta = $("#msg");
   const text = ta.value.trim();
   if (!text) return;
-  ta.value = ""; ta.style.height = "auto"; composerMode(); haptic();
-  state.messages.push({ id: 0, at: new Date().toISOString(), who: "me", text, channel: "web", buttons: [] });
-  state.thinking = "думаю"; renderChat();
-  try { await api("message", { json: { text } }); } catch (err) { toast(err.message); }
+  ta.value = ""; ta.style.height = "auto"; composerMode(); haptic("medium");
+  try { sessionStorage.removeItem("arvix_chat_draft"); } catch (_) { /* приватный режим */ }
+  state.chatStick = true;
+  queueMessage(text, (cid) => api("message", { json: { text, cid } }));
 }
 
 /* Файлы Арвиксу: фото, PDF, документы, архив репозитория, аудио, видео — до 20 МБ.
@@ -655,215 +755,96 @@ async function sendFiles(files) {
   let caption = ta.value.trim();
   for (const file of files) {
     if (file.size > MAX_FILE) { toast(`«${file.name}» больше 20 МБ — сожми или раздели`); continue; }
-    state.messages.push({ id: 0, at: new Date().toISOString(), who: "me", text: "📎 " + file.name + (caption ? " — " + caption : ""), channel: "web", buttons: [] });
-    state.thinking = "смотрю файл"; renderChat();
-    try {
+    const cap = caption;
+    state.chatStick = true;
+    queueMessage("📎 " + file.name + (cap ? " — " + cap : ""), async (cid) => {
       const res = await fetch("/api/upload", { method: "POST", body: file, headers: { ...authHeaders(), "Content-Type": file.type || "application/octet-stream",
-        "X-File-Name": encodeURIComponent(file.name), "X-Caption": encodeURIComponent(caption) } });
+        "X-File-Name": encodeURIComponent(file.name), "X-Caption": encodeURIComponent(cap), "X-Client-Id": cid } });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Ошибка " + res.status);
-      haptic();
-    } catch (err) { toast(err.message); }
+    }, { thinking: "смотрю файл" });
     caption = "";
   }
   ta.value = ""; ta.style.height = "auto"; composerMode();
 }
 
-/* --- Звонок Арвиксу (D34, D36): говоришь → Арвикс отвечает вслух → снова слушает. Без нажатий.
- * Конец фразы — по тишине (Web Audio). Голос ответа — сервера (Gemini, мужской Charon): он живой;
- * если сервер не смог (лимит, сеть, голос выключен) — голос телефона (speechSynthesis); нет и его — текст.
- * Звук «разблокируется» в момент нажатия на 📞: браузеры (и WebView Telegram) запрещают звук без жеста. */
-const talk = { on: false, phase: "", stream: null, rec: null, ctx: null, raf: 0, source: null, el: null, lastId: 0, voice: null,
-  serverVoice: false, note: "" };
-const SILENT_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+/* --- Голос (D51): звонка нет — Арвикс присылает голосовое сам, когда его стоит послушать (произношение,
+ * правило на слух), а 🔊 у любого ответа озвучивает его по просьбе. Голос — сервера (Gemini, кэш на сервере);
+ * сервер не смог — голос телефона (speechSynthesis). Один плеер на всё приложение: новое — останавливает старое. */
+const player = { el: null, btn: null, urls: new Map() };
+const canSpeak = () => !!(state.data && state.data.server_tts) || "speechSynthesis" in window;
 
-function talkVoices() {
-  if (!("speechSynthesis" in window)) return null;
-  const list = speechSynthesis.getVoices().filter((v) => /^ru/i.test(v.lang));
-  return list.find((v) => /google|милена|milena|irina|ирина/i.test(v.name)) || list[0] || null;
-}
-if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => { talk.voice = talkVoices(); };
-
-async function openTalk() {
-  if (talk.on) return;
-  talk.on = true; talk.voice = talkVoices(); talk.nudged = false; talk.note = "";
-  // Синхронно, пока идёт жест нажатия: контекст звука и элемент <audio> получают право играть.
-  try { talk.ctx = new (window.AudioContext || window.webkitAudioContext)(); talk.ctx.resume(); } catch (_) { talk.ctx = null; }
-  talk.el = new Audio(); talk.el.src = SILENT_WAV; talk.el.play().catch(() => {});
-  const el = document.createElement("div");
-  el.id = "talk"; el.className = "talk";
-  el.innerHTML = `<div class="talk-head"><div class="talk-name">Арвикс</div><div class="talk-status" id="talk-status">Соединяю…</div></div>
-    <button class="talk-orb" id="talk-orb" aria-label="Перебить или начать говорить"><span class="talk-ring" id="talk-level"></span>
-      <img src="icon-192.png" alt="" class="talk-avatar"></button>
-    <div class="talk-text" id="talk-text"></div>
-    <div class="talk-bar">
-      <div class="muted small talk-hint" id="talk-hint">Пауза в полторы секунды — «договорил». Тап по аватару — перебить.</div>
-      <button class="talk-end" id="talk-end" aria-label="Завершить разговор">${icon("phoneOff")}</button>
-    </div>`;
-  document.body.appendChild(el);
-  $("#talk-end").onclick = closeTalk;
-  $("#talk-orb").onclick = () => { if (talk.phase === "speaking" || talk.phase === "idle") { stopSpeaking(); talkListen(); } };
-  if (TG) { TG.BackButton.show(); TG.BackButton.onClick(closeTalk); }
-  try {
-    const [m, s] = await Promise.all([api("messages"), api("state")]);
-    talk.lastId = Math.max(0, ...m.messages.map((x) => x.id || 0));  // старые ответы не озвучиваем
-    state.data = s; talk.serverVoice = !!s.server_tts;
-  } catch (_) { talk.lastId = Math.max(0, ...state.messages.map((x) => x.id || 0)); talk.serverVoice = !!(state.data && state.data.server_tts); }
-  if (!talk.serverVoice) $("#talk-hint").textContent = "Голос сервера выключен — говорю голосом телефона. Включить живой голос: arvix setup --tts gemini.";
-  talkListen();
-}
-
-function closeTalk() {
-  talk.on = false; talk.phase = "";
-  stopSpeaking();
-  if (talk.rec && talk.rec.state === "recording") { talk.rec.onstop = null; talk.rec.stop(); }
-  if (talk.stream) talk.stream.getTracks().forEach((t) => t.stop());
-  if (talk.ctx) talk.ctx.close().catch(() => {});
-  cancelAnimationFrame(talk.raf);
-  talk.stream = talk.ctx = talk.rec = talk.analyser = talk.el = null;
-  $("#talk") && $("#talk").remove();
-  if (TG) { TG.BackButton.offClick(closeTalk); TG.BackButton.hide(); }
-  if (state.tab === "chat") load("chat");
-}
-
-function talkStatus(text, phase) {
-  talk.phase = phase || talk.phase;
-  const s = $("#talk-status"); if (s) s.textContent = text;
-  const orb = $("#talk-orb"); if (orb) orb.dataset.phase = talk.phase;
-}
-
-async function talkListen() {
-  if (!talk.on) return;
-  try {
-    if (!talk.stream) talk.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    if (!talk.ctx) talk.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if (talk.ctx.state === "suspended") await talk.ctx.resume().catch(() => {});
-    if (!talk.analyser) {
-      talk.analyser = talk.ctx.createAnalyser(); talk.analyser.fftSize = 1024;
-      talk.ctx.createMediaStreamSource(talk.stream).connect(talk.analyser);
-    }
-  } catch (err) { talkStatus("Нет доступа к микрофону: " + err.message, "idle"); return; }
-  const type = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus", "audio/mp4"].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
-  const rec = talk.rec = new MediaRecorder(talk.stream, type ? { mimeType: type } : undefined);
-  const chunks = [];
-  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-  rec.onstop = () => { const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" }); if (talk.on && spoke && blob.size > 1500) talkSend(blob); else if (talk.on && spoke) talkListen(); };
-  rec.start(); haptic("light");
-  talkStatus(talk.note ? `Слушаю… (${talk.note})` : "Слушаю…", "listening");
-  const buf = new Uint8Array(talk.analyser.fftSize);
-  let spoke = false, voiced = 0, quietSince = 0;
-  const started = performance.now();
-  const loop = () => {
-    if (!talk.on || rec.state !== "recording") return;
-    talk.analyser.getByteTimeDomainData(buf);
-    let sum = 0; for (const v of buf) sum += (v - 128) ** 2;
-    const rms = Math.sqrt(sum / buf.length) / 128, now = performance.now();
-    const lvl = $("#talk-level"); if (lvl) lvl.style.transform = `scale(${1 + Math.min(rms * 6, 0.6)})`;
-    if (rms > 0.035) { voiced += 1; quietSince = 0; if (voiced > 4) spoke = true; }
-    else if (spoke && !quietSince) quietSince = now;
-    if (spoke && quietSince && now - quietSince > 1500) { rec.stop(); return; }           // договорил
-    if (now - started > 60000) { if (spoke) rec.stop(); else { rec.onstop = null; rec.stop(); talkStatus("Я здесь. Тапни аватар, когда захочешь продолжить.", "idle"); } return; }
-    if (!spoke && now - started > 12000 && !talk.nudged) { talk.nudged = true; talkStatus("Я слушаю — скажи, что на душе или как прошёл день.", "listening"); }
-    talk.raf = requestAnimationFrame(loop);
-  };
-  loop();
-}
-
-async function talkSend(blob) {
-  talkStatus("Думаю…", "thinking");
-  $("#talk-text").textContent = "";
-  try { await api("voice", { body: blob, headers: { "Content-Type": blob.type.split(";")[0] } }); }
-  catch (err) { talkStatus(err.message, "idle"); return; }
-  const deadline = Date.now() + 200000;
-  while (talk.on && Date.now() < deadline) {      // ответ придёт в журнал — ждём новое сообщение Арвикса
-    await new Promise((r) => setTimeout(r, 1200));
-    try {
-      const r = await api("messages");
-      const fresh = r.messages.filter((m) => m.id > talk.lastId);
-      if (fresh.length) talk.lastId = Math.max(...fresh.map((m) => m.id));
-      const mine = fresh.filter((m) => m.who === "me").pop();
-      if (mine && $("#talk-text")) $("#talk-text").innerHTML = `<div class="muted small">ты: ${esc(mine.text.replace(/^🎙\s*/, ""))}</div>`;
-      const answer = fresh.filter((m) => m.who === "arvix").map((m) => m.text).join("\n");
-      if (answer) { state.messages = r.messages; await talkSpeak(answer); return; }
-    } catch (_) { /* сеть моргнула — ждём дальше */ }
-  }
-  if (talk.on) talkStatus("Ответа нет — голова, похоже, недоступна. Тапни аватар, чтобы попробовать ещё.", "idle");
-}
-
-function stopSpeaking() {
+function stopAudio() {
+  if (player.el) { player.el.onended = null; player.el.pause(); }
   try { if ("speechSynthesis" in window) speechSynthesis.cancel(); } catch (_) { /* нет */ }
-  if (talk.source) { try { talk.source.onended = null; talk.source.stop(); } catch (_) { /* уже */ } talk.source = null; }
-  if (talk.el) { talk.el.onended = null; talk.el.pause(); }
+  if (player.btn) { player.btn.classList.remove("playing"); if (player.btn.classList.contains("voice")) player.btn.firstElementChild.outerHTML = icon("play"); }
+  player.btn = null;
 }
 
-/* Голос сервера: OGG от /api/tts → Web Audio (контекст разблокирован жестом), иначе <audio>. */
-async function playServerVoice(text, done) {
-  const res = await fetch("/api/tts", { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || "голос сервера недоступен");
+async function playAudio(btn, { name, text }) {
+  if (player.btn === btn) { stopAudio(); return; }  // второй тап — стоп
+  stopAudio();
+  player.btn = btn; btn.classList.add("playing", "loading");
+  if (!player.el) player.el = new Audio();  // создаём в жесте нажатия: иначе WebView Telegram не даст играть
+  const key = name || "t:" + text;
+  try {
+    let url = player.urls.get(key);
+    if (!url) {
+      const res = name ? await fetch("/api/audio?name=" + encodeURIComponent(name), { headers: authHeaders() })
+        : await fetch("/api/tts", { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "голос сервера недоступен");
+      url = URL.createObjectURL(await res.blob());
+      player.urls.set(key, url);
+    }
+    if (player.btn !== btn) return;
+    btn.classList.remove("loading");
+    if (btn.classList.contains("voice")) btn.firstElementChild.outerHTML = icon("pause");
+    player.el.src = url;
+    player.el.onended = () => { if (player.btn === btn) stopAudio(); };
+    await player.el.play();
+  } catch (err) {
+    btn.classList.remove("loading");
+    if (err.name === "AbortError" || player.btn !== btn) return;  // сам остановил или включил другое — не ошибка
+    if (text && "speechSynthesis" in window) { speakLocal(btn, text); return; }
+    stopAudio(); toast(err.message);
   }
-  const bytes = await res.arrayBuffer();
-  if (!talk.on || talk.phase !== "speaking") return true;
-  if (talk.ctx) {
-    try {
-      const buffer = await talk.ctx.decodeAudioData(bytes.slice(0));
-      const src = talk.source = talk.ctx.createBufferSource();
-      src.buffer = buffer; src.connect(talk.ctx.destination);
-      src.onended = () => { if (talk.source === src) { talk.source = null; done(); } };
-      src.start();
-      return true;
-    } catch (_) { /* формат не декодируется — попробуем <audio> */ }
-  }
-  const el = talk.el || (talk.el = new Audio());
-  el.src = URL.createObjectURL(new Blob([bytes], { type: "audio/ogg" }));
-  el.onended = done;
-  await el.play();
-  return true;
 }
 
-async function talkSpeak(text) {
-  if (!talk.on) return;
-  const box = $("#talk-text"); if (box) box.innerHTML += `<div class="talk-answer">${esc(text)}</div>`;
-  talkStatus("Говорю… (тап — перебить)", "speaking");
+function speakLocal(btn, text) {
+  const list = speechSynthesis.getVoices();
+  const latin = (text.match(/[a-z]/gi) || []).length / Math.max(1, (text.match(/\p{L}/gu) || []).length);
+  const want = latin > 0.5 ? /^en/i : /^ru/i;  // английский — английским голосом: ради произношения и слушают
+  const voice = list.find((v) => want.test(v.lang) && /google/i.test(v.name)) || list.find((v) => want.test(v.lang));
   const clean = text.replace(/https?:\/\/\S+/g, "").replace(/[*_`#>|~=\[\]]/g, "").replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "");
-  const done = () => { if (talk.on && talk.phase === "speaking") talkListen(); };
-  if (talk.serverVoice) {
-    try { talk.note = ""; await playServerVoice(clean, done); return; }
-    catch (err) { talk.note = "голос телефона: " + err.message; talkStatus(`Говорю голосом телефона — ${err.message}`, "speaking"); }
-  }
-  const voice = talk.voice || talkVoices();
-  if (voice) {
-    const parts = clean.match(/[^.!?…\n]+[.!?…]*/g) || [clean];
-    parts.forEach((p, i) => {
-      const u = new SpeechSynthesisUtterance(p.trim()); u.voice = voice; u.lang = voice.lang; u.rate = 1.12;
-      if (i === parts.length - 1) u.onend = done;
-      speechSynthesis.speak(u);
-    });
-    return;
-  }
-  talkStatus("Голоса для озвучки нет — читай ответ. Слушаю дальше через пару секунд.", "speaking");
-  setTimeout(done, Math.min(8000, 1500 + clean.length * 25));
+  const u = new SpeechSynthesisUtterance(clean);
+  if (voice) { u.voice = voice; u.lang = voice.lang; }
+  u.onend = () => { if (player.btn === btn) stopAudio(); };
+  speechSynthesis.speak(u);
 }
 
-let recorder, chunks = [], recStart = 0;
+/* Голосовое с микрофона: тап — запись (идёт время), тап ещё раз — отправить. */
+let recorder, chunks = [], recStart = 0, recTimer = 0;
 async function toggleRecord() {
   if (recorder && recorder.state === "recording") { recorder.stop(); return; }
+  stopAudio();
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const type = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus", "audio/mp4"].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
     recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
     chunks = []; recStart = Date.now();
+    const tick = () => { const s = Math.floor((Date.now() - recStart) / 1000); const el = $("#rec-time"); if (el) el.textContent = `● ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} — тап, чтобы отправить`; };
+    tick(); recTimer = setInterval(tick, 500);
     recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    recorder.onstop = async () => {
+    recorder.onstop = () => {
+      clearInterval(recTimer);
       stream.getTracks().forEach((t) => t.stop());
       composerMode();
       if (Date.now() - recStart < 700) { toast("Слишком коротко"); return; }
       const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-      state.messages.push({ id: 0, at: new Date().toISOString(), who: "me", text: "🎙 голосовое…", channel: "web", buttons: [] });
-      state.thinking = "слушаю"; renderChat();
-      try { await api("voice", { body: blob, headers: { "Content-Type": blob.type.split(";")[0] } }); } catch (err) { toast(err.message); }
+      haptic("medium"); state.chatStick = true;
+      queueMessage("🎙 голосовое", (cid) => api("voice", { body: blob, headers: { "Content-Type": blob.type.split(";")[0], "X-Client-Id": cid } }),
+        { thinking: "слушаю" });
     };
-    recorder.start(); haptic("medium");
+    recorder.start(); haptic("heavy");
     composerMode();
   } catch (err) { toast("Нет доступа к микрофону: " + err.message); }
 }
@@ -1689,7 +1670,7 @@ function renderProjects() {
   }
   bindProjects();
   restoreComposer(keep);
-  const thread = $("#pc-thread"); if (thread) thread.scrollTop = thread.scrollHeight;
+  const thread = $("#pc-thread"); if (thread) { thread.scrollTop = thread.scrollHeight; bindMessages(thread, state.project.messages || []); }
   if (TG) {
     TG.BackButton.offClick(projectBack);
     if (state.project && !isWide()) { TG.BackButton.show(); TG.BackButton.onClick(projectBack); } else if (!state.note) TG.BackButton.hide();
@@ -1760,10 +1741,10 @@ function obsidianUrl(path) {
 }
 
 function projChatHtml() {
-  const p = state.project, msgs = p.messages || [];
+  const p = state.project, msgs = [...(p.messages || []), ...pendingFor(p.messages || [], p.id)];
   const thinking = state.thinking && (!msgs.length || msgs[msgs.length - 1].who === "me");
   return `<div class="pc"><div class="pc-thread" id="pc-thread">
-      ${msgs.length ? msgs.map((m) => `<div class="msg ${m.who === "me" ? "me" : ""}">${linkify(esc(m.text))}</div>`).join("")
+      ${msgs.length ? msgs.map((m) => msgHtml(m, { buttons: false, channel: false })).join("")
         : `<div class="pc-empty muted small">Здесь разговор только про «${esc(p.title)}». Арвикс видит этапы, заметки папки, время и присланные файлы — и сам всё записывает.</div>`}
       ${thinking ? `<div class="msg typing">Арвикс думает…</div>` : ""}</div>
     ${msgs.length < 3 ? `<div class="aw-chips">${PROJ_ASK.map((q) => `<button class="chip" data-ask="${esc(q)}">${esc(q)}</button>`).join("")}</div>` : ""}
@@ -1872,10 +1853,8 @@ async function projectSend(text) {
   text = String(text || "").trim();
   if (!text) return;
   const p = state.project;
-  p.messages = [...(p.messages || []), { who: "me", text, at: new Date().toISOString() }];
-  state.thinking = "думаю";
-  renderProjects();
-  try { await api(`projects/${p.id}/chat`, { json: { text } }); } catch (err) { toast(err.message); }
+  haptic("medium");
+  queueMessage(text, (cid) => api(`projects/${p.id}/chat`, { json: { text, cid } }), { project: p.id });
 }
 
 async function projectFiles(files) {
@@ -1883,13 +1862,10 @@ async function projectFiles(files) {
   for (const f of files) {
     if (f.size > MAX_FILE) { toast(`«${f.name}» больше 20 МБ`); continue; }
     const caption = ($("#pc-text") && $("#pc-text").value.trim()) || "";
-    try {
-      await api(`projects/${p.id}/upload`, { body: f, headers: { "Content-Type": f.type || "application/octet-stream",
-        "X-File-Name": encodeURIComponent(f.name), "X-Caption": encodeURIComponent(caption) } });
-      if ($("#pc-text")) $("#pc-text").value = "";
-      p.messages = [...(p.messages || []), { who: "me", text: "📎 " + f.name, at: new Date().toISOString() }];
-      state.thinking = "смотрю файл"; renderProjects();
-    } catch (err) { toast(err.message); }
+    if ($("#pc-text")) $("#pc-text").value = "";
+    queueMessage("📎 " + f.name, (cid) => api(`projects/${p.id}/upload`, { body: f, headers: { "Content-Type": f.type || "application/octet-stream",
+      "X-File-Name": encodeURIComponent(f.name), "X-Caption": encodeURIComponent(caption), "X-Client-Id": cid } }),
+      { project: p.id, thinking: "смотрю файл" });
   }
 }
 
@@ -2108,12 +2084,24 @@ function openLogSheet() {
 }
 
 // --- живые обновления --------------------------------------------------------------------------
+/* Поток /api/stream: строка при любом изменении журнала. Связь пропала — в шапке «нет связи», после
+ * возвращения всё перечитывается: пропущенное не теряется. */
+function setOnline(on) {
+  if (state.online === on) return;
+  const was = state.online;
+  state.online = on;
+  $("#net").classList.toggle("hidden", on);
+  if (on && was === false) { state.version = ""; load(state.tab); }
+}
+
 async function stream() {
   let delay = 1000;
   for (;;) {
     try {
       const res = await fetch("/api/stream", { headers: authHeaders() });
       if (res.status === 401) { renderLogin(); return; }
+      if (!res.ok) throw new Error("stream " + res.status);
+      setOnline(true);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
@@ -2130,30 +2118,61 @@ async function stream() {
         }
       }
     } catch (_) { /* сеть пропала — переподключимся */ }
+    setOnline(false);
     await new Promise((r) => setTimeout(r, delay));
     delay = Math.min(delay * 2, 15000);
   }
+}
+window.addEventListener("online", () => { state.version = ""; });
+document.addEventListener("visibilitychange", () => { if (!document.hidden && state.online !== false) load(state.tab); });
+
+/* Непрочитанное: число на вкладке «Арвикс» и значок на иконке установленного приложения. Прочитано —
+ * когда открыт чат и окно на экране. Ответ пришёл, пока ты на другой вкладке, — плашка сверху (тап → чат). */
+const SEEN_KEY = "arvix_seen";
+state.seen = (() => { try { return +localStorage.getItem(SEEN_KEY) || 0; } catch (_) { return 0; } })();
+function markSeen() {
+  if (state.tab !== "chat" || document.hidden) return;
+  const last = Math.max(0, ...state.messages.map((m) => m.id || 0));
+  if (last > state.seen) { state.seen = last; try { localStorage.setItem(SEEN_KEY, String(last)); } catch (_) { /* приватный режим */ } }
+  setUnread([]);
+}
+function setUnread(list) {
+  const n = list.length, dot = $("#chat-dot");
+  dot.textContent = n > 9 ? "9+" : n ? String(n) : "";
+  dot.classList.toggle("hidden", !n);
+  try { if (navigator.setAppBadge) n ? navigator.setAppBadge(n) : navigator.clearAppBadge(); } catch (_) { /* нет */ }
+}
+function banner(m) {
+  const el = $("#banner");
+  const text = String(m.text || "").replace(/^🔊\s*/, m.audio ? "🔊 " : "").replace(/\*\*/g, "");
+  el.innerHTML = `<b>Арвикс</b><span>${esc(text.length > 120 ? text.slice(0, 118) + "…" : text)}</span>`;
+  el.classList.remove("hidden");
+  el.onclick = () => { el.classList.add("hidden"); setTab("chat"); };
+  clearTimeout(banner.t); banner.t = setTimeout(() => el.classList.add("hidden"), 5000);
 }
 
 let refreshTimer;
 function onChange(ev) {
   if (ev.v === state.version) return;
   state.version = ev.v;
-  const wasThinking = state.thinking;
   state.thinking = ev.thinking || "";
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(async () => {
     try {
+      const before = Math.max(0, ...state.messages.map((m) => m.id || 0));
       state.data = await api("state"); renderTop();
+      const r = await api("messages");
+      const fresh = r.messages.filter((m) => m.id > before && m.who === "arvix");
       if (state.tab === "chat") {
-        const r = await api("messages");
-        state.messages = r.messages; state.thinking = r.thinking || "";
-        if (!$("#msg") || document.activeElement !== $("#msg") || wasThinking) renderChat();
-        else renderChat();
+        const older = state.messages.filter((m) => m.id && r.messages.length && m.id < r.messages[0].id);
+        state.messages = [...older, ...r.messages]; state.thinking = r.thinking || "";
+        if (fresh.length && before) haptic(fresh.some((m) => m.audio) ? "medium" : "light");
+        renderChat();
       } else {
-        const r = await api("messages");
-        const last = r.messages.length ? r.messages[r.messages.length - 1] : null;
-        if (last && last.id > state.seen && last.who === "arvix") $("#chat-dot").classList.remove("hidden");
+        state.messages = r.messages;
+        const unread = r.messages.filter((m) => m.who === "arvix" && m.id > state.seen);
+        setUnread(unread);
+        if (fresh.length && before && !document.hidden) { banner(fresh[fresh.length - 1]); notify("success"); }
         if (state.tab === "today") renderToday();
         if (state.tab === "progress") { state.history = await api("history?days=30"); renderProgress(); }
         if (state.tab === "projects") {
@@ -2175,7 +2194,7 @@ document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.code === "KeyS" && $("#e-text")) { e.preventDefault(); saveEditor(); return; }
   if (e.key === "Escape") {
     if (!$("#sheet").classList.contains("hidden")) { closeSheet(); return; }
-    if (talk.on) { closeTalk(); return; }
+    if (player.btn) { stopAudio(); return; }
     if (state.tab === "notes" && state.note) { e.preventDefault(); noteBack(); return; }
     if (state.tab === "projects" && state.projNote) { e.preventDefault(); state.projNote = null; renderProjects(); return; }
     if (state.tab === "projects" && state.project && !isWide()) { e.preventDefault(); projectBack(); return; }

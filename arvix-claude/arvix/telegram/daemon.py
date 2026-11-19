@@ -60,6 +60,7 @@ def main() -> None:
 
     threading.Thread(target=setup_menu, name="tg-menu", daemon=True).start()
     hub = Hub()
+    bot.lane = hub.think  # голова думает вне главного потока: очередь не стоит (D51)
     web = start_web(cfg, hub)  # приложение и API — в том же процессе (arvix/web)
 
     stopping = threading.Event()
@@ -91,7 +92,7 @@ def main() -> None:
                 continue
             for update in updates:
                 offset = update["update_id"] + 1
-                hub.post(handle(update), label=f"update {update.get('update_id')}")
+                hub.post(handle(update), label=f"update {update.get('update_id')}", show=False)
 
     start_offset = int(core.store.kv_get("tg_offset", 0))
     threading.Thread(target=poll, name="tg-poll", daemon=True).start()

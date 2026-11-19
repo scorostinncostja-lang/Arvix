@@ -336,28 +336,6 @@ pre.conflict { max-height: 220px; overflow: auto; background: var(--card-2); pad
 .sugg .link { white-space: normal; text-align: left; font-weight: 600; }
 
 /* --- Режим разговора: как экран звонка ----------------------------------------------------- */
-.talk { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; align-items: center; gap: 22px; overflow-y: auto;
-  padding: calc(env(safe-area-inset-top) + 40px) 16px calc(env(safe-area-inset-bottom) + 24px);
-  background: radial-gradient(120% 70% at 50% 0%, #2b3a8f 0%, #13182b 55%, #0b0e17 100%); color: #fff; }
-.talk-head { text-align: center; }
-.talk-name { font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
-.talk-status { margin-top: 6px; color: rgba(255, 255, 255, .7); font-size: 15px; min-height: 20px; }
-.talk-orb { position: relative; margin-top: 4vh; width: 148px; height: 148px; border-radius: 50%; flex: none; display: grid; place-items: center; }
-.talk-avatar { width: 132px; height: 132px; border-radius: 50%; position: relative; z-index: 1; box-shadow: 0 12px 40px rgba(0, 0, 0, .45); }
-.talk-ring { position: absolute; inset: 0; border-radius: 50%; background: rgba(124, 140, 255, .35); transition: transform .08s linear; }
-.talk-orb[data-phase="thinking"] .talk-ring { animation: talk-pulse 1.4s ease-in-out infinite; }
-.talk-orb[data-phase="speaking"] .talk-ring { background: rgba(47, 208, 169, .35); animation: talk-speak .7s ease-in-out infinite alternate; }
-.talk-orb[data-phase="idle"] { opacity: .6; }
-@keyframes talk-pulse { 50% { transform: scale(1.12); opacity: .5; } }
-@keyframes talk-speak { from { transform: scale(1.05); } to { transform: scale(1.28); } }
-.talk-text { width: 100%; max-width: 560px; display: grid; gap: 8px; }
-.talk-text .muted { color: rgba(255, 255, 255, .6); }
-.talk-answer { background: rgba(255, 255, 255, .08); border-radius: 16px; padding: 12px 14px; line-height: 1.5; white-space: pre-wrap; }
-.talk-bar { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 14px; }
-.talk-hint { text-align: center; max-width: 320px; color: rgba(255, 255, 255, .55) !important; }
-.talk-end { width: 68px; height: 68px; border-radius: 50%; background: #e5484d; color: #fff; display: grid; place-items: center;
-  box-shadow: 0 8px 24px rgba(229, 72, 77, .45); }
-.talk-end .ic { width: 30px; height: 30px; }
 
 /* --- Серия: год квадратами, как на GitHub ------------------------------------------------- */
 :root { --heat0: #ebedf0; --heat1: #9be9a8; --heat2: #40c463; --heat3: #30a14e; --heat4: #216e39; --heat-rest: #c8d3f5; }
@@ -397,9 +375,6 @@ pre.conflict { max-height: 220px; overflow: auto; background: var(--card-2); pad
 .note-back { display: inline-flex; align-items: center; gap: 2px; }
 .note-back .ic { width: 22px; height: 22px; margin-left: -6px; }
 .top-right { display: flex; align-items: center; gap: 8px; }
-.top-call { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--card); color: var(--accent);
-  box-shadow: var(--shadow); }
-.top-call .ic { width: 19px; height: 19px; }
 .hidden { display: none !important; }
 
 /* --- Ноутбук: боковая панель, колонки, окна по центру (от 900 px; порог — WIDE в app.js) ------ */
@@ -652,6 +627,7 @@ details.pl-group > summary { cursor: pointer; list-style: none; }
   .pw-side { display: flex; flex-direction: column; }
   .ps-tabs { margin-bottom: 10px; flex: none; }
   .ps-body { min-height: 0; }
+}
 /* Наведение — только там, где есть мышь или тачпад: на сенсорном экране подсветка «залипает» после касания */
 @media (min-width: 900px) and (hover: hover) {
   .tabs button:hover { background: var(--card-2); }
@@ -689,3 +665,38 @@ details.pl-group > summary { cursor: pointer; list-style: none; }
   .progress-grid .card { margin: 0; }
   #g-canvas { height: 56vh; }
 }
+
+/* --- чат: черновики, голосовые, 🔊, подгрузка, плашка, связь (D51) ------------------------------ */
+.dot:not(:empty) { width: auto; min-width: 17px; height: 17px; padding: 0 5px; font: 700 10.5px/17px system-ui, sans-serif; font-style: normal;
+  color: #fff; text-align: center; border-radius: 9px; }
+.msg.pending.sending { opacity: .72; }
+.msg.pending.failed { box-shadow: inset 0 0 0 1.5px var(--bad); }
+.msg .retry { color: inherit; text-decoration: underline; font: inherit; padding: 0; background: none; }
+.msg time .listen { display: inline-grid; place-items: center; width: 22px; height: 22px; margin: -4px 4px -6px -4px; border-radius: 50%;
+  color: inherit; opacity: .75; vertical-align: middle; background: none; }
+.msg time .listen .ic { width: 15px; height: 15px; }
+.msg time .listen.playing, .msg time .listen.loading { opacity: 1; color: var(--accent); }
+.msg time .listen.loading .ic { animation: blink 1s infinite; }
+.voice { display: flex; align-items: center; gap: 10px; padding: 2px 0; background: none; color: inherit; font: inherit; }
+.voice > .ic { width: 34px; height: 34px; padding: 9px; border-radius: 50%; background: var(--accent); color: #fff; flex: none; }
+.voice.loading > .ic { animation: blink 1s infinite; }
+.voice-wave { width: 96px; height: 18px; flex: none; opacity: .55;
+  background: repeating-linear-gradient(90deg, currentColor 0 2px, transparent 2px 5px);
+  -webkit-mask: linear-gradient(0deg, transparent 20%, #000 20% 80%, transparent 80%); }
+.voice.playing .voice-wave { opacity: .9; animation: blink 1.2s infinite; }
+.voice-label { font-size: 12px; opacity: .65; }
+.voice-text { margin-top: 6px; font-size: 14px; opacity: .85; }
+.typing span { margin-left: 8px; font-size: 12px; color: var(--muted); }
+.older { align-self: center; padding: 6px 14px; border-radius: 14px; background: var(--card); color: var(--muted); font-size: 13px; box-shadow: var(--shadow); }
+.to-new { position: fixed; right: 16px; bottom: calc(var(--tabs-h) + 72px + env(safe-area-inset-bottom)); z-index: 7; width: 40px; height: 40px;
+  border-radius: 50%; background: var(--card); color: var(--accent); font-size: 18px; box-shadow: var(--shadow); }
+.rec-time { flex: 1; min-height: 42px; display: flex; align-items: center; padding: 0 14px; color: var(--bad); font-size: 14px; font-variant-numeric: tabular-nums; }
+.composer textarea.hidden, .rec-time.hidden { display: none; }
+.banner { position: fixed; left: 12px; right: 12px; top: calc(10px + env(safe-area-inset-top)); z-index: 40; max-width: 520px; margin: 0 auto;
+  display: grid; gap: 2px; padding: 10px 14px; border-radius: 16px; background: var(--card); box-shadow: 0 10px 30px rgba(0, 0, 0, .25);
+  font-size: 14px; cursor: pointer; animation: drop .22s ease-out; }
+.banner span { color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+@keyframes drop { from { transform: translateY(-16px); opacity: 0; } }
+.chip.net { background: var(--bad); color: #fff; }
+@media (prefers-reduced-motion: reduce) { .banner, .voice.playing .voice-wave { animation: none; } }
+@media (min-width: 900px) { .to-new { bottom: 96px; right: 28px; } }

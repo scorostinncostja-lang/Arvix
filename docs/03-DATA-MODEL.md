@@ -112,7 +112,8 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `message_out` | `text ≤ 600, key, channel` — `key` дедуплицирует проактив (`brief:<дата>`, `rem5:<id>:<start>`, `debrief:<дата>`…) | bot |
 
 Переписка (`message_in`, `message_out`) хранится целиком, до 16 000 символов (D25); `channel` — `telegram`, `web` или
-`terminal`; у `message_out` бывают `buttons` — приложение показывает те же кнопки. Производные данные вне журнала:
+`terminal`; у `message_out` бывают `buttons` — приложение показывает те же кнопки, и `audio` — имя файла голосового
+(`voice/<хэш>.ogg`, D51); у `message_in` из приложения — `cid`, метка черновика ленты. Производные данные вне журнала:
 FTS5-индекс `memory_fts` (поиск по памяти) и в runtime-таблице — ключ приложения `web_token`, кэш погоды, отметки
 `dialog_day`, `last_in_at`, `curiosity_tried`. Ни задач, ни режима в них нет.
 

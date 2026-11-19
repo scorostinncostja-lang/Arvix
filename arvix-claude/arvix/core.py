@@ -1159,18 +1159,23 @@ class Core:
     # Раньше ответ резался до 600 символов — и через неделю он «забывал» собственные объяснения.
     MESSAGE_LIMIT = 16000
 
-    def message_in(self, text: str, *, channel: str = "telegram", project: str | None = None) -> None:
+    def message_in(self, text: str, *, channel: str = "telegram", project: str | None = None, cid: str | None = None) -> None:
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "channel": channel}
         if project:
             payload["project"] = project  # чат проекта (D47): своя нить в общей переписке
+        if cid:  # метка приложения: черновик в ленте заменяется этим сообщением, а не исчезает (D51)
+            payload["cid"] = cid[:40]
         with self.tx():
             self.emit("message_in", payload, source=channel)
 
     def message_out(self, text: str, *, key: str | None = None, channel: str = "telegram",
-                    buttons: list[list[tuple[str, str]]] | None = None, project: str | None = None) -> None:
+                    buttons: list[list[tuple[str, str]]] | None = None, project: str | None = None,
+                    audio: str | None = None) -> None:
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "key": key, "channel": channel}
         if project:
             payload["project"] = project
+        if audio:  # голосовое Арвикса: файл в data_dir/voice, приложение его проигрывает (D51)
+            payload["audio"] = audio
         if buttons:  # приложение показывает те же кнопки под сообщением
             payload["buttons"] = [[[t, d] for t, d in row] for row in buttons]
         with self.tx():
