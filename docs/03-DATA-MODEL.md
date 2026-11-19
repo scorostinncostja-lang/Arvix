@@ -48,7 +48,7 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `profile_set` | `key, value` — `name`, `address` (m/f), `city`, `timezone`, `bedtime_target`, `wake_target`, `bedtime_actual`, `wake_actual`, `sleep_target_min`, `main_goal`, `main_goal_why`, `support_person`, `week_budget_min`, `season_start`, `program_start`, `currency`, произвольные | интервью (l0), человек, модель |
 | `interview_answer` | `qid, block, question, answer` | человек |
 | `interview_skipped` / `interview_reset` | `qid` (+ `reason`) | человек |
-| `goal_set` | `id, title, why, kind (dream·main·yearly·quarterly·milestone), deadline, metric, sphere, parent_id, status (active·done·dropped)` — повторное событие с тем же `id` обновляет; у цели верхнего уровня `why` обязательно, у этапа (`parent_id`) — нет | человек, модель |
+| `goal_set` | `id, title, why, kind (dream·main·yearly·quarterly·milestone), deadline, metric, sphere, parent_id, status (active·done·dropped), focus?, merged_into?` — повторное событие с тем же `id` обновляет; у цели верхнего уровня `why` обязательно, у этапа (`parent_id`) — нет; `focus` — человек закрепил цель в фокусе (`true`) или в «потом» (`false`), нет поля — решает код; `merged_into` — цель слита с другой (D52) | человек, модель |
 | `trait_set` | `id, kind (fear·weakness·bad_habit·good_habit·trigger), title, description, severity 1–5, counter_strategy` | модель, человек |
 | `fact_remembered` / `fact_retracted` | `id, topic, fact, confidence 1–5, valid_until` / `id, reason` | модель, человек |
 | `template_set` | `weekdays[], day_type, blocks[{start, duration, title, sphere, importance, difficulty, deep_work, tags, fixed?}]` | человек, модель |
@@ -82,6 +82,8 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `channel_set` | каналы привлечения 0.7–0.8; с D47 не пишутся, старые события в журнале | — |
 | `resource_set` | `id, project_id, title, url, kind (source·doc·course·video·tool·example·repo·design·note·chat·other), note, status (active·removed), by` — источник, инструмент, пример чужой работы | человек, модель, L2 |
 | `learn_item_set` | `id, topic, why, project_id, goal_id, sources[], status (todo·done·dropped), task_id` — очередь «учиться» для проектов и будущей вкладки «Обучение» (D47) | человек, модель |
+| `goal_plan_set` | `id, goal_id, diagnosis, summary, items[]` — план стратега к цели; пункт: `idx, type (habit·project·task·learn·link_block·fix_goal), title, why` + поля типа (дни, время, длительность, этапы, источники, срок, метрика); свёртка ставит каждому пункту `status = proposed` (D52) | L2 |
+| `goal_plan_item` | `plan_id, idx, status (accepted·rejected), ref?, note?` — решение по пункту плана; `ref` — что создано (проект, задача, тема), `note` — квитанция; свёртка ставит `decided` | человек |
 | `repo_activity` | коммиты GitHub 0.8; с D47 не пишется, старые события в журнале | — |
 | `social_contact` | `who` | человек, модель |
 | `reason_declared` | `reason` — причина плохого дня: важное, не сделанное в этот день, не уходит в долг | человек, модель |

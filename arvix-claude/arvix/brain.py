@@ -32,11 +32,13 @@ ACTION_TYPES = (
     "set_goal", "add_trait", "declare_reason", "learning_question", "safety_flag", "set_template",
     # Проекты (D43): карточка, этап с критерием, блок в план, журнал, деньги, канал привлечения.
     "set_project", "set_milestone", "plan_project", "project_log", "project_resource", "project_note", "learn_add",
+    # Стратегия целей (D52): слить дубли, фокус цели. План к цели (plan_goal) — действие интерфейса: стратег в фоне.
+    "merge_goals", "goal_focus",
 ) + (
     # Действия интерфейса: их исполняет бот после ответа, а не ядро (05-INTERFACES §2.1).
     # Так человек говорит словами, а не командами: «давай позанимаемся физикой» → урок.
     "plan_schedule", "show_schedule", "start_lesson", "start_focus", "stop_focus", "show_day", "show_status",
-    "show_week", "show_goals", "debrief_now", "rest_day", "silent_day", "open_app", "install_app", "offer_return",
+    "show_week", "show_goals", "plan_goal", "debrief_now", "rest_day", "silent_day", "open_app", "install_app", "offer_return",
 )
 UI_ACTIONS = frozenset(ACTION_TYPES[ACTION_TYPES.index("plan_schedule"):])
 ACTION_RU = {
@@ -46,6 +48,7 @@ ACTION_RU = {
     "learning_question": "учебный вопрос", "safety_flag": "safety", "set_template": "распорядок",
     "set_project": "проект", "set_milestone": "этап проекта", "plan_project": "блок проекта", "project_log": "журнал проекта",
     "project_resource": "источник проекта", "project_note": "заметка проекта", "learn_add": "учиться",
+    "merge_goals": "слить цели", "goal_focus": "фокус цели",
 }
 
 _ACTION_FIELDS = {
@@ -65,7 +68,11 @@ _ACTION_FIELDS = {
     "deadline": {"type": "string"}, "level": {"type": "string"}, "question": {"type": "string"},
     "direct": {"type": "boolean"},
     "wishes": {"type": "string", "description": "для plan_schedule: распорядок и пожелания словами человека, полностью"},
-    "goal_id": {"type": "string", "description": "для set_goal: id существующей цели — исправить её (kind, deadline, metric, status=dropped)"},
+    "goal_id": {"type": "string", "description": "для set_goal: id существующей цели — исправить её (kind, deadline, metric, status=dropped); "
+                                                "для add_task — задача работает на эту цель; для merge_goals — цель, которая остаётся; "
+                                                "для goal_focus и plan_goal — о какой цели речь"},
+    "merge": {"type": "array", "items": {"type": "string"}, "description": "для merge_goals: id целей-дублей, которые сливаются в goal_id"},
+    "focus": {"type": "boolean", "description": "для goal_focus: true — в фокус, false — в «потом»"},
     "parent_id": {"type": "string", "description": "для set_goal: id цели, этапом которой становится эта"},
     "metric": {"type": "string", "description": "для set_goal: как проверить достижение — число, оценка, результат"},
     "status": {"type": "string", "enum": ["active", "done", "dropped", "idea", "paused", "open", "todo"],
@@ -386,6 +393,14 @@ def _start_from_deadline(action: dict[str, Any]) -> str | None:
     return f"{max(total, 0) // 60:02d}:{max(total, 0) % 60:02d}"
 
 
+def _goal_tags(core: Core, goal_id: Any) -> list[str]:
+    """Задача из чата работает на цель — тег goal:<id>, по нему код считает минуты цели (strategy.py)."""
+    from arvix import strategy
+
+    gid = strategy.canonical(core, str(goal_id or "")) if goal_id else None
+    return [strategy.goal_tag(gid)] if gid and gid in core.state.goals else []
+
+
 PROJECT_ACTIONS = frozenset({"set_project", "set_milestone", "plan_project", "project_log", "project_resource", "project_note", "learn_add"})
 
 
@@ -457,7 +472,7 @@ def apply_actions(
                     importance=action.get("importance") or 3, difficulty=action.get("difficulty") or 3,
                     start=_start_from_deadline(action), duration_min=action.get("duration_min") or 60,
                     deep_work=bool(action.get("deep_work")), day=action.get("date"), project=action.get("project") or None,
-                    source=source,
+                    tags=_goal_tags(core, action.get("goal_id")), source=source,
                 )
                 when = (f"{task.start}, " if task.start else "") + f"{task.duration_min} мин"
                 done.append(f"+ {task.title} · {when}" + (" · завтра" if task.local_date > core.today() else ""))
@@ -511,6 +526,16 @@ def apply_actions(
                 goal = core.state.goals[gid]
                 done.append(f"цель «{goal['title']}» · {goal['kind']}" + (f" · {goal['status']}" if goal.get("status") != "active" else ""))
                 warnings += [f"цель «{goal['title']}»: {w}" for w in core.goal_warnings(gid)]
+            elif kind == "merge_goals":
+                from arvix import strategy
+
+                result = strategy.merge(core, str(action.get("goal_id") or ""), [str(x) for x in action.get("merge") or []], source=source)
+                done.append(f"цели слиты в «{result['keeper']['title']}»: " + ", ".join(f"«{t}»" for t in result["merged"]))
+            elif kind == "goal_focus":
+                from arvix import strategy
+
+                goal = strategy.set_focus(core, str(action.get("goal_id") or ""), bool(action.get("focus", True)), source=source)
+                done.append(f"цель «{goal['title']}» " + ("в фокусе" if goal.get("focus") else "— потом"))
             elif kind == "add_trait":
                 core.add_trait(action.get("kind", "weakness"), action["title"], description=action.get("text", ""), source=source)
             elif kind == "declare_reason":

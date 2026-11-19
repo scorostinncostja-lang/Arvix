@@ -108,6 +108,7 @@ class State:
     learn_items: dict[str, dict[str, Any]] = field(default_factory=dict)  # «учиться»: очередь тем для проектов и вкладки «Обучение» (D47)
     repos: dict[str, dict[str, Any]] = field(default_factory=dict)  # проект → последнее, что видели в GitHub
     commits: dict[str, dict[str, Any]] = field(default_factory=dict)  # sha → коммит проекта: движение без слов
+    goal_plans: dict[str, dict[str, Any]] = field(default_factory=dict)  # планы стратега к целям: пункты и решения (D52)
     last_user_at: str | None = None
     last_event_id: int = 0
     first_date: date | None = None
@@ -363,6 +364,18 @@ class State:
 
     def _on_channel_set(self, ev: Event, p: dict, day: Day) -> None:
         self.channels[p["id"]] = {**p, "updated": ev.local_date.isoformat()}
+
+    def _on_goal_plan_set(self, ev: Event, p: dict, day: Day) -> None:
+        self.goal_plans[p["id"]] = {**p, "date": ev.local_date.isoformat(), "event_id": ev.id,
+                                    "items": [{**item, "status": "proposed"} for item in p.get("items") or []]}
+
+    def _on_goal_plan_item(self, ev: Event, p: dict, day: Day) -> None:
+        plan = self.goal_plans.get(p["plan_id"])
+        if not plan:
+            return
+        for item in plan["items"]:
+            if item["idx"] == p["idx"]:
+                item.update(status=p["status"], decided=ev.local_date.isoformat(), ref=p.get("ref"), note=p.get("note"))
 
     def _on_learn_item_set(self, ev: Event, p: dict, day: Day) -> None:
         old = self.learn_items.get(p["id"], {})

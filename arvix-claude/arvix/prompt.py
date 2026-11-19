@@ -18,10 +18,10 @@ from arvix.config import PACKAGE_DIR
 from arvix.context import build_context
 
 CONSTITUTION_DIR = PACKAGE_DIR / "constitution"
-SECTIONS = ("identity", "mission", "voice", "partner", "autonomy_rule", "decision_rule", "critical", "honesty", "boundaries",
-            "safety_override")
-# Разделы, которые выпадают в мягком режиме: цена «в цифрах» и разбор чужих ошибок в 🟥 неуместны.
-GENTLE_SKIP = frozenset({"decision_rule", "critical"})
+SECTIONS = ("identity", "mission", "voice", "partner", "autonomy_rule", "decision_rule", "critical", "strategy", "honesty",
+            "boundaries", "safety_override")
+# Разделы, которые выпадают в мягком режиме: цена «в цифрах», разбор чужих ошибок и толкание к целям в 🟥 неуместны.
+GENTLE_SKIP = frozenset({"decision_rule", "critical", "strategy"})
 TONE_FILES = {"normal": "tone_norm", "pressure": "tone_pressure", "yellow": "tone_yellow", "red": "tone_red"}
 HARSH_TONES = ("tone_norm", "tone_pressure", "tone_yellow")
 EMERGENCY = "112"
@@ -125,7 +125,7 @@ def hook_context(core: Any) -> str:
         tone_block(st.mode, st.mentor_enabled),
     ]
     if not gentle:
-        parts += [constitution(st.profile, gentle=False, sections=("decision_rule", "critical")), fewshot(gentle=False, only="harsh")]
+        parts += [constitution(st.profile, gentle=False, sections=("decision_rule", "critical", "strategy")), fewshot(gentle=False, only="harsh")]
     parts.append("<context>\n" + build_context(core, gentle=gentle) + "\n</context>")
     if not gentle:
         parts.append(first_session_block(core))

@@ -9,6 +9,7 @@ GET  /api/messages?before=id  переписка из журнала
 GET  /api/history?days=30     прогресс, цели, неделя
 GET  /api/notes?dir=…         папка хранилища · /api/note?path=… — заметка · /api/notes/search?q=…
 GET  /api/file?path=…         вложение заметки (картинка, PDF) — для ![[…]]
+GET  /api/goals · /api/goal?id=…  вкладка «Цели»: фокус, дубли, система цели, план Арвикса (D52)
 GET  /api/graph               граф заметок: узлы, связи, призраки, одинокие, подсказки «связать»
 GET  /api/stream              поток событий: строка {"v": …} при любом изменении (fetch + ReadableStream)
 GET  /api/pair                одноразовая ссылка установки на телефон (только из Mini App)
@@ -21,6 +22,8 @@ POST /api/focus {minutes, task | topic} · /api/focus/<pause|resume|stop|cancel>
 POST /api/capture {text}      мысль в Inbox
 POST /api/note {path, text, sha} · /api/note/new {dir, name} · /api/note/toggle {path, line, sha} · /api/note/link {a, b}
                               правка заметки человеком; файл изменился после открытия — 409 и текущий текст
+POST /api/note/attach         файл в заметку (X-Folder, X-File-Name — urlencoded) → <папка>/Файлы, ответ {path, embed}
+POST /api/goals/<id>/<op> · /api/goals/<id>/plan   фокус, правка, слияние, план стратега и решения по нему
 """
 
 from __future__ import annotations
@@ -170,6 +173,10 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 elif url.path == "/api/history":
                     days = max(7, min(int(query.get("days") or 30), 120))
                     self.send_json(app.read(lambda c: api.history_view(c, days)))
+                elif url.path == "/api/goals":
+                    self.send_json(app.read(api.goals_view))
+                elif url.path == "/api/goal":
+                    self.send_json(app.read(lambda c: api.goal_view(c, query.get("id") or "")))
                 elif url.path == "/api/projects":
                     self.send_json(app.read(api.projects_view))
                 elif url.path == "/api/project":
@@ -301,6 +308,17 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     kind = (self.headers.get("Content-Type") or "").split(";")[0]
                     app.hub.post(api.project_upload(parts[1], data, name, kind, caption), label="смотрю файл")
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
+                elif len(parts) == 3 and parts[0] == "goals" and parts[2] == "plan":
+                    app.hub.post(api.goal_plan(parts[1]), label="собираю план к цели")
+                    self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
+                elif len(parts) == 3 and parts[0] == "goals":
+                    self.send_json(app.hub.call(api.goal_op(parts[1], parts[2], self.body_json())))
+                elif parts == ["note", "attach"]:
+                    app.vault()
+                    data = self.body_bytes()
+                    folder = urllib.parse.unquote(self.headers.get("X-Folder") or "")
+                    name = urllib.parse.unquote(self.headers.get("X-File-Name") or "файл")
+                    self.send_json(app.hub.call(api.note_attach(folder, data, name)))
                 elif parts == ["projects", "roadmap"]:
                     goal = str(self.body_json().get("goal") or "")
                     app.hub.post(api.project_roadmap(goal), label="строю роадмап")

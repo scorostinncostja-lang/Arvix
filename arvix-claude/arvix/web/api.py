@@ -244,6 +244,133 @@ def projects_view(core: Any) -> dict[str, Any]:
     }
 
 
+# --- цели и стратегия (D52): вкладка «Цели» — фокус, система цели, план Арвикса -------------------------
+
+GENTLE_GOALS = ("Цели подождут. Сегодня — восстановление: ни планов, ни цифр. "
+                "Если тянет к чему-то своему — сделай самое приятное в этом, без счёта.")
+
+
+def goals_view(core: Any) -> dict[str, Any]:
+    """Цели по фокусу: что двигается, что стоит, у чего нет системы; дубли — с кнопкой «объединить».
+    Проекты без цели — отдельно. В 🟥 — без цифр и без целей (правило №5)."""
+    from arvix import projects, strategy
+
+    if gentle(core):
+        return {"gentle": True, "note": GENTLE_GOALS}
+    now, later = strategy.focus(core)
+    cards = {p["id"]: _project_card(core, p) for p in core.state.projects.values()}
+    goal_ids = {g["id"] for g in strategy.alive(core)}
+    loose = [c for c in cards.values() if c["group"] != "closed" and (not c["goal_id"] or strategy.canonical(core, c["goal_id"]) not in goal_ids)]
+    closed = sorted((c for c in cards.values() if c["group"] == "closed"), key=lambda c: c["title"])
+    return {
+        "gentle": False,
+        "dreams": [{"id": g["id"], "title": g["title"], "why": g.get("why", "")} for g in strategy.dreams(core)],
+        "focus": [strategy.card(core, g) for g in now], "later": [strategy.card(core, g) for g in later],
+        "dups": [{"keeper": {"id": d["keeper"]["id"], "title": d["keeper"]["title"]},
+                  "others": [{"id": o["id"], "title": o["title"]} for o in d["others"]]} for d in strategy.duplicates(core)],
+        "loose": loose, "closed": closed, "max_focus": strategy.max_focus(core), "max_active": projects.max_active(core),
+        "projects": sorted(({"id": c["id"], "title": c["title"], "status": c["status"], "status_ru": c["status_ru"], "goal_title": c["goal_title"]}
+                            for c in cards.values() if c["group"] != "closed"), key=lambda c: (c["status"] != "active", c["title"])),
+        "active": sum(1 for c in cards.values() if c["status"] == "active"), "load_issue": projects.load_issue(core),
+        "has_templates": bool(core.state.templates), "vault": obsidian_vault(core),
+        "goals": [{"id": g["id"], "title": g["title"]} for g in strategy.alive(core) if g.get("kind") != "dream"],
+        "log_kinds": projects.LOG_KINDS, "kinds": strategy.KIND_RU,
+    }
+
+
+def goal_view(core: Any, goal_id: str) -> dict[str, Any]:
+    from arvix import strategy
+
+    if gentle(core):
+        return {"gentle": True}
+    gid = strategy.canonical(core, goal_id) or goal_id
+    goal = core.state.goals.get(gid)
+    if not goal:
+        raise ArvixError(f"Цели {goal_id} нет")
+    out = strategy.card(core, goal, full=True)
+    out["projects"] = [_project_card(core, core.state.projects[p["id"]]) for p in out["projects"]]
+    out["gentle"] = False
+    out["parent"] = (core.state.goals.get(goal.get("parent_id") or "") or {}).get("title")
+    out["active_status"] = goal.get("status", "active")
+    return out
+
+
+def goal_op(goal_id: str, op: str, body: dict[str, Any]) -> Any:
+    """focus · save · status · merge · accept · reject · learn_start — кнопки вкладки «Цели»."""
+    def run(bot: Any) -> dict[str, Any]:
+        from arvix import projects, strategy
+
+        core = bot.core
+        core.refresh()
+        gid = strategy.canonical(core, goal_id) or goal_id
+        if gid not in core.state.goals:
+            raise ArvixError(f"Цели {goal_id} нет")
+        out: dict[str, Any] = {}
+        if op == "focus":
+            on = body.get("on")
+            strategy.set_focus(core, gid, None if on is None else bool(on), source="web")
+        elif op == "save":
+            core.set_goal(goal_id=gid, title=str(body.get("title") or ""), why=str(body.get("why") or ""),
+                          deadline=str(body.get("deadline") or "") or None, metric=str(body.get("metric") or "") or None,
+                          kind=body.get("kind") or None, source="web")
+            out["warnings"] = core.goal_warnings(gid)
+        elif op == "status":
+            status = str(body.get("status") or "")
+            if status not in ("active", "done", "dropped"):
+                raise ArvixError("Статус цели: active, done, dropped")
+            core.set_goal(goal_id=gid, status=status, source="web")
+        elif op == "merge":
+            out["merge"] = {k: v for k, v in strategy.merge(core, gid, [str(x) for x in body.get("others") or []], source="web").items()
+                            if k != "keeper"}
+        elif op == "accept":
+            if body.get("idx") in (None, "", "all"):
+                out["done"], out["failed"] = strategy.accept_all(core, str(body.get("plan") or ""), source="web")
+            else:
+                out["done"], out["failed"] = [strategy.accept_item(core, str(body.get("plan") or ""), int(body["idx"]), source="web")], []
+        elif op == "reject":
+            idx = body.get("idx")
+            out["rejected"] = strategy.reject_item(core, str(body.get("plan") or ""), None if idx in (None, "", "all") else int(idx), source="web")
+        elif op == "learn_start":
+            task = projects.learn_start(core, str(body.get("item") or ""), minutes=int(body.get("minutes") or 45))
+            out["task"] = task_view(task)
+        else:
+            raise ArvixError(f"Нет действия {op}")
+        if core.state.goals[gid].get("status", "active") != "active":
+            return {**out, "goal": None}
+        return {**out, "goal": goal_view(core, gid)}
+    return run
+
+
+def goal_plan(goal_id: str) -> Any:
+    """«Собрать систему к цели» — фоновая задача стратега: план придёт в разговор и ляжет в карточку цели."""
+    def run(bot: Any) -> None:
+        with bot.via("web", SINK):
+            bot.run_goal_plan(goal_id)
+    return run
+
+
+def note_attach(folder: str, data: bytes, name: str) -> Any:
+    """Картинка или файл в заметку (вставка, перетаскивание): в папку «Файлы» рядом с заметкой, обратно —
+    вставка ![[имя]] для Obsidian. Без ИИ: это не сообщение Арвиксу, а вложение заметки."""
+    def run(bot: Any) -> dict[str, Any]:
+        from arvix.files import MAX_BYTES, _unique, safe_name
+
+        core = bot.core
+        if not core.cfg.vault:
+            raise ArvixError("Хранилище не настроено")
+        if not data:
+            raise ArvixError("Пустой файл")
+        if len(data) > MAX_BYTES:
+            raise ArvixError("Файл больше 20 МБ")
+        base = folder.strip("/")
+        target = core.vault.resolve(f"{base}/Файлы" if base else "Файлы")
+        target.mkdir(parents=True, exist_ok=True)
+        path = _unique(target / safe_name(name))
+        path.write_bytes(data)
+        return {"path": core.vault.rel(path), "embed": f"![[{path.name}]]"}
+    return run
+
+
 def project_messages(core: Any, project_id: str, limit: int = 80) -> list[dict[str, Any]]:
     """Нить чата проекта из общей переписки — сообщения с payload.project."""
     start = max(0, core.state.last_event_id - 6000)
@@ -326,7 +453,7 @@ def project_roadmap(goal_id: str) -> Any:
 
 
 def project_op(project_id: str, op: str, body: dict[str, Any]) -> Any:
-    """save · milestone · log · block · status · move · learn · learn_start · resource — кнопки вкладки «Проекты»."""
+    """save · milestone · log · block · status · move · learn · learn_start · resource — кнопки окон проекта во вкладке «Цели»."""
     def run(bot: Any) -> dict[str, Any]:
         from arvix import projects
 
