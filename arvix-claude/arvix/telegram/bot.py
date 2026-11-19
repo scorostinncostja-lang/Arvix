@@ -1195,8 +1195,8 @@ class Bot:
         lines = []
         if self.first_today:
             part = "Доброе утро" if 5 <= now.hour < 12 else "Добрый вечер" if now.hour >= 18 else "Привет"
-            lines.append(f"Первое сообщение человека за сегодня: начни с короткого приветствия отдельным сообщением "
-                         f"(«{part}» или «Привет», по-своему, без вопросов «как дела?»), потом — ответ.")
+            lines.append(f"Первое сообщение человека за сегодня: начни ответ с короткого приветствия первой строкой "
+                         f"(«{part}» или «Привет», по-своему, без вопросов «как дела?»), дальше в том же сообщении — ответ.")
         bedtime = self.core.state.profile.get("bedtime_target") or "23:00"
         try:
             bed = self.core.at(now.date(), bedtime)
@@ -1390,7 +1390,7 @@ class Bot:
                                           [("✖️ Не сейчас", f"l:{task.id}:later")]])
 
     def send_rich(self, text: str, buttons: list[list[tuple[str, str]]] | None = None, *, key: str | None = None) -> int | None:
-        """Сообщение кода с разметкой (жирный, строки) — как ответ головы, но одним пузырём."""
+        """Сообщение кода с разметкой (жирный, строки) — как ответ головы."""
         message_id = self.api.send(self.owner, fmt.strip_markup(text), buttons, html=fmt.to_html(text))
         self.core.message_out(fmt.strip_markup(text), key=key, channel=self.channel, buttons=buttons)
         return message_id
