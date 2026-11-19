@@ -1159,22 +1159,99 @@ class Core:
     # Раньше ответ резался до 600 символов — и через неделю он «забывал» собственные объяснения.
     MESSAGE_LIMIT = 16000
 
-    def message_in(self, text: str, *, channel: str = "telegram", project: str | None = None) -> None:
+    def message_in(self, text: str, *, channel: str = "telegram", project: str | None = None,
+                   reply_to: int | None = None, tg_id: int | None = None) -> int:
+        """reply_to — id события-сообщения, на которое человек ответил цитатой (D52);
+        tg_id — номер сообщения в Telegram: по нему Арвикс отвечает цитатой там же."""
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "channel": channel}
         if project:
             payload["project"] = project  # чат проекта (D47): своя нить в общей переписке
+        if reply_to:
+            payload["reply_to"] = int(reply_to)
+        if tg_id:
+            payload["tg_id"] = int(tg_id)
         with self.tx():
-            self.emit("message_in", payload, source=channel)
+            return self.emit("message_in", payload, source=channel).id
 
     def message_out(self, text: str, *, key: str | None = None, channel: str = "telegram",
-                    buttons: list[list[tuple[str, str]]] | None = None, project: str | None = None) -> None:
+                    buttons: list[list[tuple[str, str]]] | None = None, project: str | None = None,
+                    reply_to: int | None = None, tg_id: int | None = None) -> int:
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "key": key, "channel": channel}
         if project:
             payload["project"] = project
         if buttons:  # приложение показывает те же кнопки под сообщением
             payload["buttons"] = [[[t, d] for t, d in row] for row in buttons]
+        if reply_to:
+            payload["reply_to"] = int(reply_to)
+        if tg_id:
+            payload["tg_id"] = int(tg_id)
         with self.tx():
-            self.emit("message_out", payload, source="bot")
+            return self.emit("message_out", payload, source="bot").id
+
+    MESSAGE_KINDS = ("message_in", "message_out")
+
+    # --- как в мессенджере: реакции, прочитано, в сети (D52) ---------------------------
+    # Набор приложения — немного и самые ходовые. В Telegram человек может поставить любую реакцию — она тоже пишется.
+    REACTIONS = ("👍", "👎", "❤️", "💔", "❓", "🔥", "😂", "🙏")
+    # «Непонятно»: в Telegram знака вопроса среди реакций нет — там его роль играют 🤔 и 🤨
+    CONFUSED = frozenset({"❓", "🤔", "🤨", "🤷", "🤷‍♂", "🤷‍♀"})
+    ONLINE_SECONDS = 90  # пульс приложения — раз в 30 с; дольше тишины — «не в сети»
+
+    @staticmethod
+    def reaction_key(emoji: str) -> str:
+        """❤ и ❤️ — одна реакция: Telegram присылает без селектора вариантов."""
+        return (emoji or "").replace("\ufe0f", "").strip()
+
+    def react(self, message_id: int, emoji: str, *, channel: str = "web") -> dict[str, Any]:
+        """Реакция человека на сообщение Арвикса. Пустая строка — снять. Одна реакция на сообщение, как в Telegram."""
+        target = self.message(int(message_id or 0))
+        if target is None or target.kind != "message_out":
+            raise ArvixError("Реакция ставится на сообщение Арвикса")
+        emoji = (emoji or "").strip()[:16]
+        current = (self.state.reactions.get(target.id) or {}).get("emoji", "")
+        if self.reaction_key(emoji) == self.reaction_key(current):
+            return {"message": target.id, "emoji": current, "changed": False}
+        with self.tx():
+            self.emit("message_reacted", {"message": target.id, "emoji": emoji, "channel": channel}, source=channel)
+        return {"message": target.id, "emoji": emoji, "changed": True}
+
+    def mark_read(self, upto: int, *, channel: str = "web") -> bool:
+        """Человек дочитал ленту до сообщения upto (приложение видит это само). Источник «seen»:
+        прочитать — не действие, протокол игнора на это не смотрит."""
+        upto = min(int(upto or 0), self.state.last_event_id)
+        if upto <= self.state.read_upto:
+            return False
+        with self.tx():
+            self.emit("messages_read", {"upto": upto, "channel": channel}, source="seen")
+        return True
+
+    def presence_ping(self) -> None:
+        """Приложение открыто и на экране. Не событие журнала: пульс раз в 30 с засорил бы его, а прошлое
+        «в сети» никому не нужно — нужно, в сети ли он сейчас и давно ли зашёл (runtime, как last_in_at)."""
+        now = self.now().timestamp()
+        seen = self.store.kv_get("presence") or {}
+        since = seen.get("since") if now - float(seen.get("seen") or 0) <= self.ONLINE_SECONDS else now
+        self.store.kv_set("presence", {"seen": now, "since": since})
+
+    def presence(self) -> dict[str, Any]:
+        """{online, since, seen} — в приложении ли человек сейчас и когда был последний раз."""
+        seen = self.store.kv_get("presence") or {}
+        last = float(seen.get("seen") or 0)
+        online = bool(last) and self.now().timestamp() - last <= self.ONLINE_SECONDS
+        return {"online": online, "since": seen.get("since") if online else None, "seen": last or None}
+
+    def message(self, event_id: int) -> Any:
+        """Сообщение переписки по id события; не сообщение — None."""
+        event = self.store.event(event_id) if event_id else None
+        return event if event is not None and event.kind in self.MESSAGE_KINDS else None
+
+    def message_by_tg(self, tg_id: int, window: int = 3000) -> Any:
+        """Сообщение по номеру в Telegram — человек ответил цитатой на сообщение в чате."""
+        start = max(0, self.state.last_event_id - window)
+        for event in reversed(self.store.read(start)):
+            if event.kind in self.MESSAGE_KINDS and event.payload.get("tg_id") == int(tg_id):
+                return event
+        return None
 
     def sent(self, key: str, d: date | None = None) -> bool:
         day = self.state.days.get(d or self.today())

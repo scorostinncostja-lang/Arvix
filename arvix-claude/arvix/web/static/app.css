@@ -137,13 +137,70 @@ main { flex: 1; padding: 4px 16px calc(var(--tabs-h) + env(safe-area-inset-botto
 
 /* чат */
 .chat { display: flex; flex-direction: column; gap: 6px; padding-bottom: 76px; }
-.msg { max-width: 86%; padding: 9px 13px; border-radius: 18px; white-space: pre-wrap; word-break: break-word; background: var(--card);
-  box-shadow: var(--shadow); align-self: flex-start; border-bottom-left-radius: 6px; }
-.msg.me { align-self: flex-end; background: var(--me); color: var(--me-text); border-bottom-left-radius: 18px; border-bottom-right-radius: 6px; }
-.msg time { display: block; font-size: 11px; opacity: .6; margin-top: 3px; text-align: right; }
+.msg { position: relative; max-width: 86%; padding: 8px 12px 6px; border-radius: 18px; white-space: pre-wrap; word-break: break-word; background: var(--card);
+  box-shadow: var(--shadow); align-self: flex-start; transition: transform .18s ease, background .3s; }
+.msg.me { align-self: flex-end; background: var(--me); color: var(--me-text); }
+/* Как в Telegram: подряд идущие сообщения одного автора — плотной группой, «хвостик» только у последнего */
+.msg.cont { margin-top: -3px; }
+.msg.tail { border-bottom-left-radius: 6px; }
+.msg.me.tail { border-bottom-left-radius: 18px; border-bottom-right-radius: 6px; }
+.msg .mfoot { display: flex; align-items: flex-end; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.msg time { display: flex; align-items: center; justify-content: flex-end; gap: 3px; margin-left: auto; font-size: 11px; opacity: .6; }
+.react-chip { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 12px; font-size: 15px; line-height: 22px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+.react-row { display: flex; gap: 2px; padding: 2px 2px 6px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.msg-menu .react-row button { width: 34px; height: 34px; padding: 0; justify-content: center; border-radius: 50%; font-size: 20px; transition: transform .1s; }
+.msg-menu .react-row button:active { transform: scale(1.25); }
+.msg-menu .react-row button.on { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.msg .tick { display: inline-flex; font-style: normal; }
+.msg .tick .ic { width: 14px; height: 14px; }
+.msg .tick.read { opacity: 1; }
+.msg .tick.wait .ic { width: 11px; height: 11px; }
+.msg.flash { animation: flash 1.2s ease; }
+@keyframes flash { 0%, 40% { box-shadow: 0 0 0 3px var(--accent); } 100% { box-shadow: var(--shadow); } }
+/* цитата внутри пузыря: полоска слева, автор, начало текста; тап — к оригиналу */
+.quote { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; min-width: 0; margin: 2px 0 5px;
+  padding: 4px 8px; border-radius: 8px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent);
+  text-align: left; font-size: 13px; line-height: 1.3; white-space: normal; cursor: pointer; }
+.quote b { color: var(--accent); font-size: 12.5px; }
+.quote span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; opacity: .85; }
+.msg.me .quote { border-left-color: rgba(255,255,255,.85); background: rgba(255,255,255,.16); }
+.msg.me .quote b { color: inherit; }
+.swipe-ic { position: absolute; right: -40px; top: 50%; width: 30px; height: 30px; margin-top: -15px; display: grid; place-items: center;
+  border-radius: 50%; background: var(--card-2); color: var(--muted); opacity: 0; transform: scale(.6); transition: opacity .15s, transform .15s; pointer-events: none; }
+.swipe-ic .ic { width: 17px; height: 17px; }
+.msg.swipe-ready .swipe-ic { opacity: 1; transform: scale(1); color: var(--accent); }
+@media (hover: none) { .msg { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
+.msg-menu { position: fixed; z-index: 40; min-width: 170px; padding: 5px; border-radius: 14px; background: var(--card);
+  box-shadow: 0 8px 30px rgba(0,0,0,.22); border: 1px solid var(--line); animation: pop .12s ease; }
+.msg-menu button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border-radius: 9px; font-size: 15px; text-align: left; }
+.msg-menu button:active, .msg-menu button:focus-visible { background: var(--card-2); outline: none; }
+.msg-menu .ic { width: 18px; height: 18px; color: var(--muted); }
+@keyframes pop { from { opacity: 0; transform: scale(.92); } }
+/* полоска «В ответ …» над полем ввода */
+.composer { flex-wrap: wrap; }
+.reply-bar { order: -1; flex: 0 0 100%; display: flex; align-items: center; gap: 10px; min-width: 0; padding: 2px 4px 4px; }
+.reply-bar.hidden { display: none; }
+body:has(.reply-bar:not(.hidden)) .chat { padding-bottom: 128px; }  /* полоска ответа не закрывает последнее сообщение */
+.rb-ic { color: var(--accent); display: grid; place-items: center; }
+.rb-ic .ic { width: 20px; height: 20px; }
+.rb-body { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; padding-left: 9px; border-left: 2px solid var(--accent); text-align: left; }
+.rb-body b { font-size: 13px; color: var(--accent); }
+.rb-body span { max-width: 100%; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rb-x { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: 50%; color: var(--muted); }
+.rb-x .ic { width: 18px; height: 18px; }
+.to-bottom { position: absolute; right: 14px; top: -54px; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--card); color: var(--muted); box-shadow: 0 2px 10px rgba(0,0,0,.18); border: 1px solid var(--line); }
+.to-bottom.hidden { display: none; }
+.to-bottom b { position: absolute; top: -6px; right: -2px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: var(--accent);
+  color: #fff; font-size: 11px; line-height: 20px; text-align: center; }
+.to-bottom b:empty { display: none; }
+.top-sub.typing-sub { color: var(--accent); }
 .msg .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .msg .btns button { padding: 6px 10px; border-radius: 10px; background: var(--card-2); font-size: 13px; font-weight: 600; }
-.day-sep { align-self: center; font-size: 12px; color: var(--muted); padding: 8px 0 2px; }
+.day-sep { position: sticky; top: calc(var(--top-h, 62px) + env(safe-area-inset-top) + 4px); z-index: 2; align-self: center; padding: 8px 0 2px; pointer-events: none; }
+.day-sep span { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12.5px; font-weight: 600; color: var(--muted);
+  background: color-mix(in srgb, var(--card) 85%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: var(--shadow); }
 .typing { align-self: flex-start; padding: 12px 16px; border-radius: 18px; background: var(--card); box-shadow: var(--shadow); }
 .typing i { display: inline-block; width: 7px; height: 7px; margin: 0 2px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
 .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
@@ -335,30 +392,6 @@ pre.conflict { max-height: 220px; overflow: auto; background: var(--card-2); pad
 .sugg .grow { flex: 1; min-width: 0; }
 .sugg .link { white-space: normal; text-align: left; font-weight: 600; }
 
-/* --- Режим разговора: как экран звонка ----------------------------------------------------- */
-.talk { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; align-items: center; gap: 22px; overflow-y: auto;
-  padding: calc(env(safe-area-inset-top) + 40px) 16px calc(env(safe-area-inset-bottom) + 24px);
-  background: radial-gradient(120% 70% at 50% 0%, #2b3a8f 0%, #13182b 55%, #0b0e17 100%); color: #fff; }
-.talk-head { text-align: center; }
-.talk-name { font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
-.talk-status { margin-top: 6px; color: rgba(255, 255, 255, .7); font-size: 15px; min-height: 20px; }
-.talk-orb { position: relative; margin-top: 4vh; width: 148px; height: 148px; border-radius: 50%; flex: none; display: grid; place-items: center; }
-.talk-avatar { width: 132px; height: 132px; border-radius: 50%; position: relative; z-index: 1; box-shadow: 0 12px 40px rgba(0, 0, 0, .45); }
-.talk-ring { position: absolute; inset: 0; border-radius: 50%; background: rgba(124, 140, 255, .35); transition: transform .08s linear; }
-.talk-orb[data-phase="thinking"] .talk-ring { animation: talk-pulse 1.4s ease-in-out infinite; }
-.talk-orb[data-phase="speaking"] .talk-ring { background: rgba(47, 208, 169, .35); animation: talk-speak .7s ease-in-out infinite alternate; }
-.talk-orb[data-phase="idle"] { opacity: .6; }
-@keyframes talk-pulse { 50% { transform: scale(1.12); opacity: .5; } }
-@keyframes talk-speak { from { transform: scale(1.05); } to { transform: scale(1.28); } }
-.talk-text { width: 100%; max-width: 560px; display: grid; gap: 8px; }
-.talk-text .muted { color: rgba(255, 255, 255, .6); }
-.talk-answer { background: rgba(255, 255, 255, .08); border-radius: 16px; padding: 12px 14px; line-height: 1.5; white-space: pre-wrap; }
-.talk-bar { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 14px; }
-.talk-hint { text-align: center; max-width: 320px; color: rgba(255, 255, 255, .55) !important; }
-.talk-end { width: 68px; height: 68px; border-radius: 50%; background: #e5484d; color: #fff; display: grid; place-items: center;
-  box-shadow: 0 8px 24px rgba(229, 72, 77, .45); }
-.talk-end .ic { width: 30px; height: 30px; }
-
 /* --- Серия: год квадратами, как на GitHub ------------------------------------------------- */
 :root { --heat0: #ebedf0; --heat1: #9be9a8; --heat2: #40c463; --heat3: #30a14e; --heat4: #216e39; --heat-rest: #c8d3f5; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --heat0: #2a303b; --heat1: #0e4429; --heat2: #006d32; --heat3: #26a641; --heat4: #39d353; --heat-rest: #2c3a63; } }
@@ -397,9 +430,6 @@ pre.conflict { max-height: 220px; overflow: auto; background: var(--card-2); pad
 .note-back { display: inline-flex; align-items: center; gap: 2px; }
 .note-back .ic { width: 22px; height: 22px; margin-left: -6px; }
 .top-right { display: flex; align-items: center; gap: 8px; }
-.top-call { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--card); color: var(--accent);
-  box-shadow: var(--shadow); }
-.top-call .ic { width: 19px; height: 19px; }
 .hidden { display: none !important; }
 
 /* --- Ноутбук: боковая панель, колонки, окна по центру (от 900 px; порог — WIDE в app.js) ------ */
@@ -657,7 +687,7 @@ details.pl-group > summary { cursor: pointer; list-style: none; }
   .tabs button:hover { background: var(--card-2); }
   .tabs button:hover kbd { opacity: 1; }
   .tabs .side-toggle:hover { color: var(--text); }
-  .icon-btn:hover, .pill:hover, .seg button:not(.on):hover, .btn:hover, .msg .btns button:hover { filter: brightness(.95); }
+  .icon-btn:hover, .pill:hover, .seg button:not(.on):hover, .btn:hover, .msg .btns button:hover, .msg-menu button:hover { filter: brightness(.95); }
   :root:not([data-theme="light"]) .icon-btn:hover { filter: brightness(1.25); }
   .list-item:hover { background: var(--card-2); }
   .pl-item:hover, .pn-file:hover { background: var(--card-2); }

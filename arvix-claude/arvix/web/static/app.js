@@ -75,10 +75,13 @@ function toast(text) {
 }
 // --- иконки: контурный набор в стиле Lucide (ISC), встроены — без зависимостей ------------------
 const ICON_PATHS = {
+  reply: '<path d="m9 17-5-5 5-5"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  checks: '<path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/>',
   mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/>',
   clip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
-  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
-  phoneOff: '<path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><path d="M22 2 2 22"/>',
   send: '<path d="M14.54 21.69a.5.5 0 0 0 .94-.03l6.5-19a.5.5 0 0 0-.64-.64l-19 6.5a.5.5 0 0 0-.03.94l7.93 3.18a2 2 0 0 1 1.11 1.11z"/><path d="m21.85 2.15-10.94 10.94"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>',
   today: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/><path d="m9 16 2 2 4-4"/>',
@@ -117,12 +120,12 @@ WIDE.addEventListener("change", () => { if (token() || TG) render(); });
 
 // --- каркас ------------------------------------------------------------------------------------
 document.querySelectorAll("[data-ic]").forEach((el) => { el.innerHTML = icon(el.dataset.ic); });
-$("#top-call").innerHTML = icon("phone");
-$("#top-call").onclick = () => { haptic(); openTalk(); };
 
 function setTab(tab) {
+  if (tab === "chat" && state.tab !== "chat") { chatUI.stick = true; chatUI.unread = 0; }
+  if (tab !== "chat") closeMsgMenu();
   state.tab = tab;
-  $("#top-call").classList.toggle("hidden", tab !== "chat");
+  renderTop();
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   if (tab === "chat") { $("#chat-dot").classList.add("hidden"); }
   state.note = tab === "notes" ? state.note : null;
@@ -174,11 +177,18 @@ async function load(tab = state.tab) {
 
 function renderTop() {
   const d = state.data;
+  $("#top-sub").classList.remove("typing-sub");
+  if (state.tab === "chat") { chatHeader(); renderMode(d); return; }  // в чате шапка — как у собеседника в Telegram
   if (!d) return;
   const date = new Date(d.now);
   $("#top-day").textContent = d.weekday + ", " + date.toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
   const s = d.stats;
   $("#top-sub").textContent = d.gentle ? "Мягкий день" : s ? `${s.done} из ${s.total}` : "";
+  renderMode(d);
+}
+
+function renderMode(d) {
+  if (!d) return;
   const mode = $("#top-mode");
   mode.textContent = d.mode_label;
   mode.className = "chip mode " + (MODE_CLASS[d.mode] || "");
@@ -581,42 +591,247 @@ function openReportSheet(t, after = null) {
 }
 
 // --- Чат ---------------------------------------------------------------------------------------
-function renderChat() {
+/* Как в Telegram (D52): ответ на сообщение — свайп влево по пузырю, двойной клик или меню (долгое нажатие,
+ * правый клик); цитата в пузыре ведёт к оригиналу; лента не прыгает вниз, пока читаешь старое — для этого ↓.
+ * Арвикс тоже отвечает цитатой, когда без неё непонятно, на что ответ, — это решает сервер. */
+const chatUI = { reply: null, stick: true, unread: 0, lastId: 0 };
+const WHO = { me: "Ты", arvix: "Арвикс" };
+const nearBottom = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 160;
+const hhmm = (d) => d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+
+function dayLabel(d) {
+  const today = new Date(), y = new Date(); y.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return "Сегодня";
+  if (d.toDateString() === y.toDateString()) return "Вчера";
+  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "long", ...(d.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}) });
+}
+
+function quoteHtml(q) {
+  if (!q) return "";
+  return `<button type="button" class="quote ${q.who === "me" ? "q-me" : "q-arvix"}" data-goto="${q.id}"><b>${WHO[q.who] || "Арвикс"}</b><span>${esc(q.text || "…")}</span></button>`;
+}
+
+function msgHtml(m, prev, next, answered) {
+  const at = new Date(m.at);
+  const same = (o) => o && o.who === m.who && Math.abs(new Date(o.at) - at) < 5 * 60e3 && new Date(o.at).toDateString() === at.toDateString();
+  const btns = (m.buttons || []).flat().filter((b) => b && b[1] && !String(b[1]).startsWith("app:"));
+  // ✓ — дошло, ✓✓ — Арвикс ответил после; часы — ещё в пути
+  const ticks = m.who !== "me" ? "" : !m.id ? `<i class="tick wait">${icon("clock")}</i>` : `<i class="tick${answered ? " read" : ""}">${icon(answered ? "checks" : "check")}</i>`;
+  const cls = ["msg", m.who === "me" ? "me" : "", same(prev) ? "cont" : "", same(next) ? "" : "tail"].filter(Boolean).join(" ");
+  return `<div class="${cls}" data-id="${m.id || ""}"><span class="swipe-ic">${icon("reply")}</span>${quoteHtml(m.reply_to)}<div class="mtext">${linkify(esc(m.text))}</div>${btns.length ? `<div class="btns">${btns.map((b) =>
+    String(b[1]).startsWith("url:") ? `<a class="pill" href="${esc(String(b[1]).slice(4))}" target="_blank" rel="noopener">${esc(b[0])}</a>` :
+    `<button data-btn="${esc(b[1])}">${esc(b[0])}</button>`).join("")}</div>` : ""}<div class="mfoot">${m.reaction ? `<button type="button" class="react-chip" data-unreact="${m.id}" aria-label="Убрать реакцию ${esc(m.reaction)}">${esc(m.reaction)}</button>` : ""}<time>${m.channel && m.channel !== "telegram" && m.channel !== "web" ? esc(m.channel) + " · " : ""}${hhmm(at)}${ticks}</time></div></div>`;
+}
+
+function renderChat(opts = {}) {
+  const stick = opts.bottom || chatUI.stick || !$("#chat");
+  const keepY = window.scrollY;
+  const msgs = state.messages;
   let html = `<div class="chat" id="chat">`;
-  let lastDay = "";
-  for (const m of state.messages) {
-    const at = new Date(m.at);
-    const day = at.toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
-    if (day !== lastDay) { html += `<div class="day-sep">${day}</div>`; lastDay = day; }
-    const btns = (m.buttons || []).flat().filter((b) => b && b[1] && !String(b[1]).startsWith("app:"));
-    html += `<div class="msg ${m.who === "me" ? "me" : ""}">${linkify(esc(m.text))}${btns.length ? `<div class="btns">${btns.map((b) =>
-      String(b[1]).startsWith("url:") ? `<a class="pill" href="${esc(String(b[1]).slice(4))}" target="_blank" rel="noopener">${esc(b[0])}</a>` :
-      `<button data-btn="${esc(b[1])}">${esc(b[0])}</button>`).join("")}</div>` : ""}<time>${at.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}${m.channel === "telegram" ? "" : " · " + esc(m.channel)}</time></div>`;
-  }
+  let lastDay = "", lastArvix = -1;
+  msgs.forEach((m, i) => { if (m.who === "arvix") lastArvix = i; });
+  msgs.forEach((m, i) => {
+    const day = dayLabel(new Date(m.at));
+    if (day !== lastDay) { html += `<div class="day-sep"><span>${day}</span></div>`; lastDay = day; }
+    const prev = msgs[i - 1], next = msgs[i + 1];
+    html += msgHtml(m, prev && dayLabel(new Date(prev.at)) === day ? prev : null, next && dayLabel(new Date(next.at)) === day ? next : null, i < lastArvix);
+  });
   if (state.thinking) html += `<div class="typing" title="${esc(state.thinking)}"><i></i><i></i><i></i></div>`;
-  if (!state.messages.length && !state.thinking) html += `<div class="empty">Напиши или скажи что угодно — как в Telegram.</div>`;
+  if (!msgs.length && !state.thinking) html += `<div class="empty">Напиши или скажи что угодно — как в Telegram.</div>`;
   html += `</div>`;
   view.innerHTML = html;
   if (!$(".composer")) {
     const c = document.createElement("div");
     c.className = "composer";
-    c.innerHTML = `<button class="round ghost" id="attach" aria-label="Прислать файл">${icon("clip")}</button>
+    c.innerHTML = `<div class="reply-bar hidden" id="reply-bar"></div>
+      <button class="round ghost" id="attach" aria-label="Прислать файл">${icon("clip")}</button>
       <input type="file" id="file" multiple hidden>
       <textarea id="msg" rows="1" placeholder="Сообщение Арвиксу"></textarea>
-      <button class="round send" id="send" aria-label="Голосовое сообщение" data-mode="mic">${icon("mic")}</button>`;
+      <button class="round send" id="send" aria-label="Голосовое сообщение" data-mode="mic">${icon("mic")}</button>
+      <button class="to-bottom hidden" id="to-bottom" aria-label="Вниз, к новым">${icon("chevronDown")}<b id="to-bottom-n"></b></button>`;
     document.body.appendChild(c);
     const ta = $("#msg");
     ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(140, ta.scrollHeight) + "px"; composerMode(); });
-    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !("ontouchstart" in window)) { e.preventDefault(); sendMessage(); } });
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !("ontouchstart" in window)) { e.preventDefault(); sendMessage(); }
+      else if (e.key === "Escape" && chatUI.reply) { e.preventDefault(); e.stopPropagation(); setReply(null); }
+      else if (e.key === "ArrowUp" && (e.ctrlKey || e.metaKey) && !ta.value) {  // Ctrl+↑ — ответить на последнее Арвикса
+        const last = [...state.messages].reverse().find((m) => m.who === "arvix" && m.id);
+        if (last) { e.preventDefault(); setReply(last); }
+      }
+    });
     $("#send").onclick = () => ($("#send").dataset.mode === "send" ? sendMessage() : toggleRecord());
     $("#attach").onclick = () => $("#file").click();
     $("#file").onchange = (e) => { sendFiles([...e.target.files]); e.target.value = ""; };
+    $("#to-bottom").onclick = () => { haptic(); window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" }); };
   }
+  drawReplyBar();
   view.querySelectorAll("[data-btn]").forEach((b) => b.addEventListener("click", async () => {
     haptic(); b.disabled = true;
-    try { await api("button", { json: { data: b.dataset.btn } }); state.thinking = "думаю"; renderChat(); } catch (err) { toast(err.message); }
+    try { await api("button", { json: { data: b.dataset.btn } }); state.thinking = "думаю"; renderChat({ bottom: true }); } catch (err) { toast(err.message); }
   }));
-  window.scrollTo(0, document.body.scrollHeight);
+  bindChat($("#chat"));
+  // Новое от Арвикса, пока читаешь старое, — счётчик на ↓, а не прыжок вниз
+  const newest = msgs.reduce((a, m) => Math.max(a, m.id || 0), 0);
+  if (!stick && newest > chatUI.lastId) chatUI.unread += msgs.filter((m) => m.id > chatUI.lastId && m.who === "arvix").length;
+  chatUI.lastId = Math.max(chatUI.lastId, newest);
+  if (stick) { window.scrollTo(0, document.documentElement.scrollHeight); chatUI.stick = true; chatUI.unread = 0; }
+  else window.scrollTo(0, keepY);
+  chatHeader(); toBottomButton(); pingSoon();
+}
+
+function chatHeader() {
+  if (state.tab !== "chat") return;
+  $("#top-day").textContent = "Арвикс";
+  const busy = state.thinking;
+  $("#top-sub").textContent = !busy ? "в сети" : /слуша/.test(busy) ? "слушает…" : /файл/.test(busy) ? "смотрит файл…" : "печатает…";
+  $("#top-sub").classList.toggle("typing-sub", !!busy);
+}
+
+function toBottomButton() {
+  const b = $("#to-bottom"); if (!b) return;
+  b.classList.toggle("hidden", chatUI.stick);
+  $("#to-bottom-n").textContent = chatUI.unread ? String(chatUI.unread) : "";
+}
+
+window.addEventListener("scroll", () => {
+  if (state.tab !== "chat") return;
+  chatUI.stick = nearBottom();
+  if (chatUI.stick) { chatUI.unread = 0; pingSoon(); }
+  toBottomButton(); closeMsgMenu();
+}, { passive: true });
+
+const msgById = (id) => state.messages.find((m) => String(m.id) === String(id));
+
+function setReply(m) {
+  chatUI.reply = m && m.id ? { id: m.id, who: m.who, text: String(m.text || "").replace(/\s+/g, " ").slice(0, 160) } : null;
+  drawReplyBar();
+  if (chatUI.reply) { haptic(); const ta = $("#msg"); if (ta) ta.focus({ preventScroll: true }); }
+}
+
+function drawReplyBar() {
+  const bar = $("#reply-bar"); if (!bar) return;
+  const r = chatUI.reply;
+  bar.classList.toggle("hidden", !r);
+  if (!r) { bar.innerHTML = ""; return; }
+  bar.innerHTML = `<span class="rb-ic">${icon("reply")}</span>
+    <button type="button" class="rb-body" data-goto="${r.id}"><b>В ответ ${r.who === "me" ? "себе" : "Арвиксу"}</b><span>${esc(r.text || "…")}</span></button>
+    <button type="button" class="rb-x" aria-label="Не отвечать на сообщение">${icon("x")}</button>`;
+  bar.querySelector(".rb-x").onclick = () => setReply(null);
+  bar.querySelector(".rb-body").onclick = () => gotoMsg(r.id);
+}
+
+function gotoMsg(id) {
+  const key = CSS.escape(String(id));
+  const el = view.querySelector(`.msg[data-id="${key}"], .msg[data-pid="${key}"]`);
+  if (!el) { toast("Это сообщение старше загруженной ленты"); return; }
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+}
+
+const REACTIONS = ["👍", "👎", "❤️", "💔", "❓", "🔥", "😂", "🙏"];  // = Core.REACTIONS
+
+async function setReaction(m, emoji) {
+  const before = m.reaction || "";
+  m.reaction = emoji; haptic(); renderChat();
+  try {
+    await api("react", { json: { message: m.id, emoji } });
+    if (emoji === "❓") { state.thinking = "думаю"; renderChat({ bottom: true }); }
+  } catch (err) { m.reaction = before; renderChat(); toast(err.message); }
+}
+
+/* Что Арвикс видит, как в мессенджере (D52): «в сети» — пульс раз в 30 с, пока приложение на экране;
+ * «прочитано» — лента чата открыта и долистана до конца. Свёрнуто или другая вкладка браузера — ничего не шлём. */
+const seenState = { upto: 0, timer: 0 };
+function ping(force = false) {
+  if (document.visibilityState !== "visible") return;
+  const atEnd = state.tab === "chat" && chatUI.stick;
+  const upto = atEnd ? state.messages.reduce((a, x) => (x.who === "arvix" ? Math.max(a, x.id || 0) : a), 0) : 0;
+  const fresh = upto > seenState.upto;
+  if (!force && !fresh) return;
+  if (fresh) seenState.upto = upto;
+  api("seen", { json: fresh ? { upto } : {} }).catch(() => {});
+}
+const pingSoon = () => { clearTimeout(seenState.timer); seenState.timer = setTimeout(() => ping(), 700); };
+setInterval(() => ping(true), 30000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") ping(true); });
+
+let msgMenu = null;
+function closeMsgMenu() { if (msgMenu) { msgMenu.remove(); msgMenu = null; } }
+function openMsgMenu(el, x, y) {
+  const m = msgById(el.dataset.id); if (!m) return;
+  closeMsgMenu(); haptic("medium");
+  msgMenu = document.createElement("div");
+  msgMenu.className = "msg-menu";
+  // Реакции — только на сообщения Арвикса: он их видит и учитывает (D52); ❓ — объяснит проще
+  const row = m.who === "arvix" ? `<div class="react-row">${REACTIONS.map((e) => `<button data-react="${e}" class="${m.reaction === e ? "on" : ""}" aria-label="Реакция ${e}">${e}</button>`).join("")}</div>` : "";
+  msgMenu.innerHTML = `${row}<button data-act="reply">${icon("reply")} Ответить</button><button data-act="copy">${icon("copy")} Копировать</button>`;
+  document.body.appendChild(msgMenu);
+  const w = msgMenu.offsetWidth, h = msgMenu.offsetHeight;
+  msgMenu.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + "px";
+  msgMenu.style.top = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + "px";
+  msgMenu.onclick = async (e) => {
+    const r = e.target.closest("[data-react]");
+    if (r) { closeMsgMenu(); setReaction(m, m.reaction === r.dataset.react ? "" : r.dataset.react); return; }
+    const act = e.target.closest("[data-act]"); if (!act) return;
+    closeMsgMenu();
+    if (act.dataset.act === "reply") setReply(m);
+    else { try { await navigator.clipboard.writeText(m.text); toast("Скопировано"); } catch (_) { toast("Не скопировалось"); } }
+  };
+}
+document.addEventListener("pointerdown", (e) => { if (msgMenu && !msgMenu.contains(e.target)) closeMsgMenu(); }, true);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && msgMenu) { e.stopPropagation(); closeMsgMenu(); } }, true);
+
+/* Жесты на пузырях: свайп влево — ответить (как в Telegram на телефоне), долгое нажатие — меню,
+ * правый клик — меню, двойной клик — ответить (как в Telegram на компьютере), цитата — к оригиналу. */
+function bindChat(root, onReply = setReply, find = msgById) {
+  if (!root) return;
+  root.querySelectorAll("[data-goto]").forEach((q) => q.onclick = (e) => { e.stopPropagation(); gotoMsg(q.dataset.goto); });
+  root.querySelectorAll("[data-unreact]").forEach((b) => b.onclick = (e) => {
+    e.stopPropagation(); const m = find(b.dataset.unreact); if (m) setReaction(m, "");
+  });
+  root.querySelectorAll(".msg[data-id]").forEach((el) => {
+    if (!el.dataset.id) return;
+    let x0 = 0, y0 = 0, dx = 0, swiping = false, press = 0, opened = false;
+    el.addEventListener("touchstart", (e) => {
+      const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; dx = 0; swiping = false; opened = false;
+      clearTimeout(press);
+      press = setTimeout(() => { press = 0; if (!swiping) { opened = true; el.dataset.pressed = "1"; openMsgMenu(el, x0, y0 + 12); } }, 450);
+    }, { passive: true });
+    el.addEventListener("touchmove", (e) => {
+      const t = e.touches[0], mx = t.clientX - x0, my = t.clientY - y0;
+      if (Math.abs(mx) > 8 || Math.abs(my) > 8) { clearTimeout(press); press = 0; }
+      if (!swiping && mx < -12 && Math.abs(mx) > Math.abs(my) * 1.5) swiping = true;
+      if (!swiping) return;
+      dx = Math.max(-80, Math.min(0, mx));
+      el.style.transform = `translateX(${dx}px)`;
+      el.classList.toggle("swipe-ready", dx <= -56);
+    }, { passive: true });
+    const end = (e) => {
+      clearTimeout(press); press = 0;
+      if (opened && e.cancelable) e.preventDefault();  // отпускание пальца не должно нажать пункт меню под ним
+      opened = false;
+      if (swiping) {
+        el.style.transform = ""; el.classList.remove("swipe-ready");
+        if (dx <= -56) { const m = find(el.dataset.id); if (m) onReply(m); }
+      }
+      swiping = false; dx = 0;
+    };
+    el.addEventListener("touchend", end);
+    el.addEventListener("touchcancel", end);
+    el.addEventListener("contextmenu", (e) => {
+      if (e.target.closest("a")) return;  // у ссылки — меню браузера
+      e.preventDefault();
+      if (el.dataset.pressed) { delete el.dataset.pressed; return; }  // телефон: меню уже открыто долгим нажатием
+      openMsgMenu(el, e.clientX, e.clientY);
+    });
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest("a, button") || matchMedia("(hover: none)").matches) return;  // на телефоне — свайп
+      const m = find(el.dataset.id); if (!m) return;
+      window.getSelection && window.getSelection().removeAllRanges();
+      onReply(m);
+    });
+  });
 }
 
 function linkify(html) {
@@ -641,10 +856,17 @@ async function sendMessage() {
   const ta = $("#msg");
   const text = ta.value.trim();
   if (!text) return;
-  ta.value = ""; ta.style.height = "auto"; composerMode(); haptic();
-  state.messages.push({ id: 0, at: new Date().toISOString(), who: "me", text, channel: "web", buttons: [] });
-  state.thinking = "думаю"; renderChat();
-  try { await api("message", { json: { text } }); } catch (err) { toast(err.message); }
+  const reply = chatUI.reply;
+  ta.value = ""; ta.style.height = "auto"; composerMode(); haptic(); setReply(null);
+  state.messages.push({ id: 0, at: new Date().toISOString(), who: "me", text, channel: "web", buttons: [], reply_to: reply });
+  state.thinking = "думаю"; renderChat({ bottom: true });
+  try { await api("message", { json: { text, ...(reply ? { reply_to: reply.id } : {}) } }); } catch (err) { toast(err.message); }
+}
+
+/* Ответ на сообщение уходит и с голосовым, и с файлом: заголовок X-Reply-To (D52). */
+function takeReply() {
+  const r = chatUI.reply; setReply(null);
+  return r;
 }
 
 /* Файлы Арвиксу: фото, PDF, документы, архив репозитория, аудио, видео — до 20 МБ.
@@ -652,197 +874,20 @@ async function sendMessage() {
 const MAX_FILE = 20 * 1024 * 1024;
 async function sendFiles(files) {
   const ta = $("#msg");
-  let caption = ta.value.trim();
+  let caption = ta.value.trim(), reply = takeReply();
   for (const file of files) {
     if (file.size > MAX_FILE) { toast(`«${file.name}» больше 20 МБ — сожми или раздели`); continue; }
-    state.messages.push({ id: 0, at: new Date().toISOString(), who: "me", text: "📎 " + file.name + (caption ? " — " + caption : ""), channel: "web", buttons: [] });
-    state.thinking = "смотрю файл"; renderChat();
+    state.messages.push({ id: 0, at: new Date().toISOString(), who: "me", text: "📎 " + file.name + (caption ? " — " + caption : ""), channel: "web", buttons: [], reply_to: reply });
+    state.thinking = "смотрю файл"; renderChat({ bottom: true });
     try {
       const res = await fetch("/api/upload", { method: "POST", body: file, headers: { ...authHeaders(), "Content-Type": file.type || "application/octet-stream",
-        "X-File-Name": encodeURIComponent(file.name), "X-Caption": encodeURIComponent(caption) } });
+        "X-File-Name": encodeURIComponent(file.name), "X-Caption": encodeURIComponent(caption), ...(reply ? { "X-Reply-To": String(reply.id) } : {}) } });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Ошибка " + res.status);
       haptic();
     } catch (err) { toast(err.message); }
-    caption = "";
+    caption = ""; reply = null;
   }
   ta.value = ""; ta.style.height = "auto"; composerMode();
-}
-
-/* --- Звонок Арвиксу (D34, D36): говоришь → Арвикс отвечает вслух → снова слушает. Без нажатий.
- * Конец фразы — по тишине (Web Audio). Голос ответа — сервера (Gemini, мужской Charon): он живой;
- * если сервер не смог (лимит, сеть, голос выключен) — голос телефона (speechSynthesis); нет и его — текст.
- * Звук «разблокируется» в момент нажатия на 📞: браузеры (и WebView Telegram) запрещают звук без жеста. */
-const talk = { on: false, phase: "", stream: null, rec: null, ctx: null, raf: 0, source: null, el: null, lastId: 0, voice: null,
-  serverVoice: false, note: "" };
-const SILENT_WAV = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
-
-function talkVoices() {
-  if (!("speechSynthesis" in window)) return null;
-  const list = speechSynthesis.getVoices().filter((v) => /^ru/i.test(v.lang));
-  return list.find((v) => /google|милена|milena|irina|ирина/i.test(v.name)) || list[0] || null;
-}
-if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = () => { talk.voice = talkVoices(); };
-
-async function openTalk() {
-  if (talk.on) return;
-  talk.on = true; talk.voice = talkVoices(); talk.nudged = false; talk.note = "";
-  // Синхронно, пока идёт жест нажатия: контекст звука и элемент <audio> получают право играть.
-  try { talk.ctx = new (window.AudioContext || window.webkitAudioContext)(); talk.ctx.resume(); } catch (_) { talk.ctx = null; }
-  talk.el = new Audio(); talk.el.src = SILENT_WAV; talk.el.play().catch(() => {});
-  const el = document.createElement("div");
-  el.id = "talk"; el.className = "talk";
-  el.innerHTML = `<div class="talk-head"><div class="talk-name">Арвикс</div><div class="talk-status" id="talk-status">Соединяю…</div></div>
-    <button class="talk-orb" id="talk-orb" aria-label="Перебить или начать говорить"><span class="talk-ring" id="talk-level"></span>
-      <img src="icon-192.png" alt="" class="talk-avatar"></button>
-    <div class="talk-text" id="talk-text"></div>
-    <div class="talk-bar">
-      <div class="muted small talk-hint" id="talk-hint">Пауза в полторы секунды — «договорил». Тап по аватару — перебить.</div>
-      <button class="talk-end" id="talk-end" aria-label="Завершить разговор">${icon("phoneOff")}</button>
-    </div>`;
-  document.body.appendChild(el);
-  $("#talk-end").onclick = closeTalk;
-  $("#talk-orb").onclick = () => { if (talk.phase === "speaking" || talk.phase === "idle") { stopSpeaking(); talkListen(); } };
-  if (TG) { TG.BackButton.show(); TG.BackButton.onClick(closeTalk); }
-  try {
-    const [m, s] = await Promise.all([api("messages"), api("state")]);
-    talk.lastId = Math.max(0, ...m.messages.map((x) => x.id || 0));  // старые ответы не озвучиваем
-    state.data = s; talk.serverVoice = !!s.server_tts;
-  } catch (_) { talk.lastId = Math.max(0, ...state.messages.map((x) => x.id || 0)); talk.serverVoice = !!(state.data && state.data.server_tts); }
-  if (!talk.serverVoice) $("#talk-hint").textContent = "Голос сервера выключен — говорю голосом телефона. Включить живой голос: arvix setup --tts gemini.";
-  talkListen();
-}
-
-function closeTalk() {
-  talk.on = false; talk.phase = "";
-  stopSpeaking();
-  if (talk.rec && talk.rec.state === "recording") { talk.rec.onstop = null; talk.rec.stop(); }
-  if (talk.stream) talk.stream.getTracks().forEach((t) => t.stop());
-  if (talk.ctx) talk.ctx.close().catch(() => {});
-  cancelAnimationFrame(talk.raf);
-  talk.stream = talk.ctx = talk.rec = talk.analyser = talk.el = null;
-  $("#talk") && $("#talk").remove();
-  if (TG) { TG.BackButton.offClick(closeTalk); TG.BackButton.hide(); }
-  if (state.tab === "chat") load("chat");
-}
-
-function talkStatus(text, phase) {
-  talk.phase = phase || talk.phase;
-  const s = $("#talk-status"); if (s) s.textContent = text;
-  const orb = $("#talk-orb"); if (orb) orb.dataset.phase = talk.phase;
-}
-
-async function talkListen() {
-  if (!talk.on) return;
-  try {
-    if (!talk.stream) talk.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    if (!talk.ctx) talk.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if (talk.ctx.state === "suspended") await talk.ctx.resume().catch(() => {});
-    if (!talk.analyser) {
-      talk.analyser = talk.ctx.createAnalyser(); talk.analyser.fftSize = 1024;
-      talk.ctx.createMediaStreamSource(talk.stream).connect(talk.analyser);
-    }
-  } catch (err) { talkStatus("Нет доступа к микрофону: " + err.message, "idle"); return; }
-  const type = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus", "audio/mp4"].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
-  const rec = talk.rec = new MediaRecorder(talk.stream, type ? { mimeType: type } : undefined);
-  const chunks = [];
-  rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-  rec.onstop = () => { const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" }); if (talk.on && spoke && blob.size > 1500) talkSend(blob); else if (talk.on && spoke) talkListen(); };
-  rec.start(); haptic("light");
-  talkStatus(talk.note ? `Слушаю… (${talk.note})` : "Слушаю…", "listening");
-  const buf = new Uint8Array(talk.analyser.fftSize);
-  let spoke = false, voiced = 0, quietSince = 0;
-  const started = performance.now();
-  const loop = () => {
-    if (!talk.on || rec.state !== "recording") return;
-    talk.analyser.getByteTimeDomainData(buf);
-    let sum = 0; for (const v of buf) sum += (v - 128) ** 2;
-    const rms = Math.sqrt(sum / buf.length) / 128, now = performance.now();
-    const lvl = $("#talk-level"); if (lvl) lvl.style.transform = `scale(${1 + Math.min(rms * 6, 0.6)})`;
-    if (rms > 0.035) { voiced += 1; quietSince = 0; if (voiced > 4) spoke = true; }
-    else if (spoke && !quietSince) quietSince = now;
-    if (spoke && quietSince && now - quietSince > 1500) { rec.stop(); return; }           // договорил
-    if (now - started > 60000) { if (spoke) rec.stop(); else { rec.onstop = null; rec.stop(); talkStatus("Я здесь. Тапни аватар, когда захочешь продолжить.", "idle"); } return; }
-    if (!spoke && now - started > 12000 && !talk.nudged) { talk.nudged = true; talkStatus("Я слушаю — скажи, что на душе или как прошёл день.", "listening"); }
-    talk.raf = requestAnimationFrame(loop);
-  };
-  loop();
-}
-
-async function talkSend(blob) {
-  talkStatus("Думаю…", "thinking");
-  $("#talk-text").textContent = "";
-  try { await api("voice", { body: blob, headers: { "Content-Type": blob.type.split(";")[0] } }); }
-  catch (err) { talkStatus(err.message, "idle"); return; }
-  const deadline = Date.now() + 200000;
-  while (talk.on && Date.now() < deadline) {      // ответ придёт в журнал — ждём новое сообщение Арвикса
-    await new Promise((r) => setTimeout(r, 1200));
-    try {
-      const r = await api("messages");
-      const fresh = r.messages.filter((m) => m.id > talk.lastId);
-      if (fresh.length) talk.lastId = Math.max(...fresh.map((m) => m.id));
-      const mine = fresh.filter((m) => m.who === "me").pop();
-      if (mine && $("#talk-text")) $("#talk-text").innerHTML = `<div class="muted small">ты: ${esc(mine.text.replace(/^🎙\s*/, ""))}</div>`;
-      const answer = fresh.filter((m) => m.who === "arvix").map((m) => m.text).join("\n");
-      if (answer) { state.messages = r.messages; await talkSpeak(answer); return; }
-    } catch (_) { /* сеть моргнула — ждём дальше */ }
-  }
-  if (talk.on) talkStatus("Ответа нет — голова, похоже, недоступна. Тапни аватар, чтобы попробовать ещё.", "idle");
-}
-
-function stopSpeaking() {
-  try { if ("speechSynthesis" in window) speechSynthesis.cancel(); } catch (_) { /* нет */ }
-  if (talk.source) { try { talk.source.onended = null; talk.source.stop(); } catch (_) { /* уже */ } talk.source = null; }
-  if (talk.el) { talk.el.onended = null; talk.el.pause(); }
-}
-
-/* Голос сервера: OGG от /api/tts → Web Audio (контекст разблокирован жестом), иначе <audio>. */
-async function playServerVoice(text, done) {
-  const res = await fetch("/api/tts", { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || "голос сервера недоступен");
-  }
-  const bytes = await res.arrayBuffer();
-  if (!talk.on || talk.phase !== "speaking") return true;
-  if (talk.ctx) {
-    try {
-      const buffer = await talk.ctx.decodeAudioData(bytes.slice(0));
-      const src = talk.source = talk.ctx.createBufferSource();
-      src.buffer = buffer; src.connect(talk.ctx.destination);
-      src.onended = () => { if (talk.source === src) { talk.source = null; done(); } };
-      src.start();
-      return true;
-    } catch (_) { /* формат не декодируется — попробуем <audio> */ }
-  }
-  const el = talk.el || (talk.el = new Audio());
-  el.src = URL.createObjectURL(new Blob([bytes], { type: "audio/ogg" }));
-  el.onended = done;
-  await el.play();
-  return true;
-}
-
-async function talkSpeak(text) {
-  if (!talk.on) return;
-  const box = $("#talk-text"); if (box) box.innerHTML += `<div class="talk-answer">${esc(text)}</div>`;
-  talkStatus("Говорю… (тап — перебить)", "speaking");
-  const clean = text.replace(/https?:\/\/\S+/g, "").replace(/[*_`#>|~=\[\]]/g, "").replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "");
-  const done = () => { if (talk.on && talk.phase === "speaking") talkListen(); };
-  if (talk.serverVoice) {
-    try { talk.note = ""; await playServerVoice(clean, done); return; }
-    catch (err) { talk.note = "голос телефона: " + err.message; talkStatus(`Говорю голосом телефона — ${err.message}`, "speaking"); }
-  }
-  const voice = talk.voice || talkVoices();
-  if (voice) {
-    const parts = clean.match(/[^.!?…\n]+[.!?…]*/g) || [clean];
-    parts.forEach((p, i) => {
-      const u = new SpeechSynthesisUtterance(p.trim()); u.voice = voice; u.lang = voice.lang; u.rate = 1.12;
-      if (i === parts.length - 1) u.onend = done;
-      speechSynthesis.speak(u);
-    });
-    return;
-  }
-  talkStatus("Голоса для озвучки нет — читай ответ. Слушаю дальше через пару секунд.", "speaking");
-  setTimeout(done, Math.min(8000, 1500 + clean.length * 25));
 }
 
 let recorder, chunks = [], recStart = 0;
@@ -859,9 +904,10 @@ async function toggleRecord() {
       composerMode();
       if (Date.now() - recStart < 700) { toast("Слишком коротко"); return; }
       const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-      state.messages.push({ id: 0, at: new Date().toISOString(), who: "me", text: "🎙 голосовое…", channel: "web", buttons: [] });
-      state.thinking = "слушаю"; renderChat();
-      try { await api("voice", { body: blob, headers: { "Content-Type": blob.type.split(";")[0] } }); } catch (err) { toast(err.message); }
+      const reply = takeReply();
+      state.messages.push({ id: 0, at: new Date().toISOString(), who: "me", text: "🎙 голосовое…", channel: "web", buttons: [], reply_to: reply });
+      state.thinking = "слушаю"; renderChat({ bottom: true });
+      try { await api("voice", { body: blob, headers: { "Content-Type": blob.type.split(";")[0], ...(reply ? { "X-Reply-To": String(reply.id) } : {}) } }); } catch (err) { toast(err.message); }
     };
     recorder.start(); haptic("medium");
     composerMode();
@@ -1690,6 +1736,7 @@ function renderProjects() {
   bindProjects();
   restoreComposer(keep);
   const thread = $("#pc-thread"); if (thread) thread.scrollTop = thread.scrollHeight;
+  if (thread) thread.querySelectorAll("[data-goto]").forEach((q) => q.onclick = () => gotoMsg(q.dataset.goto));
   if (TG) {
     TG.BackButton.offClick(projectBack);
     if (state.project && !isWide()) { TG.BackButton.show(); TG.BackButton.onClick(projectBack); } else if (!state.note) TG.BackButton.hide();
@@ -1763,7 +1810,7 @@ function projChatHtml() {
   const p = state.project, msgs = p.messages || [];
   const thinking = state.thinking && (!msgs.length || msgs[msgs.length - 1].who === "me");
   return `<div class="pc"><div class="pc-thread" id="pc-thread">
-      ${msgs.length ? msgs.map((m) => `<div class="msg ${m.who === "me" ? "me" : ""}">${linkify(esc(m.text))}</div>`).join("")
+      ${msgs.length ? msgs.map((m) => `<div class="msg ${m.who === "me" ? "me" : ""}" data-pid="${m.id}">${quoteHtml(m.reply_to)}<div class="mtext">${linkify(esc(m.text))}</div></div>`).join("")
         : `<div class="pc-empty muted small">Здесь разговор только про «${esc(p.title)}». Арвикс видит этапы, заметки папки, время и присланные файлы — и сам всё записывает.</div>`}
       ${thinking ? `<div class="msg typing">Арвикс думает…</div>` : ""}</div>
     ${msgs.length < 3 ? `<div class="aw-chips">${PROJ_ASK.map((q) => `<button class="chip" data-ask="${esc(q)}">${esc(q)}</button>`).join("")}</div>` : ""}
@@ -2175,7 +2222,6 @@ document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.code === "KeyS" && $("#e-text")) { e.preventDefault(); saveEditor(); return; }
   if (e.key === "Escape") {
     if (!$("#sheet").classList.contains("hidden")) { closeSheet(); return; }
-    if (talk.on) { closeTalk(); return; }
     if (state.tab === "notes" && state.note) { e.preventDefault(); noteBack(); return; }
     if (state.tab === "projects" && state.projNote) { e.preventDefault(); state.projNote = null; renderProjects(); return; }
     if (state.tab === "projects" && state.project && !isWide()) { e.preventDefault(); projectBack(); return; }
@@ -2234,5 +2280,6 @@ try { setSideMini(localStorage.getItem(SIDE_KEY) === "1"); } catch (_) { setSide
   const start = params.get("tab") || (TG && TG.initDataUnsafe && TG.initDataUnsafe.start_param) || "today";
   setTab(TABS.includes(start) ? start : "today");
   stream();
+  ping(true);
   if (params.get("shared")) sendShared().catch((err) => toast(err.message));
 })();

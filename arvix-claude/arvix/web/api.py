@@ -15,7 +15,7 @@ from typing import Any
 
 from arvix import rules
 from arvix.context import DAY_TYPES_RU, QUOTA_RU, end_time
-from arvix.core import ArvixError
+from arvix.core import ArvixError, Core
 from arvix.telegram import templates as tpl
 
 FOCUS = "focus"
@@ -99,6 +99,18 @@ def sessions_view(core: Any, d: Any) -> list[dict[str, Any]]:
     return out
 
 
+def quote_view(core: Any, event: Any, near: dict[int, Any]) -> dict[str, Any] | None:
+    """Цитата в пузыре, как в Telegram (D52): кто, начало текста, id — по нему лента прокручивает к оригиналу."""
+    target_id = event.payload.get("reply_to")
+    if not target_id:
+        return None
+    target = near.get(int(target_id)) or core.message(int(target_id))
+    if target is None:
+        return None
+    text = " ".join(str(target.payload.get("text") or "").split())
+    return {"id": target.id, "who": "me" if target.kind == "message_in" else "arvix", "text": text[:160]}
+
+
 def messages_view(core: Any, *, before: int | None = None, limit: int = 60) -> list[dict[str, Any]]:
     """Переписка из журнала — все каналы: Telegram, приложение, терминал."""
     start = max(0, (before or core.state.last_event_id + 1) - 3000)
@@ -106,6 +118,7 @@ def messages_view(core: Any, *, before: int | None = None, limit: int = 60) -> l
     events = [e for e in core.store.read(start) if e.kind in ("message_in", "message_out") and (before is None or e.id < before)
               and not e.payload.get("project")]
     out = []
+    near = {e.id: e for e in events}
     for event in events[-limit:]:
         text = str(event.payload.get("text") or "")
         if event.kind == "message_in" and text.startswith("[кнопка "):
@@ -113,7 +126,8 @@ def messages_view(core: Any, *, before: int | None = None, limit: int = 60) -> l
         out.append({
             "id": event.id, "at": event.at.astimezone(core.tz).isoformat(), "who": "me" if event.kind == "message_in" else "arvix",
             "text": text, "channel": event.payload.get("channel") or "telegram",
-            "buttons": event.payload.get("buttons") or [],
+            "buttons": event.payload.get("buttons") or [], "reply_to": quote_view(core, event, near),
+            "reaction": (core.state.reactions.get(event.id) or {}).get("emoji", ""),
         })
     return out
 
@@ -248,11 +262,13 @@ def project_messages(core: Any, project_id: str, limit: int = 80) -> list[dict[s
     """Нить чата проекта из общей переписки — сообщения с payload.project."""
     start = max(0, core.state.last_event_id - 6000)
     out = []
-    for event in core.store.read(start):
-        if event.kind in ("message_in", "message_out") and event.payload.get("project") == project_id:
-            out.append({"id": event.id, "at": event.at.astimezone(core.tz).isoformat(), "who": "me" if event.kind == "message_in" else "arvix",
-                        "text": str(event.payload.get("text") or "")})
-    return out[-limit:]
+    thread = [e for e in core.store.read(start) if e.kind in ("message_in", "message_out") and e.payload.get("project") == project_id]
+    near = {e.id: e for e in thread}
+    for event in thread[-limit:]:
+        out.append({"id": event.id, "at": event.at.astimezone(core.tz).isoformat(), "who": "me" if event.kind == "message_in" else "arvix",
+                    "text": str(event.payload.get("text") or ""), "reply_to": quote_view(core, event, near),
+                    "reaction": (core.state.reactions.get(event.id) or {}).get("emoji", "")})
+    return out
 
 
 def project_view(core: Any, project_id: str) -> dict[str, Any]:
@@ -299,7 +315,7 @@ def project_chat(project_id: str, text: str, *, kickoff: bool = False) -> Any:
         from arvix import safety
 
         bot.core.refresh()
-        with bot.via("web", SINK), bot.in_project(project_id):
+        with bot.via("web", SINK), bot.in_project(project_id), bot.incoming():
             bot.log_in(text)
             if safety.detect(text):
                 bot.safety_protocol(text)
@@ -312,7 +328,7 @@ def project_upload(project_id: str, data: bytes, name: str, mime: str, caption: 
     """Файл в чат проекта — в папку проекта «Файлы» (код, скриншот, PDF): Арвикс читает и отвечает."""
     def run(bot: Any) -> None:
         bot.core.refresh()
-        with bot.via("web", SINK), bot.in_project(project_id):
+        with bot.via("web", SINK), bot.in_project(project_id), bot.incoming():
             bot.on_file({"file_name": name, "mime_type": mime}, caption=caption, data=data)
     return run
 
@@ -464,11 +480,33 @@ def focus_note(event_id: int, note: str) -> Any:
     return run
 
 
-def chat(text: str, *, voice: bool = False) -> Any:
+def chat(text: str, *, voice: bool = False, reply_to: int | None = None) -> Any:
+    """reply_to — id сообщения, на которое человек ответил в приложении (свайп или «Ответить», D52)."""
+    def run(bot: Any) -> None:
+        bot.core.refresh()
+        with bot.via("web", SINK), bot.incoming(reply_to=reply_to):
+            bot.on_text(text, voice=voice)
+    return run
+
+
+def react(message_id: int, emoji: str) -> Any:
+    """Реакция из приложения (D52): набор Core.REACTIONS или пусто — снять. ❓ — Арвикс объяснит проще."""
+    if emoji and emoji not in Core.REACTIONS:
+        raise ArvixError("Такой реакции нет")
+
     def run(bot: Any) -> None:
         bot.core.refresh()
         with bot.via("web", SINK):
-            bot.on_text(text, voice=voice)
+            bot.on_reaction(message_id, emoji, channel="web")
+    return run
+
+
+def seen(upto: int | None) -> Any:
+    """Пульс приложения на экране (в сети) и, если лента дочитана, — до какого сообщения прочитано."""
+    def run(bot: Any) -> None:
+        bot.core.presence_ping()
+        if upto:
+            bot.core.mark_read(upto, channel="web")
     return run
 
 
@@ -479,11 +517,11 @@ def button(data: str) -> Any:
     return run
 
 
-def voice(audio: bytes, filename: str) -> Any:
+def voice(audio: bytes, filename: str, *, reply_to: int | None = None) -> Any:
     def run(bot: Any) -> None:
         from arvix.stt import STTError
 
-        with bot.via("web", SINK):
+        with bot.via("web", SINK), bot.incoming(reply_to=reply_to):
             if not bot.stt.enabled:
                 bot.log_in("[голосовое — распознавание не настроено]")
                 bot.send(tpl.VOICE_OFF)
@@ -500,11 +538,11 @@ def voice(audio: bytes, filename: str) -> Any:
     return run
 
 
-def upload(data: bytes, name: str, mime: str, caption: str) -> Any:
+def upload(data: bytes, name: str, mime: str, caption: str, *, reply_to: int | None = None) -> Any:
     """Файл из приложения — тот же путь, что из Telegram: хранилище, журнал, голова."""
     def run(bot: Any) -> None:
         bot.core.refresh()
-        with bot.via("web", SINK):
+        with bot.via("web", SINK), bot.incoming(reply_to=reply_to):
             bot.on_file({"file_name": name, "mime_type": mime}, caption=caption, data=data)
     return run
 
@@ -648,7 +686,8 @@ class SinkAPI:
 
     app_url = ""
 
-    def send(self, chat_id: int, text: str, buttons: Any = None, keyboard: Any = None, *, html: str | None = None) -> None:
+    def send(self, chat_id: int, text: str, buttons: Any = None, keyboard: Any = None, *, html: str | None = None,
+             reply_to: int | None = None) -> None:
         return None
 
     def edit(self, *a: Any, **k: Any) -> None:

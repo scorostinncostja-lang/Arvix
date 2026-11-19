@@ -94,6 +94,17 @@ class VoiceReplyTest(BotCase):
         self.assertIn("Слышу.", self.api.last)
 
 
+class AppVoiceTest(BotCase):
+    def test_voice_in_the_app_is_read_not_listened(self) -> None:
+        from arvix.web import api as web_api
+
+        self.bot.stt = FakeSTT("что у меня завтра?")
+        self.brain.answers.append({"reply": "Завтра две задачи.", "actions": []})
+        web_api.voice(b"webm", "voice.webm")(self.bot)
+        self.assertIn("<dictated>", self.brain.calls[-1]["system"])
+        self.assertNotIn("<spoken>", self.brain.calls[-1]["system"])
+
+
 class SpeakableTest(unittest.TestCase):
     def test_markup_links_and_emoji_are_not_read_aloud(self) -> None:
         text = speakable("**Важно** 🎯 — смотри https://fipi.ru\n\n- пункт\n#тег")
@@ -110,13 +121,21 @@ class SpeakableTest(unittest.TestCase):
         self.assertTrue(audio.startswith(b"OggS"))
 
 
-class TtsServerTest(test_v04.ServerTest):
-    def test_tts_off_says_phone_speaks(self) -> None:
-        status, body = self.call("/api/tts", {"text": "привет"})
+class NoCallTest(test_v04.ServerTest):
+    """Звонка в приложении нет (D52): ни озвучки ответа по запросу, ни кнопки, ни режима «ответ будут слушать»."""
+
+    def test_tts_endpoint_is_gone(self) -> None:
+        status, _ = self.call("/api/tts", {"text": "привет"})
         self.assertEqual(status, 404)
-        self.assertIn("голос телефона", body["error"])
         status, state = self.call("/api/state")
-        self.assertFalse(state["server_tts"])
+        self.assertNotIn("server_tts", state)
+
+    def test_no_call_button_in_the_app(self) -> None:
+        from tests.test_laptop import STATIC
+
+        self.assertNotIn("top-call", (STATIC / "index.html").read_text())
+        self.assertNotIn("openTalk", (STATIC / "app.js").read_text())
+
 
 
 def wav_bytes(seconds: float = 0.3) -> bytes:

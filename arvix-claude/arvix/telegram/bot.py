@@ -198,14 +198,181 @@ class Bot:
         self.channel = "telegram"  # приложение (arvix/web) создаёт свой Bot с channel="web"
         self.memory = Memory(core)
         self.first_today = False
+        # Ответы на сообщения, как в Telegram (D52). more_incoming — «человек уже написал ещё», его ставит
+        # служба (очередь web/hub.py); _incoming — что известно о входящем до записи в журнал;
+        # answering — сообщение человека, на которое сейчас отвечаем, и на что ответил он сам.
+        self.more_incoming: Callable[[], bool] = lambda: False
+        self._incoming: dict[str, Any] | None = None
+        self.answering: dict[str, Any] | None = None
+        self._history_ids: set[int] = set()
 
     # --- отправка и ожидание ответа ------------------------------------------
 
     def send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None, *, key: str | None = None,
              keyboard: list[list[str]] | None = None) -> int | None:
-        message_id = self.api.send(self.owner, text, buttons, keyboard=keyboard)
-        self.core.message_out(text, key=key, channel=self.channel, buttons=buttons, project=self.project)
+        target, tg_reply = self.quote_target()
+        message_id = self.api.send(self.owner, text, buttons, keyboard=keyboard, reply_to=tg_reply)
+        self.core.message_out(text, key=key, channel=self.channel, buttons=buttons, project=self.project,
+                              reply_to=target, tg_id=self.tg_id(message_id))
         return message_id
+
+    def tg_id(self, message_id: Any) -> int | None:
+        """Номер сообщения в Telegram — только для Telegram (в приложении номеров нет)."""
+        return int(message_id) if self.channel == "telegram" and isinstance(message_id, int) else None
+
+    # --- ответы на сообщения (D52) -------------------------------------------------------
+
+    @contextmanager
+    def incoming(self, *, tg_id: int | None = None, reply_to: int | None = None, reply_tg: int | None = None,
+                 quoted_text: str = "", quoted_bot: bool = False, quoted_at: float | None = None, quote: str = "") -> Any:
+        """Одно входящее сообщение: его номер в Telegram и на что человек ответил цитатой.
+        reply_to — id события (приложение), reply_tg — номер в Telegram; quoted_* — то, что прислал Telegram,
+        если сообщения нет в журнале (старое); quote — выделенный фрагмент цитаты."""
+        saved = (self._incoming, self.answering)
+        self._incoming = {"tg_id": tg_id, "reply_to": reply_to, "reply_tg": reply_tg, "quoted_text": quoted_text,
+                          "quoted_bot": quoted_bot, "quoted_at": quoted_at, "quote": quote}
+        self.answering = None
+        try:
+            yield
+        finally:
+            self._incoming, self.answering = saved
+
+    def quoted_event(self, inc: dict[str, Any]) -> Any:
+        if inc.get("reply_to"):
+            return self.core.message(int(inc["reply_to"]))
+        if inc.get("reply_tg"):
+            return self.core.message_by_tg(int(inc["reply_tg"]))
+        return None
+
+    def quote_target(self, wanted: Any = None) -> tuple[int | None, int | None]:
+        """На какое сообщение этот ответ — цитатой: (id события, номер в Telegram).
+        Как в мессенджере, цитата нужна, когда без неё непонятно, на что ответ:
+        1) голова выбрала сообщение из <history> (wanted) — отвечает не на последнее;
+        2) человек уже написал следующее (ждёт в очереди или в журнале) — первый ответ цитирует то, на что отвечает.
+        Иначе ответ просто идёт ниже, без цитаты. Решает код, кроме выбора головы в п. 1."""
+        event = None
+        try:
+            wanted_id = int(wanted or 0)
+        except (TypeError, ValueError):
+            wanted_id = 0
+        if wanted_id and wanted_id in self._history_ids:
+            event = self.core.message(wanted_id)
+        answering = self.answering
+        if event is None and answering and answering.get("force") and not answering.get("replied"):
+            event = self.core.message(int(answering["force"]))  # объяснение по ❓ — цитатой того, что непонятно
+        if event is None and answering and not answering.get("replied") and self.overtaken(answering["event"]):
+            event = self.core.message(answering["event"])
+        if answering:
+            answering["replied"] = True  # цитата — только у первого ответа на сообщение
+        if event is None:
+            return None, None
+        return event.id, (event.payload.get("tg_id") if self.channel == "telegram" else None)
+
+    def overtaken(self, event_id: int) -> bool:
+        """После сообщения человека уже есть другие: он дописал, пока Арвикс думал, или пришло напоминание."""
+        try:
+            if self.more_incoming():
+                return True
+        except Exception:  # noqa: BLE001 — очередь не должна ронять ответ
+            pass
+        return any(e.kind in Core.MESSAGE_KINDS and e.payload.get("project") == self.project
+                   for e in self.core.store.read(int(event_id)))
+
+    def reply_block(self) -> str:
+        """Человек ответил цитатой — голова получает, на что именно, фактом из журнала."""
+        a = self.answering or {}
+        target = a.get("target")
+        if target is not None:
+            whose = "своё сообщение" if target.kind == "message_in" else "сообщение Арвикса"
+            when = f" от {target.at.astimezone(self.core.tz):%d.%m %H:%M}"
+            text = str(target.payload.get("text") or "")
+        elif a.get("quoted_text"):
+            whose = "сообщение Арвикса" if a.get("quoted_bot") else "своё сообщение"
+            when = f" от {datetime.fromtimestamp(a['quoted_at'], self.core.tz):%d.%m %H:%M}" if a.get("quoted_at") else ""
+            text = a["quoted_text"]
+        else:
+            return ""
+        lines = [f"Человек ответил цитатой на {whose}{when}: «{clip(text, 700)}»",
+                 "Его слова — про это сообщение, а не про последнее в переписке."]
+        if a.get("quote"):
+            lines.append(f"Выделенный фрагмент: «{clip(a['quote'], 300)}»")
+        return "<reply_to>\n" + "\n".join(lines) + "\n</reply_to>"
+
+    # --- реакции, прочитано, в сети (D52) ------------------------------------------------
+
+    def on_tg_reaction(self, update: dict[str, Any]) -> None:
+        """Реакция в Telegram (update message_reaction). Сообщения нет в журнале (до D52) — пропускаем."""
+        if (update.get("user") or {}).get("id") != self.owner:
+            return
+        self.core.refresh()
+        target = self.core.message_by_tg(int(update.get("message_id") or 0))
+        if target is None or target.kind != "message_out":
+            return
+        emoji = next((r.get("emoji", "") for r in update.get("new_reaction") or [] if r.get("type") == "emoji"), "")
+        self.on_reaction(target.id, emoji, channel="telegram")
+
+    def on_reaction(self, message_id: int, emoji: str, *, channel: str) -> dict[str, Any]:
+        """Реакция — сигнал, а не реплика: ответа нет, голова увидит её в истории и блоке <messenger>.
+        Исключение — «непонятно» (❓, 🤔): тогда Арвикс сам объясняет это место проще, цитатой."""
+        result = self.core.react(message_id, emoji, channel=channel)
+        if result["changed"] and Core.reaction_key(emoji) in Core.CONFUSED:
+            self.explain_unclear(message_id, emoji)
+        return result
+
+    def explain_unclear(self, message_id: int, emoji: str) -> None:
+        target = self.core.message(message_id)
+        if target is None:
+            return
+        when = target.at.astimezone(self.core.tz)
+        extra = (f"<reaction>Человек поставил {emoji} на твоё сообщение от {when:%d.%m %H:%M}: «{clip(str(target.payload.get('text') or ''), 900)}». "
+                 "Значит, ему непонятно. Объясни это место по-другому: проще, короче, на примере. Одно сообщение, без извинений "
+                 "и без пересказа целиком. Не ясно, что именно непонятно, — объясни главное и спроси, какое место.</reaction>")
+        saved = self.answering
+        self.answering = {"event": target.id, "force": target.id, "replied": False, "target": None}
+        try:
+            with self.in_project(target.payload.get("project")):  # из чата проекта — ответ туда же
+                self.converse(f"{emoji} (реакция на твоё сообщение: непонятно)", extra=extra)
+        finally:
+            self.answering = saved
+
+    def messenger_block(self) -> str:
+        """Что видно, как в мессенджере: в сети ли он в приложении, до чего дочитал, какие реакции поставил.
+        Факты из кода — голова их не угадывает (правило №1). В Telegram «в сети» и «прочитано» боту не видны —
+        так и сказано, чтобы голова не делала выводов из их отсутствия."""
+        core, st = self.core, self.core.state
+        lines = []
+        presence = core.presence()
+        if presence["online"]:
+            lines.append(f"Сейчас в приложении: да, зашёл в {datetime.fromtimestamp(presence['since'], core.tz):%H:%M}.")
+        elif presence["seen"]:
+            lines.append(f"В приложении последний раз: {datetime.fromtimestamp(presence['seen'], core.tz):%d.%m %H:%M}.")
+        last_in = next((e for e in reversed(core.store.read(max(0, st.last_event_id - 400))) if e.kind == "message_in"), None)
+        seen_upto = max(st.read_upto, last_in.id if last_in else 0)
+        if st.read_at:
+            lines.append(f"Прочитал ленту в приложении до #{st.read_upto} ({datetime.fromisoformat(st.read_at).astimezone(core.tz):%d.%m %H:%M}).")
+        unread = [e for e in core.store.read(seen_upto) if e.kind == "message_out" and not e.payload.get("project")]
+        if unread and st.read_at:
+            lines.append(f"Не видел в приложении твоих сообщений: {len(unread)} (с {unread[0].at.astimezone(core.tz):%H:%M}); "
+                         "в Telegram прочтение не видно — там он мог их видеть.")
+        since = (core.now() - timedelta(days=3)).isoformat()
+        recent = sorted(((mid, r) for mid, r in st.reactions.items() if r["at"] >= since and mid not in self._history_ids),
+                        key=lambda x: x[1]["at"])[-5:]
+        for mid, r in recent:
+            target = core.message(mid)
+            if target is not None:
+                lines.append(f"Реакция {r['emoji']} на твоё #{mid} «{clip(str(target.payload.get('text') or ''), 100)}».")
+        if not lines:
+            return ""
+        lines.append("Реакции: 👍 ❤️ 🔥 🙏 — согласен, зашло; 👎 💔 — не согласен или задело: не спорь, учти; ❓ 🤔 — непонятно; "
+                     "😂 — смешно. Не пересказывай ему это и не комментируй, что видишь, — просто учитывай.")
+        return "<messenger>\n" + "\n".join(lines) + "\n</messenger>"
+
+    def quotes_before(self, ts: float) -> bool:
+        """Цитата сообщения, отправленного раньше ts: ответ на него — не ответ на вопрос, заданный в ts."""
+        a = self.answering or {}
+        target = a.get("target")
+        at = target.at.timestamp() if target is not None else a.get("quoted_at") if a.get("quoted_text") else None
+        return at is not None and float(at) < float(ts) - 5
 
     @contextmanager
     def in_project(self, project_id: str | None) -> Any:
@@ -231,15 +398,22 @@ class Bot:
     def tg_send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None, *, key: str | None = None) -> int | None:
         """Сообщение, которое живёт в Telegram независимо от канала (таймер, панель)."""
         message_id = self.tg.send(self.owner, text, buttons)
-        self.core.message_out(text, key=key, channel="telegram", buttons=buttons)
+        self.core.message_out(text, key=key, channel="telegram", buttons=buttons,
+                              tg_id=message_id if isinstance(message_id, int) else None)
         return message_id
 
     def log_in(self, text: str) -> None:
-        self.core.message_in(text, channel=self.channel, project=self.project)
+        inc, self._incoming = self._incoming, None  # одно входящее — одно событие
+        target = self.quoted_event(inc) if inc else None
+        event_id = self.core.message_in(text, channel=self.channel, project=self.project,
+                                        reply_to=target.id if target is not None else None,
+                                        tg_id=(inc or {}).get("tg_id") if self.channel == "telegram" else None)
         self.core.store.kv_set("last_in_at", self.core.now().timestamp())
+        if inc is not None:
+            self.answering = {**inc, "event": event_id, "target": target, "replied": False}
 
     def reply(self, text: str, receipt: str = "", *, keyboard: list[list[str]] | None = None, key: str | None = None,
-              voice_note: str = "") -> None:
+              voice_note: str = "", reply_to: Any = None) -> None:
         """Ответ головы — одним сообщением (D46): абзацы через пустую строку, предложения по строкам,
         квитанция кода — в конце того же сообщения. voice_note — отдельное короткое голосовое,
         только если голова сочла, что это стоит послушать, и код не нашёл в нём пересказа текста."""
@@ -247,8 +421,9 @@ class Bot:
         if receipt.strip():
             parts.append(receipt.strip())
         body = "\n\n".join(parts) or "…"
-        self.api.send(self.owner, fmt.strip_markup(body), keyboard=keyboard, html=fmt.to_html(body))
-        self.core.message_out(body, channel=self.channel, key=key, project=self.project)
+        target, tg_reply = self.quote_target(reply_to)
+        message_id = self.api.send(self.owner, fmt.strip_markup(body), keyboard=keyboard, html=fmt.to_html(body), reply_to=tg_reply)
+        self.core.message_out(body, channel=self.channel, key=key, project=self.project, reply_to=target, tg_id=self.tg_id(message_id))
         if note := voice_note_check(voice_note, text):
             self.send_voice_note(note)
 
@@ -263,12 +438,12 @@ class Bot:
             log.info("голосовое не отправлено: лимит %s в день", self.voice_notes_per_day)
             return
         try:
-            self.api.send_voice(self.owner, self.tts.synth(note))
+            message_id = self.api.send_voice(self.owner, self.tts.synth(note))
         except (TTSError, TelegramError) as exc:
             log.info("голосовое не отправлено: %s", exc)
             return
         self.core.store.kv_set("voice_notes", {"day": today, "n": sent + 1})
-        self.core.message_out("🔊 " + note, channel=self.channel, project=self.project)
+        self.core.message_out("🔊 " + note, channel=self.channel, project=self.project, tg_id=self.tg_id(message_id))
 
     def await_set(self, kind: str, **data: Any) -> None:
         # asked_at: сообщение, отправленное раньше вопроса (очередь после обрыва сети),
@@ -287,10 +462,21 @@ class Bot:
         if callback := update.get("callback_query"):
             self.on_callback(callback)
             return
+        if reaction := update.get("message_reaction"):
+            self.on_tg_reaction(reaction)
+            return
         msg = update.get("message") or {}
         if (msg.get("from") or {}).get("id") != self.owner:
             return  # single-user: всех остальных молча игнорируем
         self.core.refresh()
+        quoted = msg.get("reply_to_message") or {}
+        with self.incoming(tg_id=msg.get("message_id"), reply_tg=quoted.get("message_id"),
+                           quoted_text=str(quoted.get("text") or quoted.get("caption") or ""),
+                           quoted_bot=bool((quoted.get("from") or {}).get("is_bot")), quoted_at=quoted.get("date"),
+                           quote=str((msg.get("quote") or {}).get("text") or "")):
+            self.dispatch(msg)
+
+    def dispatch(self, msg: dict[str, Any]) -> None:
         text = (msg.get("text") or msg.get("caption") or "").strip()
         if media := msg.get("voice") or msg.get("audio"):
             self.on_voice(media, sent_at=msg.get("date"))
@@ -319,6 +505,9 @@ class Bot:
         if is_goodnight(text) and self.core.is_night():
             self.core.note_bedtime(source="telegram")  # отбой пишет код (D48); пожелать спокойной ночи — дело головы
         waiting = self.await_get()
+        if waiting and self.quotes_before(waiting.get("asked_at", 0)):
+            self.converse(text, voice=voice)  # цитата старого сообщения — разговор о нём, а не ответ на вопрос (D52)
+            return
         if waiting and sent_at and sent_at < waiting.get("asked_at", 0):
             if text == previous:
                 return  # повтор, отправленный, пока бот был без сети
@@ -1195,13 +1384,28 @@ class Bot:
         events = [e for e in self.core.store.read(start) if e.kind in ("message_in", "message_out")]
         if self.project:  # в окне проекта — его нить: голова не путает проект с разговором о сне
             events = [e for e in events if e.payload.get("project") == self.project]
-        lines = []
-        for event in events[-(HISTORY + 1):]:
+        lines: list[tuple[int, str]] = []
+        shown = events[-(HISTORY + 1):]
+        ids = {e.id for e in shown}
+        by_id = {e.id: e for e in shown}
+        for event in shown:
             who = "ЧЕЛОВЕК" if event.kind == "message_in" else "АРВИКС"
-            lines.append(f"{who} ({event.at.astimezone(self.core.tz):%d.%m %H:%M}): {event.payload.get('text', '')}")
-        if lines and exclude_last and lines[-1].endswith(exclude_last[:600]):
+            # [#id] — чтобы голова могла ответить цитатой на конкретное сообщение (reply_to, D52)
+            line = f"[#{event.id}] {who} ({event.at.astimezone(self.core.tz):%d.%m %H:%M})"
+            if target := event.payload.get("reply_to"):
+                quoted = by_id.get(target) or self.core.message(int(target))
+                if target in ids:
+                    line += f" в ответ на #{target}"
+                elif quoted is not None:
+                    line += f" в ответ на «{clip(str(quoted.payload.get('text') or ''), 80)}»"
+            if reaction := self.core.state.reactions.get(event.id):
+                line += f" [его реакция {reaction['emoji']}]"
+            lines.append((event.id, f"{line}: {event.payload.get('text', '')}"))
+        if lines and exclude_last and lines[-1][1].endswith(exclude_last[:600]):
             lines.pop()
-        return lines[-HISTORY:]
+        lines = lines[-HISTORY:]
+        self._history_ids = {i for i, _ in lines}
+        return [line for _, line in lines]
 
     @contextmanager
     def typing_kept(self) -> Any:
@@ -1283,14 +1487,11 @@ class Bot:
 
     def converse(self, text: str, extra: str = "", *, voice: bool = False) -> None:
         core = self.core
-        if voice and self.channel == "telegram":
-            # Голосовое в Telegram: ответ читают глазами (D46), а распознавание может путать слова.
+        if voice:
+            # Голосовое (Telegram и приложение): ответ читают глазами (D46), а распознавание может путать слова.
+            # Звонка в приложении больше нет (D52) — озвучивать ответ целиком некому.
             extra += ("\n<dictated>Человек надиктовал это голосом; распознавание могло исказить слова — понимай по смыслу. "
                       "Ответ он прочитает текстом: обычный ответ по правилам канала, не пересказ для слуха.</dictated>")
-        elif voice:
-            # Режим разговора в приложении: ответ озвучивается целиком (D34).
-            extra += ("\n<spoken>Человек говорит голосом, ответ будут слушать: 2–5 коротких предложений, без списков, "
-                      "заголовков и смайлов; если разговор продолжается — закончи вопросом.</spoken>")
         if core.store.kv_get("answer_mode"):
             core.store.kv_del("answer_mode")
             extra += "\n<answer_mode>Человек запросил готовый ответ. Дай полный ответ с источниками и action learning_question с direct=true.</answer_mode>"
@@ -1306,14 +1507,19 @@ class Bot:
             extra += "\n" + projects.chat_block(core, self.project)
         if dialog := self.dialog_block(text):
             extra += "\n" + dialog
+        if quoted := self.reply_block():
+            extra += "\n" + quoted
         if weather.asks_weather(text):
             extra += "\n" + weather.weather_block(core)
         for block in (self.recall_block(text), self.notes_block(text)):
             if block:
                 extra += "\n" + block
+        history = self.history(exclude_last=text)  # до блока <messenger>: реакции из истории в нём не повторяются
+        if seen := self.messenger_block():
+            extra += "\n" + seen
         # Статичная часть — системный промпт (из кэша), всё живое — в запросе (D40).
         system, prompt = voice_prompt(core, channel=self.channel if self.channel == "telegram" else "telegram",
-                                      message=text, history=self.history(exclude_last=text), extra=extra.strip())
+                                      message=text, history=history, extra=extra.strip())
         # Навыки (D33): в 🟥 и при выключенном менторе — только мягкие (разговор, тревога), правило №5.
         skills = "gentle" if core.effective_mode() == "red" or not core.state.mentor_enabled else "full"
         ask = {"system": system, "schema": VOICE_SCHEMA, "vault_tools": True, "web": True, "skills": skills, "effort": effort_for(text)}
@@ -1348,7 +1554,7 @@ class Bot:
         if core.effective_mode() == "red" and gentle_violation(voice_note):
             voice_note = ""  # правило №5 и для голоса: в 🟥 про дисциплину не говорят ни текстом, ни вслух
         done, failed, warnings = apply_actions(core, actions, source=self.channel, fallback_report=text)
-        self.reply(reply, self.receipt(done, failed, warnings), voice_note=voice_note)
+        self.reply(reply, self.receipt(done, failed, warnings), voice_note=voice_note, reply_to=result.get("reply_to"))
         if done:
             self.refresh_panel()
         self.run_ui_actions([a for a in actions if a.get("type") in UI_ACTIONS], text)
@@ -1435,8 +1641,10 @@ class Bot:
 
     def send_rich(self, text: str, buttons: list[list[tuple[str, str]]] | None = None, *, key: str | None = None) -> int | None:
         """Сообщение кода с разметкой (жирный, строки) — как ответ головы."""
-        message_id = self.api.send(self.owner, fmt.strip_markup(text), buttons, html=fmt.to_html(text))
-        self.core.message_out(fmt.strip_markup(text), key=key, channel=self.channel, buttons=buttons)
+        target, tg_reply = self.quote_target()
+        message_id = self.api.send(self.owner, fmt.strip_markup(text), buttons, html=fmt.to_html(text), reply_to=tg_reply)
+        self.core.message_out(fmt.strip_markup(text), key=key, channel=self.channel, buttons=buttons,
+                              reply_to=target, tg_id=self.tg_id(message_id))
         return message_id
 
     def app_url(self) -> str:
@@ -1484,6 +1692,7 @@ class Bot:
             constitution(st.profile, gentle=False, sections=("identity", "voice", "honesty")),
             "<context>\n" + build_context(core) + "\n</context>",
             "<history>\n" + "\n".join(self.history()) + "\n</history>",
+            self.messenger_block(),
             "<curiosity>\nНапиши человеку первым — одно короткое сообщение, 1–2 предложения. Как наставник, которому "
             "правда интересно: спроси про конкретное из памяти (событие, пробник, разговор, решение, проект) или "
             "поделись одной мыслью по его цели. Не «как дела?», не про задачи из списка, не напоминание. "

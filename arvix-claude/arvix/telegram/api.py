@@ -124,16 +124,17 @@ class TelegramAPI:
 
     def get_updates(self, offset: int, timeout: int = 25) -> list[dict[str, Any]]:
         return self.call("getUpdates", _http_timeout=timeout + 15, offset=offset, timeout=timeout,
-                         allowed_updates=["message", "callback_query"])
+                         allowed_updates=["message", "callback_query", "message_reaction"])  # реакции (D52)
 
     def send(self, chat_id: int, text: str, buttons: Buttons | None = None, keyboard: list[list[str]] | None = None,
-             *, html: str | None = None) -> int | None:
+             *, html: str | None = None, reply_to: int | None = None) -> int | None:
         """Отправка; возвращает message_id последнего куска (им потом можно править панель).
         У сообщения одна разметка: либо inline-кнопки под текстом, либо постоянная клавиатура.
-        html — тот же текст в разметке Telegram (fmt.render); не принят — уходит text как есть."""
+        html — тот же текст в разметке Telegram (fmt.render); не принят — уходит text как есть.
+        reply_to — message_id, на который это ответ цитатой (D52); цитата — у первого куска."""
         if html is not None and len(html) <= LIMIT:
             try:
-                return self._send_one(chat_id, html, buttons, keyboard, parse_mode="HTML")
+                return self._send_one(chat_id, html, buttons, keyboard, parse_mode="HTML", reply_to=reply_to)
             except TelegramError as exc:
                 if "parse" not in str(exc).lower() and "entit" not in str(exc).lower():
                     raise
@@ -141,14 +142,17 @@ class TelegramAPI:
         message_id = None
         for i, chunk in enumerate(chunks):
             last = i == len(chunks) - 1
-            message_id = self._send_one(chat_id, chunk, buttons if last else None, keyboard if last else None)
+            message_id = self._send_one(chat_id, chunk, buttons if last else None, keyboard if last else None,
+                                        reply_to=reply_to if i == 0 else None)
         return message_id
 
     def _send_one(self, chat_id: int, text: str, buttons: Buttons | None, keyboard: list[list[str]] | None,
-                  parse_mode: str | None = None) -> int | None:
+                  parse_mode: str | None = None, reply_to: int | None = None) -> int | None:
         params: dict[str, Any] = {"chat_id": chat_id, "text": text, "link_preview_options": {"is_disabled": True}}
         if parse_mode:
             params["parse_mode"] = parse_mode
+        if reply_to:  # исходное удалено — сообщение всё равно уйдёт, просто без цитаты
+            params["reply_parameters"] = {"message_id": int(reply_to), "allow_sending_without_reply": True}
         if buttons:
             params["reply_markup"] = inline_markup(buttons)
         elif keyboard is not None:  # [] — снять старую клавиатуру (D50)
