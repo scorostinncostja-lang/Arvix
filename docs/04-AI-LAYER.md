@@ -166,8 +166,10 @@ claude -p <сообщение> --system-prompt <слои 1–8> --output-format 
 `log_sleep`, `log_expense`, `log_social`, `remember`, `note`, `profile_set`, `set_goal`, `add_trait`,
 `declare_reason`, `learning_question`, `safety_flag`, `set_template` и шесть проектных (D43): `set_project`,
 `set_milestone` (этап только с `dod`), `plan_project` (блок в первое свободное окно — время ищет код), `project_log`,
-`project_resource` (только настоящая ссылка), `project_channel`; у `add_task` — поле `project`; у `set_project` —
-`purposes`, `repo`, `order` (D44). Цифры проекта модель видит в блоке ПРОЕКТЫ
+`project_resource` (только настоящая ссылка; чужой репозиторий как пример — `kind=example`), `project_note` (заметка в
+папке проекта: своя — перезаписать, правленная человеком — дописать), `learn_add` (тема в очередь «учиться»); у
+`add_task` — поле `project`; у `set_project` — `purposes`, `order` (D44, D45). В окне проекта голова получает блок
+`<project>` со всем о проекте и путями файлов его папки; в новом — ещё `<new_project>`: заполнить проект самой. Цифры проекта модель видит в блоке ПРОЕКТЫ
 контекста вместе с ⚠️ несостыковками, которые обязана поднять сама. Плюс действия интерфейса (`brain.UI_ACTIONS`,
 их исполняет бот, [05-INTERFACES.md §2.1](05-INTERFACES.md#21-без-команд--намерение-из-текста--d23)), среди них
 `offer_return` — показать в 🟥 кнопку «Вернуться к плану»: режим меняет кнопка человека, не модель (D38).

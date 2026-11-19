@@ -174,9 +174,6 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     self.send_json(app.read(api.projects_view))
                 elif url.path == "/api/project":
                     self.send_json(app.read(lambda c: api.project_view(c, query.get("id") or "")))
-                elif url.path == "/api/github":
-                    # Сеть — в потоке HTTP вне замка Core; список кэшируется на 10 минут
-                    self.send_json(api.github_repos(app.read, fresh=query.get("fresh") == "1"))
                 elif url.path == "/api/notes":
                     self.send_json(self.notes_dir(query.get("dir") or ""))
                 elif url.path == "/api/note":
@@ -275,12 +272,28 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 elif len(parts) == 2 and parts[0] == "lesson":
                     app.hub.post(api.lesson(parts[1]), label="готовлю урок")
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
-                elif parts == ["projects"]:
-                    self.send_json(app.hub.call(api.project_save(self.body_json())))
-                elif parts == ["github", "user"]:
-                    self.send_json(app.hub.call(api.github_user(str(self.body_json().get("user") or ""))))
-                elif parts == ["github", "sync"]:
-                    self.send_json(app.hub.call(api.github_sync(), timeout=120))
+                elif parts == ["projects", "new"]:
+                    body = self.body_json()
+                    text = str(body.get("text") or "").strip()[:4000]
+                    created = app.hub.call(api.project_new(text, body.get("goal") or None))
+                    # Карточка есть сразу; заполняет её Арвикс в чате проекта — фоном, ответ придёт потоком
+                    app.hub.post(api.project_chat(created["project"]["id"], text, kickoff=True), label="думаю")
+                    self.send_json(created)
+                elif len(parts) == 3 and parts[0] == "projects" and parts[2] == "chat":
+                    text = str(self.body_json().get("text") or "").strip()
+                    if not text:
+                        raise ArvixError("Пустое сообщение")
+                    app.hub.post(api.project_chat(parts[1], text[:16000]), label="думаю")
+                    self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
+                elif len(parts) == 3 and parts[0] == "projects" and parts[2] == "upload":
+                    data = self.body_bytes()
+                    if not data:
+                        raise ArvixError("Пустой файл")
+                    name = urllib.parse.unquote(self.headers.get("X-File-Name") or "файл")
+                    caption = urllib.parse.unquote(self.headers.get("X-Caption") or "").strip()[:4000]
+                    kind = (self.headers.get("Content-Type") or "").split(";")[0]
+                    app.hub.post(api.project_upload(parts[1], data, name, kind, caption), label="смотрю файл")
+                    self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif parts == ["projects", "roadmap"]:
                     goal = str(self.body_json().get("goal") or "")
                     app.hub.post(api.project_roadmap(goal), label="строю роадмап")

@@ -184,6 +184,7 @@ class Bot:
         self.stt = stt if stt is not None else STT(core.cfg)
         self.tts = tts if tts is not None else TTS(core.cfg)
         self.speak = False  # ответ на голос: короче, «для слуха», и голосовым, если есть озвучка (D34)
+        self.project: str | None = None  # чат проекта в приложении (D45): своя нить, блок проекта в запросе
         self.sleep = sleep or time.sleep
         tg = core.cfg.section("telegram")
         self.pause_base = float(tg.get("bubble_pause_sec", 0.6) or 0)
@@ -199,8 +200,18 @@ class Bot:
     def send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None, *, key: str | None = None,
              keyboard: list[list[str]] | None = None) -> int | None:
         message_id = self.api.send(self.owner, text, buttons, keyboard=keyboard)
-        self.core.message_out(text, key=key, channel=self.channel, buttons=buttons)
+        self.core.message_out(text, key=key, channel=self.channel, buttons=buttons, project=self.project)
         return message_id
+
+    @contextmanager
+    def in_project(self, project_id: str | None) -> Any:
+        """Разговор внутри проекта (D45): сообщения помечены проектом, история — его нить."""
+        saved = self.project
+        self.project = project_id
+        try:
+            yield
+        finally:
+            self.project = saved
 
     @contextmanager
     def via(self, channel: str, api: Any) -> Any:
@@ -220,7 +231,7 @@ class Bot:
         return message_id
 
     def log_in(self, text: str) -> None:
-        self.core.message_in(text, channel=self.channel)
+        self.core.message_in(text, channel=self.channel, project=self.project)
         self.core.store.kv_set("last_in_at", self.core.now().timestamp())
 
     def reply(self, text: str, receipt: str = "", *, keyboard: list[list[str]] | None = None, key: str | None = None) -> None:
@@ -241,7 +252,7 @@ class Bot:
                 self.sleep(min(self.pause_max, self.pause_base + len(part) * self.pause_per_char))
             self.api.send(self.owner, fmt.strip_markup(part), keyboard=keyboard if i == len(parts) - 1 else None,
                           html=fmt.to_html(part))
-        self.core.message_out("\n\n".join(parts), channel=self.channel, key=key)
+        self.core.message_out("\n\n".join(parts), channel=self.channel, key=key, project=self.project)
         if self.speak and self.channel == "telegram" and self.tts.enabled and self.tts.voice_replies:
             try:
                 self.api.send_voice(self.owner, self.tts.synth(text))  # голос — вдобавок к тексту, не вместо
@@ -443,7 +454,13 @@ class Bot:
         try:
             if data is None:
                 data = self.api.download(media["file_id"])
-            info = self.core.receive_file(data, name, media.get("mime_type") or "", stt=self.stt, caption=caption, source=self.channel)
+            folder = None
+            if self.project and self.project in self.core.state.projects:
+                from arvix import projects
+
+                folder = projects.folder(self.core, self.core.state.projects[self.project]) + "/Файлы"
+            info = self.core.receive_file(data, name, media.get("mime_type") or "", stt=self.stt, caption=caption,
+                                          source=self.channel, folder=folder)
         except (TelegramError, ArvixError, KeyError) as exc:
             self.send(f"Файл не принял: {exc}")
             return
@@ -1145,6 +1162,8 @@ class Bot:
     def history(self, exclude_last: str = "") -> list[str]:
         start = max(0, self.core.state.last_event_id - 400)
         events = [e for e in self.core.store.read(start) if e.kind in ("message_in", "message_out")]
+        if self.project:  # в окне проекта — его нить: голова не путает проект с разговором о сне
+            events = [e for e in events if e.payload.get("project") == self.project]
         lines = []
         for event in events[-(HISTORY + 1):]:
             who = "ЧЕЛОВЕК" if event.kind == "message_in" else "АРВИКС"
@@ -1252,6 +1271,10 @@ class Bot:
             extra += "\n" + tpl.RETURN_HINT.format(days=silent_days)
         if lesson := self.lesson_context():
             extra += "\n" + lesson
+        if self.project and core.state.projects.get(self.project):
+            from arvix import projects
+
+            extra += "\n" + projects.chat_block(core, self.project)
         if dialog := self.dialog_block(text):
             extra += "\n" + dialog
         if weather.asks_weather(text):

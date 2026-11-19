@@ -4,4 +4,4 @@
 плагин Claude Code, Telegram-бот и MCP-сервер для Claude Desktop. См. README.md.
 """
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
