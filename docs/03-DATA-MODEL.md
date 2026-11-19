@@ -58,7 +58,7 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | kind | payload | источник |
 |---|---|---|
 | `day_materialized` | `date, day_type` | scheduler |
-| `task_created` | снимок задачи: `id, title, sphere, importance, difficulty, date, start, duration_min, deep_work, proof, source, tags` | человек, модель, scheduler |
+| `task_created` | снимок задачи: `id, title, sphere, importance, difficulty, date, start, duration_min, deep_work, proof, source, tags, project?` (id проекта, D43) | человек, модель, scheduler |
 | `task_started` | `id, at` | человек |
 | `task_completed` | `id, done_pct, report, proof_kind, deep_min[, focus_min, doubts]` — `focus_min` есть, когда таймер покрыл ≥ половины блока; `xp` — только в событиях до 0.6 | человек, модель |
 | `task_failed` | `id, reason, debt, hp` | человек, модель, scheduler (`no_report`) |
@@ -73,6 +73,13 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `lesson_started` | `task_id, topic, subject, roadmap_node, minutes, plan[], sources[], questions[], note, fallback` — учебный блок подготовлен ([06-LEARNING.md §8](06-LEARNING.md#8-учебный-блок-в-telegram-)) | код + модель |
 | `lesson_checked` | `task_id, score_pct (null — голова недоступна), answers, gaps[], next_step` — проверка в конце блока; `State.lessons` | код + модель |
 | `expense_logged` | `amount, currency, category, impulse, note` | человек, модель |
+| `project_set` | `id, title, why, kind (подсказка или своё слово), purposes[], expectation, deadline, weekly_min, goal_id, order, weeks, status, skills[], link, repo, by, reason?` — проект целиком (правка — новое событие); свёртка добавляет `started`, `closed` (D43, D44) | человек, модель, L2 (роадмап) |
+| `milestone_set` | `id, project_id, title, dod, due, status (open·done·dropped), order`; свёртка ставит `done_date` | человек, модель |
+| `project_logged` | `project_id, kind (update·decision·lesson·blocker·release·feedback), text, minutes` — журнал проекта | человек, модель |
+| `project_money` | `project_id, amount, direction, …` — касса проекта 0.7; с D44 не пишется и не показывается, старые события в журнале | — |
+| `channel_set` | `id, project_id, name, type (free·barter·paid), hypothesis, reach, leads, clients, status (test·works·dropped), note` — итоги накопленно (старые `cost`, `revenue` не читаются) | человек, модель |
+| `resource_set` | `id, project_id, title, url, kind (source·doc·course·video·tool·repo·design·note·chat·other), note, status (active·removed), by` — источник или инструмент проекта | человек, модель, L2 |
+| `repo_activity` | `project_id, repo, commits[{sha, message, at, date, url}], meta{pushed_at, stars, issues, language, …}` — только новое из GitHub; коммит = движение | L0 (`github.sync`) |
 | `social_contact` | `who` | человек, модель |
 | `reason_declared` | `reason` — причина плохого дня: важное, не сделанное в этот день, не уходит в долг | человек, модель |
 | `silent_day` | `date` | человек, scheduler |

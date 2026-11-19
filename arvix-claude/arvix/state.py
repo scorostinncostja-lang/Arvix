@@ -43,6 +43,7 @@ class Task:
     debt_since: date | None = None
     reason: str | None = None
     focus_min: int = 0  # фокус-сессии по этой задаче (таймер): при закрытии — глубокие минуты и подтверждение «таймер»
+    project: str | None = None  # id проекта (D43): минуты задачи идут во время проекта
 
     @property
     def is_open(self) -> bool:
@@ -93,6 +94,15 @@ class State:
     safety: list[dict[str, Any]] = field(default_factory=list)
     notes: dict[str, str] = field(default_factory=dict)  # заметки Арвикса: путь → хэш последней записи
     budget: dict[str, Any] = field(default_factory=dict)
+    # Проекты (D43, arvix/projects.py): карточки, этапы, журнал, деньги, каналы привлечения.
+    projects: dict[str, dict[str, Any]] = field(default_factory=dict)
+    milestones: dict[str, dict[str, Any]] = field(default_factory=dict)
+    project_log: list[dict[str, Any]] = field(default_factory=list)
+    project_money: list[dict[str, Any]] = field(default_factory=list)
+    channels: dict[str, dict[str, Any]] = field(default_factory=dict)
+    resources: dict[str, dict[str, Any]] = field(default_factory=dict)  # источники и инструменты проектов (D44)
+    repos: dict[str, dict[str, Any]] = field(default_factory=dict)  # проект → последнее, что видели в GitHub
+    commits: dict[str, dict[str, Any]] = field(default_factory=dict)  # sha → коммит проекта: движение без слов
     last_user_at: str | None = None
     last_event_id: int = 0
     first_date: date | None = None
@@ -175,6 +185,7 @@ class State:
             proof=p["proof"],
             source=p.get("source") or ev.source,
             tags=tuple(p.get("tags") or ()),
+            project=p.get("project"),
         )
 
     def _on_task_started(self, ev: Event, p: dict, day: Day) -> None:
@@ -312,6 +323,44 @@ class State:
 
     def _on_budget_set(self, ev: Event, p: dict, day: Day) -> None:
         self.budget = {**p, "since": ev.local_date.isoformat()}
+
+    def _on_project_set(self, ev: Event, p: dict, day: Day) -> None:
+        old = self.projects.get(p["id"], {})
+        project = {**p, "started": old.get("started") or ev.local_date.isoformat(), "updated": ev.local_date.isoformat()}
+        if p.get("status") != old.get("status") and p.get("status") in ("done", "dropped"):
+            project["closed"] = ev.local_date.isoformat()
+        elif p.get("status") not in ("done", "dropped"):
+            project.pop("closed", None)
+        if old.get("status") == "idea" and p.get("status") == "active":
+            project["started"] = ev.local_date.isoformat()  # идея начинается, когда её берут в работу
+        self.projects[p["id"]] = project
+
+    def _on_milestone_set(self, ev: Event, p: dict, day: Day) -> None:
+        old = self.milestones.get(p["id"], {})
+        item = {**p, "done_date": old.get("done_date")}
+        if p.get("status") == "done" and old.get("status") != "done":
+            item["done_date"] = ev.local_date.isoformat()
+        elif p.get("status") != "done":
+            item["done_date"] = None
+        self.milestones[p["id"]] = item
+
+    def _on_project_logged(self, ev: Event, p: dict, day: Day) -> None:
+        self.project_log.append({**p, "date": ev.local_date.isoformat(), "event_id": ev.id})
+
+    def _on_project_money(self, ev: Event, p: dict, day: Day) -> None:
+        self.project_money.append({**p, "date": ev.local_date.isoformat(), "event_id": ev.id})
+
+    def _on_channel_set(self, ev: Event, p: dict, day: Day) -> None:
+        self.channels[p["id"]] = {**p, "updated": ev.local_date.isoformat()}
+
+    def _on_resource_set(self, ev: Event, p: dict, day: Day) -> None:
+        self.resources[p["id"]] = {**p, "date": self.resources.get(p["id"], {}).get("date") or ev.local_date.isoformat()}
+
+    def _on_repo_activity(self, ev: Event, p: dict, day: Day) -> None:
+        # Коммиты — факт из GitHub: дата — день самого коммита (по местному времени), а не синхронизации.
+        self.repos[p["project_id"]] = {**(p.get("meta") or {}), "repo": p.get("repo"), "synced": ev.at.isoformat()}
+        for c in p.get("commits") or []:
+            self.commits.setdefault(c["sha"], {**c, "project_id": p["project_id"], "repo": p.get("repo")})
 
     def _on_day_closed(self, ev: Event, p: dict, day: Day) -> None:
         self.day(date.fromisoformat(p["date"])).closed = dict(p)

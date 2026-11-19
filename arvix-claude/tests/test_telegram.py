@@ -268,7 +268,7 @@ class InboxTest(BotCase):
         self.voice("abc")
         self.assertEqual(self.bot.stt.seen, [b"OGG:abc"])
         self.assertFalse(any(t.startswith("🎙") for t in self.api.texts), self.api.texts)
-        self.assertEqual(self.api.texts, ["Шесть часов — мало.\n\nсон 6ч00м"])  # одно сообщение, квитанция в конце (D43)
+        self.assertEqual(self.api.texts, ["Шесть часов — мало.\n\nсон 6ч00м"])  # одно сообщение, квитанция в конце (D45)
         self.assertEqual(self.brain.calls[-1]["prompt"], "спал шесть часов, лёг в час")
         self.assertEqual(self.core.state.days[self.core.today()].sleep_min, 360)
         heard = [e for e in self.core.store.read(0) if e.kind == "message_in"][-1]
@@ -326,7 +326,7 @@ class InboxTest(BotCase):
 
 
 class OneMessageTest(BotCase):
-    """Ответ головы — одно сообщение (D43): абзацы через пустую строку, квитанция — в конце, без id."""
+    """Ответ головы — одно сообщение (D45): абзацы через пустую строку, квитанция — в конце, без id."""
 
     def test_paragraphs_stay_in_one_readable_message(self) -> None:
         self.brain.answers.append({"reply": "Прогулка не засчитана: телефон был в кармане.\n\nПушкин завтра, ставлю на 19:30.\n\n\nСегодня 0 из 3.", "actions": []})
@@ -589,7 +589,7 @@ class LessonTest(BotCase):
         self.assertIn("проверка 67%", receipt)
         self.assertIn("В карточки и журнал ошибок: при удвоении R ток уменьшается вдвое", receipt)
         self.assertIn("📝 Заметка своими словами: 06_Feyn Concept/Закон Ома.md", receipt)
-        self.assertIn("Следующий блок: 5 задач №8", receipt)  # отзыв и квитанция — одним сообщением (D43)
+        self.assertIn("Следующий блок: 5 задач №8", receipt)  # отзыв и квитанция — одним сообщением (D45)
         self.assertIsNone(self.core.store.kv_get("lesson"))
         self.assertEqual(self.core.state.lessons[-1]["score"], 67)
         from arvix.context import build_context

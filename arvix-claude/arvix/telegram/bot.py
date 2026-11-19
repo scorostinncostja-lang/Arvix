@@ -3,7 +3,7 @@
 Порядок для текста: кнопка меню → safety-маркеры → ожидаемый ответ (отчёт, причина,
 разбор, интервью) → голова (L1). Кнопки и команды обрабатывает код без модели (L0).
 
-Ответ головы — одно сообщение (D43): абзацы через пустую строку, квитанция кода (что записано,
+Ответ головы — одно сообщение (D45): абзацы через пустую строку, квитанция кода (что записано,
 что отказано, сомнения) — в конце того же сообщения. Голосовое — отдельно и только если голова
 сочла, что это стоит послушать (voice_note), а не пересказ текста.
 Панель дня — одно закреплённое сообщение с кнопками, которое бот правит на месте.
@@ -170,7 +170,7 @@ _WORD = re.compile(r"\w{3,}")
 
 
 def voice_note_check(note: str, reply: str) -> str:
-    """Голосовое пропускается, только если оно не пересказ текста (D43). Пустая строка — не отправлять.
+    """Голосовое пропускается, только если оно не пересказ текста (D45). Пустая строка — не отправлять.
     Повтор — когда 70 % слов голосового уже есть в тексте ответа: озвучивать прочитанное незачем."""
     note = (note or "").strip()
     if not note or len(note) > VOICE_NOTE_MAX:
@@ -229,7 +229,7 @@ class Bot:
 
     def reply(self, text: str, receipt: str = "", *, keyboard: list[list[str]] | None = None, key: str | None = None,
               voice_note: str = "") -> None:
-        """Ответ головы — одним сообщением (D43): абзацы через пустую строку, предложения по строкам,
+        """Ответ головы — одним сообщением (D45): абзацы через пустую строку, предложения по строкам,
         квитанция кода — в конце того же сообщения. voice_note — отдельное короткое голосовое,
         только если голова сочла, что это стоит послушать, и код не нашёл в нём пересказа текста."""
         parts = [fmt.sentence_lines(text)] if text.strip() else []
@@ -553,6 +553,9 @@ class Bot:
                 self.on_lesson_button(task_id, op)
             elif kind == "r":
                 self.on_return_button(rest)
+            elif kind == "j":
+                project_id, _, op = rest.partition(":")
+                self.on_project_button(project_id, op)
         except ArvixError as exc:
             self.send(f"Отказ: {exc}")
 
@@ -1242,7 +1245,7 @@ class Bot:
     def converse(self, text: str, extra: str = "", *, voice: bool = False) -> None:
         core = self.core
         if voice and self.channel == "telegram":
-            # Голосовое в Telegram: ответ читают глазами (D43), а распознавание может путать слова.
+            # Голосовое в Telegram: ответ читают глазами (D45), а распознавание может путать слова.
             extra += ("\n<dictated>Человек надиктовал это голосом; распознавание могло исказить слова — понимай по смыслу. "
                       "Ответ он прочитает текстом: обычный ответ по правилам канала, не пересказ для слуха.</dictated>")
         elif voice:
@@ -1696,6 +1699,39 @@ class Bot:
             self.send("Ментор выключен safety-контуром — включить его можешь только ты сам: /mentor on")
             return
         self.send("Вернуть план? Мягко: без разгона, первым — самое короткое дело.", tpl.red_buttons(refresh=False))
+
+    def on_project_button(self, project_id: str, op: str) -> None:
+        """Кнопки напоминания о застое проекта (D43): блок в план или честная пауза — решает человек."""
+        from arvix import projects
+
+        project = projects.resolve(self.core, project_id)
+        if op in ("b30", "t60"):
+            task = projects.plan_block(self.core, project["id"], minutes=int(op[1:]), day="tomorrow" if op[0] == "t" else None,
+                                       source="telegram")
+            when = "завтра " if task.local_date > self.core.today() else ""
+            self.send(f"+ «{task.title}» — {when}{task.start}, {task.duration_min} мин. Напомню за 5 минут.")
+            self.refresh_panel()
+        elif op == "pause":
+            projects.set_project(self.core, project_id=project["id"], status="paused", source="telegram")
+            self.send(f"⏸ «{project['title']}» на паузе. Это решение, а не провал: вернуть — во вкладке «Проекты» или словами.")
+
+    def build_project_roadmap(self, goal_id: str) -> None:
+        """Роадмап проектов под цель (D44): совет в фоне — проекты ложатся идеями, ответ приходит сообщением."""
+        from arvix import project_roadmap
+
+        try:
+            result = project_roadmap.generate(self.core, self.brain, goal_id, system=self.analyst_system(""))
+        except ArvixError as exc:
+            self.send(f"Роадмап не собрался: {exc}")
+            return
+        text = f"🗺 Роадмап проектов к цели «{result['goal']['title']}»\n\n{clip(result['summary'], 900)}"
+        if result["created"]:
+            text += "\n\nДобавил идеями по порядку: " + " → ".join(result["created"]) + ". В работу берёшь сам — во вкладке «Проекты»."
+        else:
+            text += "\n\nНовых проектов не добавил: текущий роадмап уже ведёт к цели."
+        if result["path"]:
+            text += f"\n📝 {result['path']}"
+        self.send(text)
 
     def on_return_button(self, op: str) -> None:
         core = self.core

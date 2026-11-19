@@ -1,4 +1,4 @@
-"""Голос Арвикса (D34, D43): голосовое — только voice_note головы, не озвучка текста; озвучка в приложении."""
+"""Голос Арвикса (D34, D45): голосовое — только voice_note головы, не озвучка текста; озвучка в приложении."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ class VoiceReplyTest(BotCase):
         self.bot.tts = FakeTTS()
 
     def test_voice_message_gets_text_only_not_its_own_reading(self) -> None:
-        """D43: озвучка того же текста — дубль. На голосовое — текст; голосовое — только voice_note."""
+        """D45: озвучка того же текста — дубль. На голосовое — текст; голосовое — только voice_note."""
         self.brain.answers.append({"reply": "Двигаешься. Три темы за неделю закрыл. Что мешает в остальном?", "actions": []})
         self.voice()
         self.assertIn("<dictated>", self.brain.calls[-1]["system"])

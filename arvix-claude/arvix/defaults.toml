@@ -9,7 +9,7 @@ home = "~/Arvix"      # папка, где Claude Code запускается в
 [telegram]
 token = ""
 owner_id = 0
-# Ответ головы — одним сообщением (D43); прежние bubble_* больше не читаются.
+# Ответ головы — одним сообщением (D45); прежние bubble_* больше не читаются.
 
 # Где в хранилище живут файлы Арвикса. Пути — от корня хранилища.
 # Чужие заметки Арвикс только дополняет; перезаписывает лишь свои и нетронутые.
@@ -23,6 +23,7 @@ inbox = "05_System/Inbox.md"
 system = "05_System/Арвикс"         # журнал, инсайты, бэкапы
 daily = ""                          # пусто — папка ежедневных заметок из настроек Obsidian
 daily_template = ""                 # пусто — шаблон из настроек Obsidian
+projects = "01_Projects"            # карточки проектов (портфолио) — блоком Арвикса в заметке проекта
 
 [schedule]
 brief = "auto"          # auto = время подъёма из профиля + 15 мин
@@ -87,6 +88,13 @@ tools = []                    # что ещё есть у человека, кр
 concept_dir = ""              # папка для каркасов заметок; пусто — папка с «concept» в названии или [vault_paths] notes
 concept_template = ""         # шаблон заметки; пусто — Templates/Concept.md из хранилища, если есть
 
+[projects]                    # проекты (D43, 02-MECHANICS §14)
+max_active = 3                # в работе одновременно; остальное — идеи и пауза
+
+[github]                      # проекты ↔ GitHub (D44): коммиты привязанного репозитория — движение проекта
+user = ""                     # ник; обычно задаётся из приложения («Из GitHub») и живёт в профиле
+token = ""                    # только для приватных репозиториев: fine-grained, Contents: read. Только здесь, не в чате
+
 [mechanics]
 sleep_target_min = 450        # 7.5 ч, 02-MECHANICS §5
 deep_target_min = 120         # глубокая работа в день
@@ -99,9 +107,9 @@ social = 2
 novelty = 1
 offscreen = 3
 
-[tts]                   # голос Арвикса (D34, D36, D43): голосовое — только когда стоит послушать; голос в звонке
+[tts]                   # голос Арвикса (D34, D36, D45): голосовое — только когда стоит послушать; голос в звонке
 engine = "off"          # "gemini" — arvix setup --tts gemini (ключ AI Studio); "command" — своя команда (Piper)
 voice = "Charon"        # мужские голоса Gemini: Charon, Orus, Iapetus, Algieba, Sadaltager, Puck, Fenrir…
 command = ""
-voice_replies = true    # голосовые в Telegram (voice_note головы, D43); false — только текст
+voice_replies = true    # голосовые в Telegram (voice_note головы, D45); false — только текст
 voice_notes_per_day = 3 # не больше стольких голосовых в сутки

@@ -130,6 +130,29 @@ TOOLS: dict[str, dict[str, Any]] = {
         "description": "Режимы: status, sos_on / sos_off (ручной 🟥 на 24 ч), resume (человек сам сказал, что отдохнул и возвращается после 🟥: до утра режим не выше 🟨), silent (тихий день сегодня), safety_flag (признаки настоящей беды, level high|critical — выключает ментора до ручного включения человеком; контакт поддержки или «бывает тяжело» — не сюда, а в profile remember).",
         "inputSchema": _obj({"action": _enum("status", "sos_on", "sos_off", "resume", "silent", "safety_flag"), "note": STR, "level": STR}, ["action"]),
     },
+    "project": {
+        "description": (
+            "Проекты (D43, D44): list (активные с цифрами кода и ⚠️), roadmap (проекты по целям в порядке), show (project — "
+            "карточка, этапы, журнал, источники, каналы, коммиты), set (новый: title, why и/или purposes, kind — любой тип "
+            "словами, expectation, deadline, weekly_min, skills, goal_id, order — место в роадмапе цели, repo owner/name; "
+            "правка: project + поля; status idea|active|paused|done|dropped, done/dropped — с итогом в reason; в работе не больше 3), "
+            "milestone (этап: project, title, dod — критерий обязателен, deadline; отметить: milestone + status done), "
+            "block (блок в план в свободное окно: project, duration_min, date, start), log (журнал: project, text, "
+            "kind update|decision|lesson|blocker|release|feedback|idea, minutes), resource (источник или инструмент: project, "
+            "title, url — только настоящая, kind), channel (канал привлечения людей: project, title, kind free|barter|paid, "
+            "hypothesis; итоги: channel + reach, leads, clients накопленно, status test|works|dropped), "
+            "export (карточка портфолио в 01_Projects). Денег у проекта нет (D44). Код за человека не пишешь."
+        ),
+        "inputSchema": _obj({
+            "action": _enum("list", "roadmap", "show", "set", "milestone", "block", "log", "resource", "channel", "export"),
+            "project": {**STR, "description": "id проекта или часть названия"}, "milestone": STR, "channel": STR,
+            "title": STR, "why": STR, "kind": STR, "expectation": STR, "deadline": STR, "weekly_min": INT,
+            "skills": {"type": "array", "items": STR}, "link": STR, "goal_id": STR, "status": STR, "reason": STR,
+            "dod": STR, "duration_min": INT, "date": STR, "start": STR, "text": STR, "minutes": INT,
+            "purposes": {"type": "array", "items": STR}, "repo": STR, "order": INT, "url": STR, "hypothesis": STR,
+            "reach": INT, "leads": INT, "clients": INT,
+        }, ["action"]),
+    },
     "export": {
         "description": "Полный экспорт в Obsidian по местам из notes paths: профиль, выводы, журнал событий, итоги в ежедневных отчётах (только в блоках Арвикса).",
         "inputSchema": _obj({"days": INT}),
@@ -401,10 +424,33 @@ def t_export(core: Core, a: dict[str, Any]) -> str:
     return "Экспортировано:\n" + "\n".join(f"  {p}" for p in written)
 
 
+def t_project(core: Core, a: dict[str, Any]) -> str:
+    from arvix import brain, projects
+
+    action = a["action"]
+    if action == "list":
+        lines = projects.context_lines(core)
+        return "ПРОЕКТЫ:\n" + "\n".join(lines) if lines else "Проектов нет. Новый: action=set, title, why, expectation, deadline."
+    if action == "roadmap":
+        return projects.roadmap_text(core)
+    if action == "show":
+        p = projects.resolve(core, a.get("project"))
+        found = projects.issues(core, p)
+        return projects.portfolio_md(core, p) + _doubts(found)
+    if action == "export":
+        return f"Карточка проекта записана блоком Арвикса: {projects.export_note(core, a.get('project'))}"
+    kind = {"set": "set_project", "milestone": "set_milestone", "block": "plan_project", "log": "project_log",
+            "resource": "project_resource", "channel": "project_channel"}.get(action)
+    if kind is None:
+        raise ArvixError(f"Неизвестное действие {action}")
+    line, warnings = brain._project_action(core, kind, a, "claude")
+    return line + _doubts(warnings)
+
+
 HANDLERS: dict[str, Callable[[Core, dict[str, Any]], str]] = {
     "context": t_context, "day": t_day, "task": t_task, "log": t_log, "profile": t_profile,
     "interview": t_interview, "check_request": t_check_request, "debrief": t_debrief,
-    "analyst": t_analyst, "notes": t_notes, "mode": t_mode, "export": t_export,
+    "analyst": t_analyst, "notes": t_notes, "mode": t_mode, "export": t_export, "project": t_project,
 }
 
 

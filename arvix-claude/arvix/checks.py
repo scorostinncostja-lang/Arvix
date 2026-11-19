@@ -106,8 +106,12 @@ def task_issues(task: Any, others: list[Any], busy: list[dict[str, Any]], bedtim
         if start < b_end and b_start < end:
             issues.append(f"попадает на обязательное «{block['title']}» {block['start']}–{_hm(b_end)}")
     if bedtime:
-        gap = rules.minutes_after(_hm(end), bedtime)
-        if gap is not None and gap < 60:
+        # Отбой до полудня — это ночь после этого дня; конец задачи — тот же день, и только конец
+        # до 05:00 — уже после полуночи. Раньше утренняя задача (конец 10:00) считалась «завтрашней»
+        # и всегда получала «меньше часа до отбоя».
+        bed = _min(bedtime) + (1440 if _min(bedtime) < 720 else 0)
+        finish = end + (1440 if end < 300 else 0)
+        if bed - finish < 60:
             issues.append(f"заканчивается в {_hm(end)} — меньше часа до отбоя {bedtime}")
     if task.duration_min > MAX_BLOCK_MIN:
         issues.append(f"{task.duration_min} мин подряд — разбей на блоки по 60–120 мин")

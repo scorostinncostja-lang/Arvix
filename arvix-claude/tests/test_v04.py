@@ -354,6 +354,26 @@ class ServerTest(BotCase):
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read() or b"{}")
 
+    def test_keep_alive_posts_do_not_share_a_body(self) -> None:
+        """Браузер шлёт запросы по одному соединению: второй POST не должен получить тело первого,
+        а следующий GET — споткнуться о непрочитанное тело (501)."""
+        import http.client
+
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.app.token}"}
+        titles = []
+        for title in ("Первый проект", "Второй проект"):
+            conn.request("POST", "/api/projects", json.dumps({"title": title, "why": "проверка", "status": "idea"}), headers)
+            response = conn.getresponse()
+            titles.append(json.loads(response.read())["project"]["title"])
+        conn.request("GET", "/api/projects", headers=headers)
+        response = conn.getresponse()
+        body = json.loads(response.read())
+        conn.close()
+        self.assertEqual(titles, ["Первый проект", "Второй проект"])
+        self.assertEqual(response.status, 200)
+        self.assertEqual(sorted(p["title"] for p in body["projects"]), ["Второй проект", "Первый проект"])
+
     def test_api_requires_login(self) -> None:
         status, body = self.call("/api/state", token=None)
         self.assertEqual(status, 401)
