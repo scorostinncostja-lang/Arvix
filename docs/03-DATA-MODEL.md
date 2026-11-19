@@ -108,11 +108,17 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 |---|---|---|
 | `directive_created` | `id, kind (focus·warning·schedule_change·insight·quota_push), text, voice_hint, priority 1–5, evidence[id…] ≥ 1, valid_until, created_by` | l2, модель |
 | `insight` | `text, evidence[]` | l2, модель |
-| `message_in` | `text, channel` | telegram |
-| `message_out` | `text ≤ 600, key, channel` — `key` дедуплицирует проактив (`brief:<дата>`, `rem5:<id>:<start>`, `debrief:<дата>`…) | bot |
+| `message_in` | `text, channel, [project], [reply_to], [tg_id]` | telegram, web |
+| `message_out` | `text, key, channel, [buttons], [project], [reply_to], [tg_id]` — `key` дедуплицирует проактив (`brief:<дата>`, `rem5:<id>:<start>`, `debrief:<дата>`…) | bot |
+| `message_reacted` | `message (id message_out), emoji, channel` — реакция человека; пустой `emoji` — снята. Одна на сообщение (D52) | telegram, web |
+| `messages_read` | `upto, channel` — лента в приложении долистана до сообщения `upto`; только вперёд. Источник `seen` — не действие человека для протокола игнора | seen |
 
 Переписка (`message_in`, `message_out`) хранится целиком, до 16 000 символов (D25); `channel` — `telegram`, `web` или
-`terminal`; у `message_out` бывают `buttons` — приложение показывает те же кнопки. Производные данные вне журнала:
+`terminal`; у `message_out` бывают `buttons` — приложение показывает те же кнопки. Ответ на сообщение (D52):
+`reply_to` — id события-сообщения, на которое это ответ цитатой; `tg_id` — номер сообщения в Telegram, по нему
+находится цитата человека и туда же Арвикс отвечает цитатой (`Core.message`, `Core.message_by_tg`). «В сети» —
+не событие: пульс приложения раз в 30 с пишется в runtime-ключ `presence {seen, since}` (`Core.presence_ping`):
+история «был в сети» никому не нужна, а 2880 событий в сутки засорили бы журнал. Производные данные вне журнала:
 FTS5-индекс `memory_fts` (поиск по памяти) и в runtime-таблице — ключ приложения `web_token`, кэш погоды, отметки
 `dialog_day`, `last_in_at`, `curiosity_tried`. Ни задач, ни режима в них нет.
 
@@ -124,6 +130,7 @@ insights[]           templates{weekday→{day_type, blocks}}                 tas
 days{date→Day}       interview{qid→answer}  interview_skipped{}
 xp_total  hp  mode  mode_trigger  mentor_enabled  sos_until  zero_until
 shields[dates]  expenses[]  learning[]  safety[]  penalized{once_key}  notes{path→sha}  budget{}
+reactions{message_id→{emoji, at, channel}}  read_upto  read_at
 last_user_at  last_event_id  first_date
 ```
 

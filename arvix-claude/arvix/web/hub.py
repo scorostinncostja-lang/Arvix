@@ -18,9 +18,10 @@ log = logging.getLogger("arvix.hub")
 
 
 class Job:
-    def __init__(self, fn: Callable[[Any], Any], label: str = "") -> None:
+    def __init__(self, fn: Callable[[Any], Any], label: str = "", chat: bool = False) -> None:
         self.fn = fn
         self.label = label
+        self.chat = chat  # новое сообщение человека: пока оно ждёт, ответ на прежнее идёт цитатой (D52)
         self.done = threading.Event()
         self.result: Any = None
         self.error: BaseException | None = None
@@ -31,10 +32,15 @@ class Hub:
         self.jobs: queue.Queue[Job] = queue.Queue()
         self.busy = ""  # что сейчас делает главный поток: «думаю» для приложения
 
-    def post(self, fn: Callable[[Any], Any], label: str = "") -> Job:
-        job = Job(fn, label)
+    def post(self, fn: Callable[[Any], Any], label: str = "", *, chat: bool = False) -> Job:
+        job = Job(fn, label, chat)
         self.jobs.put(job)
         return job
+
+    def chat_waiting(self) -> bool:
+        """В очереди есть ещё сообщение человека — он написал, пока Арвикс думал над прошлым."""
+        with self.jobs.mutex:
+            return any(job.chat for job in self.jobs.queue)
 
     def call(self, fn: Callable[[Any], Any], timeout: float = 30, label: str = "") -> Any:
         """Выполнить в главном потоке и вернуть результат (или поднять его ошибку)."""

@@ -114,6 +114,15 @@ class Store:
             for row in rows
         ]
 
+    def event(self, event_id: int) -> Event | None:
+        """Одно событие по id — цитата в ответе на сообщение (D52)."""
+        row = self._conn.execute(
+            "SELECT id, at, local_date, kind, entity_id, payload, source FROM events WHERE id = ?", (int(event_id),)
+        ).fetchone()
+        if not row:
+            return None
+        return Event(row[0], datetime.fromisoformat(row[1]), date.fromisoformat(row[2]), row[3], row[4], json.loads(row[5]), row[6])
+
     def kv_get(self, key: str, default: Any = None) -> Any:
         row = self._conn.execute("SELECT value FROM runtime WHERE key = ?", (key,)).fetchone()
         return json.loads(row[0]) if row else default

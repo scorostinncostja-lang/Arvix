@@ -52,6 +52,12 @@ STREAM_EVERY = 1.0
 STREAM_PING = 15.0
 
 
+def reply_id(value: object) -> int | None:
+    """id сообщения, на которое ответ (D52): из JSON или заголовка X-Reply-To; мусор — без ответа."""
+    text = str(value if value is not None else "").strip()
+    return int(text) if text.isdigit() and int(text) > 0 else None
+
+
 class WebApp:
     """Всё, что нужно обработчику: Core только для чтения (под замком), очередь, ключи."""
 
@@ -160,10 +166,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             query = dict(urllib.parse.parse_qsl(url.query))
             try:
                 if url.path == "/api/state":
-                    from arvix.tts import TTS
-
-                    self.send_json(app.read(lambda c: api.state_view(c, thinking=app.hub.busy))
-                                   | {"app_version": __version__, "server_tts": TTS(app.cfg).enabled})
+                    self.send_json(app.read(lambda c: api.state_view(c, thinking=app.hub.busy)) | {"app_version": __version__})
                 elif url.path == "/api/messages":
                     before = int(query["before"]) if query.get("before") else None
                     self.send_json({"messages": app.read(lambda c: api.messages_view(c, before=before)), "thinking": app.hub.busy})
@@ -221,10 +224,11 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             parts = [p for p in url.path.split("/") if p][1:]  # без «api»
             try:
                 if parts == ["message"]:
-                    text = str(self.body_json().get("text") or "").strip()
+                    body = self.body_json()
+                    text = str(body.get("text") or "").strip()
                     if not text:
                         raise ArvixError("Пустое сообщение")
-                    app.hub.post(api.chat(text[:16000]), label="думаю")
+                    app.hub.post(api.chat(text[:16000], reply_to=reply_id(body.get("reply_to"))), label="думаю", chat=True)
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif parts == ["voice"]:
                     audio = self.body_bytes()
@@ -232,7 +236,8 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                         raise ArvixError("Пустая запись")
                     kind = (self.headers.get("Content-Type") or "audio/webm").split(";")[0]
                     ext = {"audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav"}.get(kind, "webm")
-                    app.hub.post(api.voice(audio, f"voice.{ext}"), label="слушаю")
+                    app.hub.post(api.voice(audio, f"voice.{ext}", reply_to=reply_id(self.headers.get("X-Reply-To"))),
+                                 label="слушаю", chat=True)
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif parts == ["upload"]:
                     data = self.body_bytes()
@@ -241,26 +246,20 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     name = urllib.parse.unquote(self.headers.get("X-File-Name") or "файл")
                     caption = urllib.parse.unquote(self.headers.get("X-Caption") or "").strip()[:4000]
                     kind = (self.headers.get("Content-Type") or "").split(";")[0]
-                    app.hub.post(api.upload(data, name, kind, caption), label="смотрю файл")
+                    app.hub.post(api.upload(data, name, kind, caption, reply_to=reply_id(self.headers.get("X-Reply-To"))),
+                                 label="смотрю файл", chat=True)
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
-                elif parts == ["tts"]:
-                    from arvix.tts import TTS, TTSError
-
-                    text = str(self.body_json().get("text") or "").strip()
-                    tts = TTS(app.cfg)
-                    if not tts.enabled:
-                        self.fail(HTTPStatus.NOT_FOUND, "Озвучка на сервере выключена — говорит голос телефона")
-                        return
-                    try:
-                        audio = tts.synth(text)
-                    except TTSError as exc:
-                        raise ArvixError(str(exc)) from exc
-                    self.send_response(200)
-                    self.send_header("Content-Type", "audio/ogg")
-                    self.send_header("Content-Length", str(len(audio)))
-                    self.send_header("Cache-Control", "no-store")
-                    self.end_headers()
-                    self.wfile.write(audio)
+                elif parts == ["react"]:
+                    body = self.body_json()
+                    message, emoji = reply_id(body.get("message")), str(body.get("emoji") or "")
+                    if not message:
+                        raise ArvixError("Нет сообщения")
+                    job = api.react(message, emoji)  # неизвестная реакция — 400 сразу, не в очереди
+                    app.hub.post(job, label="думаю" if Core.reaction_key(emoji) in Core.CONFUSED else "")
+                    self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
+                elif parts == ["seen"]:
+                    app.hub.post(api.seen(reply_id(self.body_json().get("upto"))))
+                    self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif parts == ["button"]:
                     data = str(self.body_json().get("data") or "")
                     app.hub.post(api.button(data), label="думаю")
@@ -290,7 +289,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     text = str(self.body_json().get("text") or "").strip()
                     if not text:
                         raise ArvixError("Пустое сообщение")
-                    app.hub.post(api.project_chat(parts[1], text[:16000]), label="думаю")
+                    app.hub.post(api.project_chat(parts[1], text[:16000]), label="думаю", chat=True)
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif len(parts) == 3 and parts[0] == "projects" and parts[2] == "upload":
                     data = self.body_bytes()

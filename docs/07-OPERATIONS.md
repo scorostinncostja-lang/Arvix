@@ -190,7 +190,7 @@ ssh -t arvix@HOST '~/.local/bin/arvix setup --stt command --yes && systemctl --u
 ```
 `base` быстрее, `small` точнее по-русски и медленнее в 2–3 раза.
 
-**Голос Арвикса (голосовые по делу в Telegram — D46, звонок в приложении — D36)** — Gemini TTS, бесплатный тариф Google AI Studio:
+**Голос Арвикса (голосовые по делу в Telegram — D46; звонка в приложении больше нет — D52)** — Gemini TTS, бесплатный тариф Google AI Studio:
 1. Ключ: aistudio.google.com → Get API key → Create API key (из России — через VPN; сам сервер ходит в Google из Финляндии).
 2. На сервере (ключ — скрытым вводом, в чат не попадает):
 ```bash
@@ -199,12 +199,12 @@ ssh -t arvix@HOST '~/.local/bin/arvix setup --tts gemini --yes'
 Команда сразу пробует голос («Голос работает: Gemini · Charon, … за N с») и перезапускает бота. Другой мужской голос —
 `--voice Orus` (`Iapetus`, `Algieba`, `Sadaltager`, `Puck`, `Fenrir`…); модель — `[roles.tts] model`
 (`gemini-3.8-flash-tts`, экономнее — `gemini-3.8-flash-lite-tts`). Лимиты бесплатного тарифа Google не публикует — смотреть
-в aistudio.google.com/rate-limit; при исчерпании (HTTP 429, сброс в полночь по тихоокеанскому, ~11:00 МСК) звонок говорит
-голосом телефона, в Telegram — текст. Текст ответов уходит в Google; на бесплатном тарифе Google может использовать его
+в aistudio.google.com/rate-limit; при исчерпании (HTTP 429, сброс в полночь по тихоокеанскому, ~11:00 МСК) в Telegram
+вместо голосового остаётся текст. Текст ответов уходит в Google; на бесплатном тарифе Google может использовать его
 для улучшения своих продуктов.
 
 Локально и без сети — Piper (`deploy/tts-local.sh irina`): голос механический; как запасной —
-`[tts] fallback_command`. Без голоса сервера звонок говорит голосом телефона.
+`[tts] fallback_command`.
 
 Голосовые в Telegram — только когда голова сочла, что это стоит послушать, не больше `[tts] voice_notes_per_day = 3` в сутки;
 `[tts] voice_replies = false` — только текст. Ответ на голосовое человека — всегда текстом, без озвучки того же текста (D46).

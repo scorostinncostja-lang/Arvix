@@ -23,11 +23,14 @@ class FakeAPI:
         self.unpinned: list[int] = []
         self.typing_calls = 0
         self.html: list[str | None] = []
+        self.replies: list[int | None] = []  # reply_to каждого отправленного (D52)
 
-    def send(self, chat_id: int, text: str, buttons: Any = None, keyboard: Any = None, *, html: str | None = None) -> int:
+    def send(self, chat_id: int, text: str, buttons: Any = None, keyboard: Any = None, *, html: str | None = None,
+             reply_to: int | None = None) -> int:
         assert chat_id == OWNER
         self.sent.append((text, buttons))
         self.html.append(html)
+        self.replies.append(reply_to)
         if keyboard:
             self.keyboards.append(keyboard)
         return len(self.sent)  # message_id

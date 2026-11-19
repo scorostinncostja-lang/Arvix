@@ -108,6 +108,10 @@ class State:
     learn_items: dict[str, dict[str, Any]] = field(default_factory=dict)  # «учиться»: очередь тем для проектов и вкладки «Обучение» (D47)
     repos: dict[str, dict[str, Any]] = field(default_factory=dict)  # проект → последнее, что видели в GitHub
     commits: dict[str, dict[str, Any]] = field(default_factory=dict)  # sha → коммит проекта: движение без слов
+    # Как в мессенджере (D52): реакция человека на сообщение (id события → эмодзи) и до какого сообщения он прочитал
+    reactions: dict[int, dict[str, Any]] = field(default_factory=dict)
+    read_upto: int = 0
+    read_at: str | None = None
     last_user_at: str | None = None
     last_event_id: int = 0
     first_date: date | None = None
@@ -294,6 +298,18 @@ class State:
         day.msgs_out += 1
         if p.get("key"):
             day.out_keys.add(p["key"])
+
+    def _on_message_reacted(self, ev: Event, p: dict, day: Day) -> None:
+        target = int(p.get("message") or 0)
+        if p.get("emoji"):
+            self.reactions[target] = {"emoji": p["emoji"], "at": ev.at.isoformat(), "channel": p.get("channel")}
+        else:
+            self.reactions.pop(target, None)  # реакцию сняли
+
+    def _on_messages_read(self, ev: Event, p: dict, day: Day) -> None:
+        if int(p.get("upto") or 0) > self.read_upto:
+            self.read_upto = int(p["upto"])
+            self.read_at = ev.at.isoformat()
 
     def _on_learning_question(self, ev: Event, p: dict, day: Day) -> None:
         self.learning.append({**p, "date": ev.local_date.isoformat()})
