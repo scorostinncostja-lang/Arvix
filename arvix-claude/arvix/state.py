@@ -19,7 +19,8 @@ from arvix import rules
 from arvix.store import Event
 
 # Источники, которые означают «человек что-то сделал сам» (для протокола игнора).
-USER_SOURCES = frozenset({"telegram", "claude", "cli", "user"})
+# web — приложение (D51): тот же человек, что в Telegram; без него «молчал» тот, кто пишет только в приложении
+USER_SOURCES = frozenset({"telegram", "web", "claude", "cli", "user"})
 
 
 @dataclass
@@ -133,7 +134,7 @@ class State:
         if ev.source in USER_SOURCES:
             day.user_actions += 1
             self.last_user_at = ev.at.isoformat()
-        if ev.source in USER_SOURCES or ev.source == "web":
+        if ev.source in USER_SOURCES:
             day.user_times.append(f"{ev.at.hour:02d}:{ev.at.minute:02d}")
         handler = getattr(self, f"_on_{ev.kind}", None)
         if handler is not None:
