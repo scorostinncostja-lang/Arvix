@@ -25,8 +25,7 @@ class FocusControlTest(BotCase):
         self.press("f:go:45")
         self.at(moscow(2026, 11, 2, 16, 5))   # 10 мин работы
         self.press("f:pause")
-        self.assertIn("пауза", self.api.edited[-1][1])
-        self.assertEqual(self.api.edited[-1][2][0][0], ("▶ Продолжить", "f:resume"))
+        self.assertTrue(self.core.store.kv_get("focus")["paused_at"])  # пульта в Telegram нет (D50) — только состояние
         self.at(moscow(2026, 11, 2, 16, 15))  # 10 мин паузы
         self.press("f:resume")
         self.assertEqual(self.core.store.kv_get("focus")["until"][11:16], "16:50")  # конец сдвинулся на паузу
@@ -43,7 +42,7 @@ class FocusControlTest(BotCase):
         self.scheduler.tick()
         self.assertIsNone(self.core.store.kv_get("focus"))
         self.assertEqual(self.sessions()[-1]["minutes"], 8)
-        self.assertTrue(any(f"Пауза дольше {tpl.FOCUS_MAX_PAUSE_MIN} минут" in t for t in self.api.texts))
+        self.assertFalse(any("Пауза дольше" in t for t in self.api.texts))  # молча (D50)
 
     def test_cancel_records_nothing(self) -> None:
         """Случайно нажал «фокус» — отмена без следов: ни сессии, ни глубокой работы."""
@@ -61,8 +60,7 @@ class FocusControlTest(BotCase):
         self.assertEqual((state["task_id"], state["topic"]), (None, "физика"))
         self.assertIn("· физика", self.api.sent[-1][0])
         self.at(moscow(2026, 11, 2, 16, 26))
-        self.scheduler.tick()
-        self.press("f:ok:30")
+        self.scheduler.tick()  # таймер дошёл — сессия записана сама, без «Без прерываний?» (D50)
         self.assertEqual(self.sessions()[-1]["topic"], "физика")
         self.assertEqual(self.core.state.days[self.core.today()].deep_min, 30)
 

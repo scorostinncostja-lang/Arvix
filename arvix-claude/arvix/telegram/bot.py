@@ -40,7 +40,7 @@ from arvix.brain import (
     mode_shift,
 )
 from arvix.context import build_context, end_time, hm, task_line
-from arvix.core import ArvixError, Core, parse_sleep_text
+from arvix.core import ArvixError, Core, is_goodnight, parse_sleep_text
 from arvix.prompt import constitution, voice_prompt
 from arvix.stt import STT, STTError
 from arvix.tts import TTS, TTSError
@@ -295,7 +295,7 @@ class Bot:
         if media := msg.get("voice") or msg.get("audio"):
             self.on_voice(media, sent_at=msg.get("date"))
         elif msg.get("photo") and (self.await_get() or {}).get("kind") == "report":
-            self.on_photo(text)  # ждём отчёт — фото и есть отчёт
+            self.on_photo(text, self.file_media(msg))  # ждём отчёт — фото и есть отчёт
         elif media := self.file_media(msg):
             self.on_file(media, caption=text)
         elif text in tpl.MENU:
@@ -316,6 +316,8 @@ class Bot:
         if safety.detect(text):
             self.safety_protocol(text)
             return
+        if is_goodnight(text) and self.core.is_night():
+            self.core.note_bedtime(source="telegram")  # отбой пишет код (D48); пожелать спокойной ночи — дело головы
         waiting = self.await_get()
         if waiting and sent_at and sent_at < waiting.get("asked_at", 0):
             if text == previous:
@@ -431,7 +433,9 @@ class Bot:
             self.send(f"Подъём {wake}. Во сколько уснул?" if wake else f"Отбой {bed}. Во сколько встал?")
             return
         self.await_clear()
-        result = self.core.log_sleep(parsed["duration"], bedtime=bed, wake=wake, source="telegram")
+        self.sleep_logged(self.core.log_sleep(parsed["duration"], bedtime=bed, wake=wake, source="telegram"))
+
+    def sleep_logged(self, result: dict[str, Any]) -> None:
         self.send(tpl.sleep_logged(result) + tpl.warn(result["warnings"]))
         if result["mode_before"] == "red" and result["mode"] != "red":
             self.send_panel(pin=True, hint="Возвращаемся без разгона: первым — самое короткое дело.")
@@ -481,12 +485,20 @@ class Bot:
             return
         self.converse(ask, extra=files.attachment_block(self.core, [info]))
 
-    def on_photo(self, caption: str) -> None:
+    def on_photo(self, caption: str, media: dict[str, Any] | None = None) -> None:
         self.log_in(f"[фото] {caption}")
         waiting = self.await_get()
         if waiting and waiting.get("kind") == "report":
             self.await_clear()
-            result = self.core.complete_task(waiting["task"], report=caption or "фото-отчёт", proof_kind="photo", source="telegram")
+            photos = []
+            if media:  # само фото — в хранилище (D49): раньше записывалась только подпись
+                try:
+                    photos.append(self.core.receive_report_photo(self.api.download(media["file_id"]), media.get("file_name") or "фото.jpg",
+                                                                 "image/jpeg", source="telegram"))
+                except (TelegramError, ArvixError, KeyError) as exc:
+                    log.info("фото отчёта не сохранено: %s", exc)
+            result = self.core.complete_task(waiting["task"], report=caption or "фото-отчёт", proof_kind="photo", photos=photos,
+                                             source="telegram")
             self.send(tpl.completed(result["task"].title, result["debt_closed"]) + tpl.warn(result["warnings"]))
             self.refresh_panel()
         else:
@@ -497,8 +509,8 @@ class Bot:
     def on_menu(self, action: str) -> None:
         """Кнопки под полем ввода — то, что в приложении-трекере было бы экранами."""
         try:
-            if action == "day":
-                self.send_panel(pin=True)
+            if action == "day":  # кнопка старой клавиатуры: дня в Telegram больше нет (D50)
+                self.send_panel(pin=False, hint="📋 День — в приложении: задачи, таймер, отчёты. Кнопка 📱 внизу.")
             elif action == "status":
                 self.send(tpl.status(self.core))
             elif action == "focus":
@@ -523,7 +535,7 @@ class Bot:
         active = [t for t in open_tasks if t.status == "active"]
         pick = active[0] if len(active) == 1 else (open_tasks[0] if len(open_tasks) == 1 else None)
         if pick is None:
-            self.send_panel(pin=False, hint="Какую? Нажми ✅ у задачи." if open_tasks else "Открытых задач нет. Напиши, что сделал, — запишу.")
+            self.send_panel(pin=False, hint="Какую? Напиши название — или отметь в приложении." if open_tasks else "Открытых задач нет. Напиши, что сделал, — запишу.")
             return
         self.on_task_button(pick.id, "yes")
 
@@ -573,6 +585,8 @@ class Bot:
             elif kind == "j":
                 project_id, _, op = rest.partition(":")
                 self.on_project_button(project_id, op)
+            elif kind == "z":
+                self.on_sleep_button(rest)
         except ArvixError as exc:
             self.send(f"Отказ: {exc}")
 
@@ -605,6 +619,30 @@ class Bot:
             self.await_set("fail_reason", task=task.id)
             self.send(tpl.failed(task.title, result["debt"]) + "\n" + tpl.ASK_FAIL_REASON)
         self.refresh_panel()
+
+    def on_sleep_button(self, rest: str) -> None:
+        """z:bed — «Ложусь» под напоминанием об отбое; z:ok:ЧЧ:ММ-ЧЧ:ММ — догадка о ночи верна; z:edit — поправить."""
+        op, _, span = rest.partition(":")
+        if op == "bed":
+            self.send(tpl.goodnight(self.core.note_bedtime(source="telegram")["at"]))
+        elif op == "ok":
+            bed, _, wake = span.partition("-")
+            self.await_clear()
+            self.sleep_logged(self.core.log_sleep(bedtime=bed, wake=wake, source="telegram"))
+        elif op == "edit":
+            self.await_set("sleep")
+            self.send(tpl.SLEEP_EDIT)
+
+    def ask_sleep(self) -> None:
+        """Утром, при первом действии человека, раз в день (D48): догадка о ночи — одним касанием."""
+        today = self.core.today()
+        key = f"sleepq:{today.isoformat()}"
+        day = self.core.state.days.get(today)
+        if (day and day.sleep_min) or self.core.sent(key):
+            return
+        text, buttons = tpl.sleep_question(self.core.sleep_guess(today))
+        self.send(text, buttons, key=key)
+        self.await_set("sleep")
 
     def on_panel_button(self, op: str) -> None:
         if op == "refresh":
@@ -657,24 +695,13 @@ class Bot:
         return text, tpl.panel_buttons(open_tasks, focus_running=bool(core.store.kv_get(FOCUS)))
 
     def send_panel(self, *, pin: bool, hint: str = "") -> None:
-        """Новая панель дня: отправить, запомнить message_id, закрепить вместо старой."""
-        text, buttons = self.panel_view()
-        if hint:
-            text += f"\n\n{hint}"
-        if self.channel != "telegram":  # в приложении панель — это экран «Сегодня», здесь только текст
-            self.send(text, buttons)
-            return
-        previous = self.core.store.kv_get(PANEL) or {}
-        message_id = self.send(text, buttons, key=None)
-        self.core.store.kv_set(PANEL, {"message_id": message_id, "date": self.core.today().isoformat(), "hash": _digest(text, buttons)})
-        if not pin or message_id is None:
-            return
-        try:
-            if previous.get("message_id"):
-                self.tg.unpin(self.owner, previous["message_id"])
-            self.tg.pin(self.owner, message_id)
-        except TelegramError as exc:
-            log.info("панель не закреплена: %s", exc)
+        """Панели дня в Telegram нет (D50): день, задачи и таймер — в приложении. Остаётся только то,
+        без чего не обойтись: в 🟥 — разовое сообщение с выходом (в приложении этой кнопки нет), и подсказка."""
+        core = self.core
+        if core.effective_mode() == "red" and core.state.mentor_enabled:
+            self.send(tpl.RED_PANEL + (f"\n\n{hint}" if hint else ""), tpl.red_buttons(refresh=False))
+        elif hint:
+            self.send(hint)
 
     def tick_daily_note(self) -> None:
         """Закрытая задача → [x] у её строки в отчёте дня (как галочка в Obsidian); заодно
@@ -699,23 +726,17 @@ class Bot:
             log.info("отчёт дня не отмечен: %s", exc)
 
     def refresh_panel(self, force: bool = False) -> None:
-        """Правит панель на месте, если она сегодняшняя и её содержимое изменилось.
-        Зовётся после любого действия с задачами и каждый тик планировщика."""
+        """Зовётся после любого действия с задачами и каждый тик планировщика: галочки в отчёте дня.
+        Панели в Telegram больше нет (D50) — имя осталось, чтобы не трогать два десятка вызовов."""
         self.tick_daily_note()
-        panel = self.core.store.kv_get(PANEL) or {}
-        if not panel.get("message_id") or panel.get("date") != self.core.today().isoformat():
-            return
-        text, buttons = self.panel_view()
-        digest = _digest(text, buttons)
-        if digest == panel.get("hash") and not force:
-            return
-        try:
-            self.tg.edit(self.owner, panel["message_id"], text, buttons)
-        except TelegramError as exc:
-            if "not modified" not in str(exc):
-                log.info("панель не обновилась: %s", exc)
-                return
-        self.core.store.kv_set(PANEL, {**panel, "hash": digest})
+        panel = self.core.store.kv_get(PANEL)
+        if panel:  # закреплённая панель из прежних версий (D50) — снять один раз и забыть
+            self.core.store.kv_del(PANEL)
+            if panel.get("message_id"):
+                try:
+                    self.tg.unpin(self.owner, panel["message_id"])
+                except TelegramError as exc:
+                    log.info("старая панель не откреплена: %s", exc)
 
     # --- фокус-таймер --------------------------------------------------------------------
     # Состояние таймера — в kv FOCUS: until, started, minutes, task_id | topic, message_id,
@@ -790,9 +811,7 @@ class Bot:
         if target is not None and self.is_lesson_task(target):
             self.begin_lesson(target)  # учебная задача: у урока свой план и длительность (D22)
             return
-        what = f"на «{target.title}»" if target else "глубокая работа"
-        self.send(f"🎯 Фокус {what}. На сколько?\nДругая тема — словами: «фокус 45 минут физика».",
-                  [[(f"{m} мин", f"f:go:{m}") for m in tpl.FOCUS_CHOICES]])
+        self.send("🎯 Фокус — в приложении: «Сегодня» → Фокус. Или словами: «фокус 45 минут физика».")
 
     def start_focus(self, minutes: int, task_ref: Any = None, *, lesson: bool = False, topic: str | None = None) -> None:
         self.release_stale_focus()
@@ -817,13 +836,16 @@ class Bot:
         state = {"until": (now + timedelta(minutes=minutes)).isoformat(), "started": now.isoformat(), "minutes": minutes,
                  "task_id": task.id if task else None, "topic": (topic or "").strip()[:120] or None, "left": minutes,
                  "paused_at": None, "paused_sec": 0}
-        state["message_id"] = self.tg_send(self.focus_message(state, now), self.focus_buttons(state))  # в журнале — его видит и приложение
-        self.core.store.kv_set(FOCUS, state)
+        self.core.store.kv_set(FOCUS, state)  # таймер — в приложении (D50); в Telegram без пульта и обратного отсчёта
+        if self.channel == "telegram":  # запущен словами в Telegram — одна строка, без кнопок
+            what = self.focus_what(state)
+            self.send(f"🎯 Фокус {minutes} мин" + (f" · {what}" if what else "") + f" — до {now + timedelta(minutes=minutes):%H:%M}. Таймер — в приложении.")
         self.refresh_panel()
 
     def send_focus_state(self) -> None:
         state = self.core.store.kv_get(FOCUS) or {}
-        self.send(self.focus_message(state), self.focus_buttons(state))
+        if self.channel == "telegram":
+            self.send(self.focus_message(state) + "\nПауза и стоп — в приложении.")
 
     def pause_focus(self) -> None:
         state = self.core.store.kv_get(FOCUS)
@@ -851,12 +873,9 @@ class Bot:
         if not state:
             return
         self.core.store.kv_del(FOCUS)
-        if state.get("message_id"):
-            try:
-                self.tg.edit(self.owner, state["message_id"], "🎯 Фокус отменён — ничего не записано.")
-            except TelegramError:
-                pass
-        self.send("Фокус отменён, ничего не записано.")
+        self._edit_focus(state, final_minutes=0)  # таймер, запущенный до D50, ещё с сообщением
+        if self.channel == "telegram":
+            self.send("Фокус отменён, ничего не записано.")
         self.refresh_panel()
 
     def ask_focus_note(self, minutes: int, what: str | None) -> None:
@@ -884,15 +903,17 @@ class Bot:
         task = self.core.log_focus(minutes_done, task_ref=task_id if task_id in self.core.state.tasks else None, topic=done.get("topic"),
                                    source="telegram")
         self.ask_focus_note(minutes_done, task.title if task else done.get("topic"))
-        if task and task.is_open:
-            self.send("Закрыть задачу — ✅ на панели.")
         self.refresh_panel()
 
-    def stop_focus(self) -> int | None:
-        """Закончить раньше: записываются активные минуты (без пауз). Возвращает id сессии."""
+    def stop_focus(self, *, quiet: bool = False) -> int | None:
+        """Закончить раньше: записываются активные минуты (без пауз). Возвращает id сессии.
+        quiet — закрыл код (долгая пауза): ни строки в Telegram (D50), заметку спросит приложение."""
+        source = "l0" if quiet else "telegram"  # закрыл код — не действие человека (иначе это «утро» и «не молчал»)
+        quiet = quiet or self.channel != "telegram"
         state = self.core.store.kv_get(FOCUS)
         if not state:
-            self.send("Фокус не идёт. Запустить — 🎯 внизу или «засеки 25 минут».")
+            if not quiet:
+                self.send("Фокус не идёт. Запустить — в приложении или словами: «засеки 25 минут».")
             return None
         self.core.store.kv_del(FOCUS)
         active = self.focus_active_min(state)
@@ -900,11 +921,13 @@ class Bot:
         self._edit_focus(state, final_minutes=active)
         self.refresh_panel()
         if active < tpl.FOCUS_MIN_LOGGED:
-            self.send(f"Фокус сброшен: меньше {tpl.FOCUS_MIN_LOGGED} минут — не сессия.")
+            if not quiet:
+                self.send(f"Фокус сброшен: меньше {tpl.FOCUS_MIN_LOGGED} минут — не сессия.")
             return None
-        task = self.core.log_focus(active, task_ref=task_id, topic=state.get("topic"), source="telegram")
+        task = self.core.log_focus(active, task_ref=task_id, topic=state.get("topic"), source=source)
         event_id = self.core.state.last_event_id
-        self.ask_focus_note(active, task.title if task else state.get("topic"))
+        if not quiet:
+            self.ask_focus_note(active, task.title if task else state.get("topic"))
         return event_id
 
     def focus_tick(self, now: datetime) -> None:
@@ -916,8 +939,7 @@ class Bot:
             return
         if state.get("paused_at"):
             if (now - datetime.fromisoformat(state["paused_at"])).total_seconds() > tpl.FOCUS_MAX_PAUSE_MIN * 60:
-                self.send(f"Пауза дольше {tpl.FOCUS_MAX_PAUSE_MIN} минут — фокус закрыт.")
-                self.stop_focus()
+                self.stop_focus(quiet=True)  # пауза дольше предела — конец сессии, молча (D50)
             return
         until = datetime.fromisoformat(state["until"])
         if until > now:
@@ -936,12 +958,10 @@ class Bot:
             self.send_lesson_check(key=f"focus:{state['until']}")
             self.refresh_panel()
             return
-        self.core.store.kv_set("focus_done", {"task_id": state.get("task_id"), "topic": state.get("topic")})
-        self.send(
-            f"Фокус {minutes} минут закончен. Без прерываний?",
-            [[("✅ Да", f"f:ok:{minutes}"), ("⚠️ Прерывали", f"f:int:{minutes}")]],
-            key=f"focus:{state['until']}",
-        )
+        # Таймер дошёл до конца — сессия записана целиком, без «Без прерываний?» (D50): прервался — жми паузу.
+        # Заметку «что успел» человек добавит в приложении, у сессии в «Сегодня».
+        task_id = state.get("task_id") if state.get("task_id") in self.core.state.tasks else None
+        self.core.log_focus(minutes, task_ref=task_id, topic=state.get("topic"), source="l0")
         self.refresh_panel()
 
     # --- учебный блок (06-LEARNING §8) ----------------------------------------------------
@@ -1355,8 +1375,9 @@ class Bot:
                     self.start_focus(int(action.get("minutes") or tpl.FOCUS_DEFAULT_MIN), action.get("task") or action.get("title") or None)
                 elif kind == "stop_focus":
                     self.stop_focus()
-                elif kind == "show_day":
-                    self.send_panel(pin=True)
+                elif kind == "show_day":  # день текстом — ответ на вопрос, а не пульт (D50): без кнопок и закрепа
+                    text, _ = self.panel_view()
+                    self.send(text)
                 elif kind == "show_status":
                     self.send(tpl.status(self.core))
                 elif kind == "show_week":
@@ -1601,7 +1622,7 @@ class Bot:
             self.send_brief()
 
     def cmd_menu(self, rest: str) -> None:
-        self.send("Кнопки внизу: панель дня, отчёт, фокус, сон, задача, статус.", keyboard=tpl.keyboard(self.app_url()))
+        self.send("День, фокус и отчёты — в приложении (📱 внизу). Здесь — разговор и напоминания.", keyboard=tpl.keyboard(self.app_url()))
 
     def cmd_schedule(self, rest: str) -> None:
         if rest.strip() == "show" and self.core.state.templates:

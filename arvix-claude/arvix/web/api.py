@@ -31,7 +31,7 @@ def task_view(task: Any) -> dict[str, Any]:
         "duration_min": task.duration_min, "importance": task.importance, "difficulty": task.difficulty,
         "deep_work": task.deep_work, "status": task.status, "done_pct": task.done_pct,
         "focus_min": task.focus_min, "report": task.report, "proof": task.proof, "open": task.is_open,
-        "project": task.project,
+        "project": task.project, "photos": list(task.report_photos),
     }
 
 
@@ -73,6 +73,7 @@ def state_view(core: Any, *, thinking: str = "") -> dict[str, Any]:
             "done": done, "total": len(tasks), "completion": status["completion"],
             "deep_min": day.deep_min if day else 0, "deep_target": core.deep_target(today),
             "sleep_min": day.sleep_min if day else None, "sleep_target": status["sleep_target"], "debts": status["debts"],
+            "sleep_guess": None if day and day.sleep_min else core.sleep_guess(today),  # D48: карточка сна — одним касанием
         },
     })
     return base
@@ -396,7 +397,8 @@ def task_op(task_id: str, op: str, body: dict[str, Any]) -> Any:
             core.start_task(task.id, source="web")
         elif op == "done":
             pct = rules.clamp(int(body.get("pct") or 100), 1, 100)
-            done = core.complete_task(task.id, done_pct=pct, report=(body.get("report") or None), source="web")
+            photos = [str(x) for x in (body.get("photos") or []) if x]
+            done = core.complete_task(task.id, done_pct=pct, report=(body.get("report") or None), photos=photos, source="web")
             result = {"warnings": done["warnings"], "debt_closed": done["debt_closed"]}
         elif op == "fail":
             failed = core.fail_task(task.id, reason=str(body.get("reason") or "отмечено в приложении"), source="web")
@@ -411,6 +413,14 @@ def task_op(task_id: str, op: str, body: dict[str, Any]) -> Any:
         bot.refresh_panel()
         result["task"] = task_view(core.state.tasks[task.id])
         return result
+    return run
+
+
+def task_photo(task_id: str, data: bytes, name: str, mime: str) -> Any:
+    """Фото к отчёту (D49): сначала файл в хранилище, потом «Сделано» с его путём — голову не зовёт."""
+    def run(bot: Any) -> dict[str, Any]:
+        bot.core.resolve_task(task_id)
+        return {"path": bot.core.receive_report_photo(data, name, mime, source="web")}
     return run
 
 

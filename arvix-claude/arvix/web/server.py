@@ -16,7 +16,7 @@ GET  /api/pair/claim?code=…   без входа: одноразовый код
 POST /api/message {text} · /api/voice (аудио) · /api/button {data}
 POST /api/tts {text}          озвучка ответа (ogg), если [tts] включена; иначе 404 — говорит голос телефона
 POST /api/upload              файл телом запроса (X-File-Name, X-Caption — urlencoded), до 20 МБ
-POST /api/tasks {…} · /api/tasks/<id>/<op> · /api/lesson/<id>
+POST /api/tasks {…} · /api/tasks/<id>/<op> · /api/tasks/<id>/photo (фото отчёта телом, X-File-Name) · /api/lesson/<id>
 POST /api/focus {minutes, task | topic} · /api/focus/<pause|resume|stop|cancel> · /api/focus/note {event, note}
 POST /api/capture {text}      мысль в Inbox
 POST /api/note {path, text, sha} · /api/note/new {dir, name} · /api/note/toggle {path, line, sha} · /api/note/link {a, b}
@@ -267,6 +267,13 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif parts == ["tasks"]:
                     self.send_json(app.hub.call(api.add_task(self.body_json())))
+                elif len(parts) == 3 and parts[0] == "tasks" and parts[2] == "photo":
+                    data = self.body_bytes()
+                    if not data:
+                        raise ArvixError("Пустой файл")
+                    name = urllib.parse.unquote(self.headers.get("X-File-Name") or "фото.jpg")
+                    kind = (self.headers.get("Content-Type") or "").split(";")[0]
+                    self.send_json(app.hub.call(api.task_photo(parts[1], data, name, kind)))
                 elif len(parts) == 3 and parts[0] == "tasks":
                     self.send_json(app.hub.call(api.task_op(parts[1], parts[2], self.body_json())))
                 elif len(parts) == 2 and parts[0] == "lesson":

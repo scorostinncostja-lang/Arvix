@@ -102,6 +102,7 @@ const ICON_PATHS = {
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
   projects: '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
   github: '<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>',
+  sidebar: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/>',
   map: '<path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"/><path d="M15 5.764v15"/><path d="M9 3.236v15"/>',
 };
 const icon = (name, cls = "") => `<svg class="ic${cls ? " " + cls : ""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ""}</svg>`;
@@ -130,6 +131,23 @@ function setTab(tab) {
   load(tab);
   window.scrollTo(0, tab === "chat" ? document.body.scrollHeight : 0);
 }
+
+/* Свернуть боковую панель (от 900 px: ноутбук, планшет горизонтально) в полосу значков. Выбор помнится
+ * на этом устройстве; подписи разделов уходят в подсказку. На телефоне панели нет — там нижние вкладки. */
+const SIDE_KEY = "arvix_side_mini";
+function setSideMini(mini, animate = false) {
+  const root = document.documentElement;
+  if (animate) { root.classList.add("side-anim"); setTimeout(() => { root.classList.remove("side-anim"); window.dispatchEvent(new Event("resize")); }, 220); }
+  root.classList.toggle("side-mini", mini);
+  const t = $("#side-toggle"), label = mini ? "Развернуть панель" : "Свернуть панель";
+  t.setAttribute("aria-expanded", String(!mini)); t.setAttribute("aria-label", label); t.title = `${label} (Ctrl+B)`;
+  document.querySelectorAll("#tabs button[data-tab]").forEach((b) => {
+    b.title = mini ? `${b.querySelector(".lbl").textContent} (Ctrl+${TABS.indexOf(b.dataset.tab) + 1})` : `Ctrl+${TABS.indexOf(b.dataset.tab) + 1}`;
+  });
+  try { mini ? localStorage.setItem(SIDE_KEY, "1") : localStorage.removeItem(SIDE_KEY); } catch (_) { /* приватный режим */ }
+}
+const toggleSide = () => setSideMini(!document.documentElement.classList.contains("side-mini"), true);
+$("#side-toggle").onclick = () => { haptic(); toggleSide(); };
 
 $("#tabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-tab]");
@@ -201,12 +219,12 @@ function renderToday() {
   } else if (d.stats) {
     const s = d.stats;
     // Только факты дня (D41): задачи, глубокая работа, сон. Ни очков, ни здоровья, ни уровня.
-    const sleep = s.sleep_min == null ? `<b>—</b><span>сон не записан</span>`
+    const sleep = s.sleep_min == null ? `<b>${s.sleep_guess ? "≈" + hm(s.sleep_guess.duration_min) : "—"}</b><span>${s.sleep_guess ? "сон — подтверди" : "сон не записан"}</span>`
       : `<b>${hm(s.sleep_min)}</b><span>сон, норма ${hm(s.sleep_target)}</span>`;
     html += `<div class="stats">
       <div class="stat"><b>${s.done}/${s.total}</b><span>задач</span><div class="bar"><i style="width:${s.total ? (100 * s.done / s.total) : 0}%"></i></div></div>
       <div class="stat"><b>${hm(s.deep_min)}</b><span>глубокая из ${hm(s.deep_target)}</span><div class="bar deep"><i style="width:${Math.min(100, 100 * s.deep_min / Math.max(1, s.deep_target))}%"></i></div></div>
-      <div class="stat">${sleep}<div class="bar"><i style="width:${s.sleep_min == null ? 0 : Math.min(100, 100 * s.sleep_min / Math.max(1, s.sleep_target))}%"></i></div></div>
+      <div class="stat tap" id="sleep-stat" role="button" tabindex="0" title="${s.sleep_min == null ? "Записать сон" : "Поправить сон"}">${sleep}<div class="bar"><i style="width:${s.sleep_min == null ? 0 : Math.min(100, 100 * s.sleep_min / Math.max(1, s.sleep_target))}%"></i></div></div>
     </div>`;
   }
   if (installPrompt && !TG && !standalone()) {
@@ -336,8 +354,36 @@ function bindFocusSetup() {
   if (topicEl) topicEl.addEventListener("input", () => { f.topic = topicEl.value; });
 }
 
+/* Сон (D48): код угадал ночь по «ложусь» и первому сообщению — одно касание; иначе отбой и подъём руками.
+ * Запись идёт той же кнопкой z:ok, что в Telegram: одна дорога, ответ приходит в чат. */
+function openSleepSheet(guess) {
+  const g = guess || {};
+  const src = { noted: "ты написал, что ложишься", last: "последнее сообщение" };
+  openSheet(`<h2>Как спал?</h2>
+    ${guess ? `<p class="muted small">Отбой ≈${g.bedtime} (${src[g.bed_src] || ""}), подъём ≈${g.wake} (первое сообщение) → ${hm(g.duration_min)}</p>
+      <button class="btn primary" id="sl-yes">Да, ${hm(g.duration_min)}</button>` : ""}
+    <div class="field"><label>Лёг и встал</label><div style="display:flex;gap:8px">
+      <input id="sl-bed" type="time" value="${g.bedtime || ""}" style="flex:1"><input id="sl-wake" type="time" value="${g.wake || ""}" style="flex:1">
+    </div></div>
+    <button class="btn${guess ? "" : " primary"}" id="sl-save">Записать</button>`, () => {
+    const send = async (bed, wake) => {
+      if (!bed || !wake || bed === wake) { toast("Нужны отбой и подъём"); return; }
+      try { await api("button", { json: { data: `z:ok:${bed}-${wake}` } }); notify("success"); closeSheet(); toast("Сон записан"); setTimeout(() => load("today"), 400); }
+      catch (err) { toast(err.message); }
+    };
+    $("#sl-yes") && ($("#sl-yes").onclick = () => send(g.bedtime, g.wake));
+    $("#sl-save").onclick = () => send($("#sl-bed").value, $("#sl-wake").value);
+  });
+}
+
 function bindToday() {
   bindFocusSetup();
+  const sleepStat = $("#sleep-stat");
+  if (sleepStat) {
+    const open = () => { haptic(); openSleepSheet(state.data && state.data.stats && state.data.stats.sleep_guess); };
+    sleepStat.onclick = open;
+    sleepStat.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
+  }
   view.querySelectorAll("[data-act]").forEach((el) => el.addEventListener("click", async () => {
     const act = el.dataset.act, id = el.dataset.id;
     haptic();
@@ -497,17 +543,37 @@ function openPartSheet(t) {
   });
 }
 
+/* Отчёт: слова и/или фото (D49). Фото уходят в хранилище сразу при выборе — «Сделано» несёт их пути,
+ * и голова видит отчёт и фото в контексте дня. На телефоне кнопка открывает камеру или галерею. */
 function openReportSheet(t, after = null) {
+  const photos = [];  // {path, url}
   openSheet(`<h2>Отчёт</h2><p class="muted small">${esc(t.title)}</p>
     <div class="field"><textarea id="r-report" rows="4" placeholder="Что сделано: цифры, темы, результат"></textarea></div>
+    <div class="field"><div class="r-photos" id="r-photos"></div>
+      <label class="btn r-add">${icon("clip")} Фото<input id="r-file" type="file" accept="image/*" multiple hidden></label></div>
     <button class="btn primary" id="r-save">Сделано</button>`, () => {
     setTimeout(() => $("#r-report").focus(), 50);
+    const draw = () => {
+      $("#r-photos").innerHTML = photos.map((p, i) => `<div class="r-photo"><img src="${p.url}" alt=""><button type="button" data-i="${i}" aria-label="Убрать фото">${icon("x")}</button></div>`).join("");
+      $("#r-photos").querySelectorAll("button[data-i]").forEach((b) => b.onclick = () => { URL.revokeObjectURL(photos[+b.dataset.i].url); photos.splice(+b.dataset.i, 1); draw(); });
+    };
+    $("#r-file").onchange = async (e) => {
+      const files = [...e.target.files]; e.target.value = "";
+      for (const f of files) {
+        if (photos.length >= 10) { toast("Не больше 10 фото"); break; }
+        try {
+          toast("Загружаю фото…");
+          const r = await api(`tasks/${t.id}/photo`, { body: f, headers: { "Content-Type": f.type || "image/jpeg", "X-File-Name": encodeURIComponent(f.name || "фото.jpg") } });
+          photos.push({ path: r.path, url: URL.createObjectURL(f) }); draw();
+        } catch (err) { toast(err.message); }
+      }
+    };
     $("#r-save").onclick = async () => {
       const report = $("#r-report").value.trim();
-      if (!report) { toast("Пара слов о сделанном"); return; }
+      if (!report && !photos.length) { toast("Пара слов или фото"); return; }
       try {
-        const r = await api(`tasks/${t.id}/done`, { json: { report } });
-        notify("success"); closeSheet(); toast("✓ Записал");
+        await api(`tasks/${t.id}/done`, { json: { report: report || null, photos: photos.map((p) => p.path) } });
+        notify("success"); closeSheet(); toast(photos.length ? `✓ Записал, фото: ${photos.length}` : "✓ Записал");
         if (after) after(); else load("today");
       } catch (err) { toast(err.message); }
     };
@@ -2122,6 +2188,7 @@ document.addEventListener("keydown", (e) => {
     if (tab !== state.tab && !(state.noteEdit && !confirmLeaveEditor())) setTab(tab);
     return;
   }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.code === "KeyB" && isWide()) { e.preventDefault(); toggleSide(); return; }
   if (e.altKey && e.code === "KeyN") { e.preventDefault(); if (state.data && !state.data.gentle) openAddSheet(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey || !$("#sheet").classList.contains("hidden")) return;
   if (e.key === "/" || e.code === "Slash") {  // физическая клавиша: на русской раскладке она даёт «.»
@@ -2157,6 +2224,8 @@ async function sendShared() {
   if (files.length) { const ta = $("#msg"); if (ta) ta.value = text; await sendFiles(files); }
   else if (text) { const ta = $("#msg"); if (ta) { ta.value = text; ta.focus(); } }
 }
+
+try { setSideMini(localStorage.getItem(SIDE_KEY) === "1"); } catch (_) { setSideMini(false); }
 
 (async function boot() {
   await pairFromHash();

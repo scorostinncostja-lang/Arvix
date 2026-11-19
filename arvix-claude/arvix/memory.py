@@ -158,6 +158,12 @@ def export_transcripts(core: Any, folder: Path | None = None) -> Path:
             text = str(event.payload.get("text") or "").strip()
             if text:
                 days.setdefault(event.local_date, []).append(f"**{event.at.astimezone(core.tz):%H:%M} {who}:** {text}")
+        elif event.kind == "task_completed" and (event.payload.get("report") or event.payload.get("photos")):
+            task = core.state.tasks.get(event.payload.get("id") or "")  # отчёт по задаче — тоже память (D49)
+            line = f"**{event.at.astimezone(core.tz):%H:%M} Отчёт** «{task.title if task else event.payload.get('id')}»: {event.payload.get('report') or ''}"
+            if event.payload.get("photos"):
+                line += " · фото: " + ", ".join(event.payload["photos"])
+            days.setdefault(event.local_date, []).append(line)
     for fact in core.state.facts.values():
         facts.append(f"- [{fact.get('topic', 'general')}] {fact['fact']}")
     today = core.today()

@@ -102,6 +102,19 @@ def _clock(token: str, *, bed: bool) -> str:
     return f"{hours:02d}:{minutes:02d}"
 
 
+_GOODNIGHT_RE = re.compile(
+    r"(?:(?:все|всё|ладно|ну|ок|окей|я)[,!.\s]*)*"
+    r"(?:спокойной ночи|доброй ночи|иду спать|пошел спать|пойду спать|ложусь(?: спать)?|сплю|я спать|отбой|спать)"
+    r"[\s!.)👋😴🌙]*")
+
+
+def is_goodnight(text: str) -> bool:
+    """«Спокойной ночи», «всё, иду спать», «ложусь» — короткое прощание на ночь (D48). Фраза целиком:
+    «отбой в 23:30 поставь» или «не могу спать» — это уже разговор, его ведёт голова."""
+    low = text.lower().replace("ё", "е").strip()
+    return len(low) <= 40 and bool(_GOODNIGHT_RE.fullmatch(low))
+
+
 def parse_sleep_text(text: str, expect: str | None = None) -> dict[str, Any]:
     """Ответ про сон словами → {duration, bedtime, wake}; чего нет — None (02-MECHANICS §7.2).
 
@@ -441,13 +454,20 @@ class Core:
         done_pct: int = 100,
         report: str | None = None,
         proof_kind: str | None = None,
+        photos: list[str] | None = None,
         source: str = "claude",
     ) -> dict[str, Any]:
+        """photos — пути фото отчёта в хранилище (D49): кладёт их receive_report_photo, голова видит их в контексте."""
+        photos = [self.vault_rel(p) for p in (photos or [])][:10]
+        if photos:
+            proof_kind = "photo"
         with self.tx():
             task = self.resolve_task(ref)
             if task.status not in ("planned", "active", "debt"):
                 raise ArvixError(f"«{task.title}» уже {STATUS_RU[task.status]} — повторно закрыть нельзя.")
             report = (report or "").strip() or None
+            if photos and not report:
+                report = "фото-отчёт"
             kind = proof_kind or ("report" if report else "confirm")
             if task.proof in ("report", "photo") and kind == "confirm":
                 raise ArvixError(f"«{task.title}» требует отчёта: одним предложением — что именно сделано?")
@@ -466,6 +486,8 @@ class Core:
                 task.duration_min, pct,
             )
             payload = {"id": task.id, "done_pct": pct, "report": report, "proof_kind": kind, "deep_min": deep}
+            if photos:
+                payload["photos"] = photos
             if timed:
                 payload["focus_min"] = task.focus_min
             if doubts:
@@ -579,6 +601,49 @@ class Core:
         return {"duration_min": minutes, "date": target, "mode": mode, "mode_before": before, "bedtime": bed, "wake": up,
                 "warnings": checks.sleep_issues(minutes)}
 
+    # Сон без ручного ввода (D48): код угадывает отбой и подъём по действиям человека,
+    # пишет только после подтверждения — от сна зависит режим, а догадка не факт.
+    NIGHT_START = "18:00"
+
+    def night_end(self) -> str:
+        return parse_hhmm(self.cfg.mech("sleep_night_end", "05:00")) or "05:00"
+
+    def is_night(self, when: datetime | None = None) -> bool:
+        clock_time = f"{(when or self.now()):%H:%M}"
+        return clock_time >= self.NIGHT_START or clock_time < self.night_end()
+
+    def note_bedtime(self, *, source: str = "telegram") -> dict[str, Any]:
+        """«Ложусь» — время отбоя в ночь, которая кончится утром: 23:50 — ночь на завтра, 00:40 — на сегодня."""
+        now = self.now()
+        if not self.is_night(now):
+            raise ArvixError(f"Отбой записывается вечером и ночью ({self.NIGHT_START}–{self.night_end()})")
+        night = now.date() + timedelta(days=1 if f"{now:%H:%M}" >= self.NIGHT_START else 0)
+        at = f"{now:%H:%M}"
+        with self.tx():
+            self.emit("bedtime_noted", {"at": at, "night": night.isoformat()}, source=source)
+        return {"at": at, "night": night}
+
+    def sleep_guess(self, d: date | None = None) -> dict[str, Any] | None:
+        """Ночь перед утром d: отбой — «ложусь» или последнее действие ночью, подъём — первое действие утром.
+        Без обеих половин или с нелепой длительностью (меньше часа, больше 16 ч) — None."""
+        d = d or self.today()
+        days = self.state.days
+        today, yesterday = days.get(d), days.get(d - timedelta(days=1))
+        end = self.night_end()
+        bed, bed_src = (today.bed_noted, "noted") if today and today.bed_noted else (None, "")
+        if not bed:
+            late = [t for t in (yesterday.user_times if yesterday else []) if t >= self.NIGHT_START]
+            late += [t for t in (today.user_times if today else []) if t < end]
+            bed, bed_src = (late[-1], "last") if late else (None, "")
+        until = parse_hhmm(self.cfg.mech("sleep_ask_until", "14:00")) or "14:00"
+        morning = [t for t in (today.user_times if today else []) if end <= t < until]
+        if not (bed and morning):
+            return None
+        minutes = sleep_between(bed, morning[0])
+        if not 60 <= minutes <= 16 * 60:
+            return None
+        return {"bedtime": bed, "bed_src": bed_src, "wake": morning[0], "wake_src": "first", "duration_min": minutes}
+
     def log_expense(self, amount: Any, category: str, *, impulse: bool = False, note: str = "", source: str = "claude") -> dict[str, Any]:
         try:
             value = round(float(str(amount).replace(",", ".").replace(" ", "")), 2)
@@ -688,6 +753,23 @@ class Core:
     def update_note(self, rel: str, transform: Any, *, source: str = "claude") -> dict[str, Any]:
         result = self.vault.update_text(rel, transform, owned_sha=self.state.notes.get(rel))
         return self._note_event(result, "fields", source) if result["changed"] else result
+
+    def vault_rel(self, path: str) -> str:
+        """Путь внутри хранилища или отказ: «../../etc/passwd» отчётом не станет."""
+        root = self.vault.root.resolve()
+        full = (root / str(path)).resolve()
+        if root not in full.parents or not full.is_file():
+            raise ArvixError(f"Файла «{path}» нет в хранилище")
+        return full.relative_to(root).as_posix()
+
+    def receive_report_photo(self, data: bytes, name: str, mime: str = "", *, source: str = "web") -> str:
+        """Фото отчёта по задаче (D49) — в папку «Отчёты» рядом с файлами; голову не зовёт, путь вернёт."""
+        from arvix import files
+
+        if files.classify(name, mime) != "image":
+            raise ArvixError(f"«{name}» — не фото (jpg, png, webp). Отчёт принимает картинки")
+        base = (self.vault.paths.get("files") or "00_Inbox/Файлы").rstrip("/")
+        return self.receive_file(data, name, mime, source=source, folder=f"{base}/Отчёты")["path"]
 
     def receive_file(self, data: bytes, name: str, mime: str = "", *, stt: Any = None, caption: str = "",
                      source: str = "telegram", folder: str | None = None) -> dict[str, Any]:

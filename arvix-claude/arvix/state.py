@@ -44,6 +44,7 @@ class Task:
     reason: str | None = None
     focus_min: int = 0  # фокус-сессии по этой задаче (таймер): при закрытии — глубокие минуты и подтверждение «таймер»
     project: str | None = None  # id проекта (D43): минуты задачи идут во время проекта
+    report_photos: list[str] = field(default_factory=list)  # фото отчёта в хранилище (D49)
 
     @property
     def is_open(self) -> bool:
@@ -68,6 +69,8 @@ class Day:
     expenses: float = 0.0
     closed: dict[str, Any] | None = None
     focus: list[dict[str, Any]] = field(default_factory=list)  # сессии таймера: минуты, задача или тема, заметка
+    user_times: list[str] = field(default_factory=list)  # «ЧЧ:ММ» действий человека — откуда код угадывает сон (D48)
+    bed_noted: str | None = None  # «ложусь» в ночь, которая кончается этим утром (D48)
 
 
 @dataclass
@@ -130,6 +133,8 @@ class State:
         if ev.source in USER_SOURCES:
             day.user_actions += 1
             self.last_user_at = ev.at.isoformat()
+        if ev.source in USER_SOURCES or ev.source == "web":
+            day.user_times.append(f"{ev.at.hour:02d}:{ev.at.minute:02d}")
         handler = getattr(self, f"_on_{ev.kind}", None)
         if handler is not None:
             handler(ev, ev.payload, day)
@@ -199,6 +204,7 @@ class State:
             task.status = "done"
             task.done_pct = int(p.get("done_pct", 100))
             task.report = p.get("report")
+            task.report_photos = list(p.get("photos") or [])
             self.day(task.local_date).deep_min += int(p.get("deep_min", 0))
 
     def _on_task_failed(self, ev: Event, p: dict, day: Day) -> None:
@@ -241,6 +247,9 @@ class State:
         target = self.day(date.fromisoformat(p["date"])) if p.get("date") else day
         target.sleep_min = int(p["duration_min"])
         target.bedtime = p.get("bedtime") or target.bedtime
+
+    def _on_bedtime_noted(self, ev: Event, p: dict, day: Day) -> None:
+        self.day(date.fromisoformat(p["night"])).bed_noted = p["at"]
 
     def _on_focus_session(self, ev: Event, p: dict, day: Day) -> None:
         # Сессия по задаче копится в самой задаче (глубокая работа придёт с её закрытием);

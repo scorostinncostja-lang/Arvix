@@ -251,8 +251,7 @@ class InboxTest(BotCase):
         self.assertIn("Итого 1ч40м в неделю", self.api.last)
         self.press("s:save")
         self.assertEqual(self.core.state.templates[0]["blocks"][0]["title"], "Математика ОГЭ")
-        self.assertIn("Распорядок сохранён", self.api.texts[-2])
-        self.assertTrue(self.api.last.startswith("📋"), self.api.last)  # сразу панель с сегодняшними блоками
+        self.assertIn("Распорядок сохранён", self.api.last)  # панели следом нет — день в приложении (D50)
         self.assertIsNone(self.core.store.kv_get("tg_pending_templates"))
 
     def test_region_block_explained(self) -> None:
@@ -398,7 +397,7 @@ class OneMessageTest(BotCase):
 
 
 class PanelTest(BotCase):
-    """Панель дня: закреплённое сообщение с кнопками, которое бот правит на месте."""
+    """Панели дня в Telegram нет (D50): старые кнопки ещё работают, новых пультов нет."""
 
     start = moscow(2026, 11, 2, 15, 0)
 
@@ -407,45 +406,24 @@ class PanelTest(BotCase):
         self.math = self.core.add_task("Математика ОГЭ", start="16:00", duration_min=45, importance=3, deep_work=True)
         self.push = self.core.add_task("Русский: биография Пушкина", start="19:30", duration_min=60, importance=4)
 
-    def panel_id(self) -> int:
-        return self.core.store.kv_get("tg_panel")["message_id"]
-
-    def test_menu_button_sends_pinned_panel_with_task_buttons(self) -> None:
+    def test_old_day_button_points_to_the_app(self) -> None:
+        """D50: панели дня в Telegram нет — ни сообщения с кнопками, ни закрепа."""
         self.text(tpl.MENU_DAY)
         text, buttons = self.api.sent[-1]
-        self.assertEqual(text.splitlines()[0], "📋 Понедельник · 0 из 2 · 🟩")  # без HP и серии (D41)
-        self.assertIn("○ 16:00 Математика ОГЭ (45 мин)", text)
-        self.assertEqual(buttons[0], [("▶️ Математика ОГЭ", f"t:{self.math.id}:start"), ("✅", f"t:{self.math.id}:yes"), ("⏳ 30", f"t:{self.math.id}:d30")])
-        self.assertEqual(buttons[1][0][0], "▶️ Русский: биография Пу…")
-        self.assertEqual(buttons[-1], [("🔄", "p:refresh"), ("🎯 25 мин", "p:focus"), ("➕", "p:add")])
-        self.assertEqual(self.api.pinned, [self.panel_id()])
+        self.assertIn("в приложении", text)
+        self.assertIsNone(buttons)
+        self.assertEqual(self.api.pinned, [])
         self.assertEqual(self.brain.calls, [])
 
-    def test_panel_button_edits_panel_in_place(self) -> None:
-        self.text(tpl.MENU_DAY)
-        before = len(self.api.sent)
+    def test_task_button_from_an_old_message_still_works(self) -> None:
         self.press(f"t:{self.math.id}:start")
         self.assertEqual(self.core.state.tasks[self.math.id].status, "active")
-        self.assertEqual(self.api.sent[before][0], tpl.reminder_start(self.math))
-        message_id, text, buttons = self.api.edited[-1]
-        self.assertEqual(message_id, self.panel_id())
-        self.assertIn("▶️ 16:00 Математика ОГЭ (45 мин) — идёт с 15:00", text)
-        self.assertEqual(buttons[0], [("✅ Математика ОГЭ", f"t:{self.math.id}:yes"), ("⚠️ частично", f"t:{self.math.id}:part")])
-
-    def test_scheduler_refreshes_panel_after_outside_change(self) -> None:
-        self.text(tpl.MENU_DAY)
-        self.scheduler.tick()
-        self.assertEqual(self.api.edited, [])  # ничего не поменялось — правок нет
-        self.core.complete_task(self.math.id, report="10 задач", source="cli")
-        self.scheduler.tick()
-        self.assertIn("📋 Понедельник · 1 из 2", self.api.edited[-1][1])
-        edits = len(self.api.edited)
-        self.scheduler.tick()
-        self.assertEqual(len(self.api.edited), edits)
+        self.assertEqual(self.api.last, tpl.reminder_start(self.math))
+        self.assertEqual(self.api.edited, [])
 
     def test_done_button_reports_current_task_or_shows_panel(self) -> None:
         self.text(tpl.MENU_DONE)
-        self.assertIn("Нажми ✅ у задачи", self.api.last)  # две открытые, ни одна не идёт
+        self.assertIn("Напиши название", self.api.last)  # две открытые, ни одна не идёт
         self.core.start_task(self.math.id)
         self.text(tpl.MENU_DONE)
         self.assertIn("«Математика ОГЭ»", self.api.last)
@@ -462,11 +440,11 @@ class PanelTest(BotCase):
         self.text("повторить карточки")
         self.assertEqual(self.brain.calls[-1]["prompt"], "Добавь задачу: повторить карточки")
 
-    def test_brief_brings_keyboard_and_panel(self) -> None:
+    def test_brief_removes_old_keyboard_and_sends_no_panel(self) -> None:
         self.bot.send_brief()
-        self.assertEqual(self.api.keyboards, [tpl.KEYBOARD])
-        self.assertTrue(self.api.last.startswith("📋"), self.api.last)
-        self.assertEqual(self.api.pinned, [self.panel_id()])
+        self.assertEqual(self.api.keyboards, [])  # [] не попадает в FakeAPI.keyboards: это снятие клавиатуры
+        self.assertFalse(any(t.startswith("📋") for t in self.api.texts))
+        self.assertEqual(self.api.pinned, [])
 
     def test_red_mode_panel_has_no_tasks_or_numbers(self) -> None:
         self.core.sos(True)
@@ -475,7 +453,8 @@ class PanelTest(BotCase):
         self.assertNotIn("Математика", text)
         self.assertNotIn("HP", text)
         flat = [data for row in buttons for _, data in row]
-        self.assertEqual(flat, ["r:back", "r:rest", "f:go:15", "p:refresh"])  # без задач, но с выходом (D38)
+        self.assertIn("r:back", flat)  # без задач, но с выходом (D38) — разовым сообщением, не панелью (D50)
+        self.assertNotIn("p:refresh", flat)
         self.assertFalse(any(data.startswith("t:") for data in flat))
 
 
@@ -486,27 +465,20 @@ class FocusTest(BotCase):
         super().setUp()
         self.math = self.core.add_task("Математика ОГЭ", start="16:00", duration_min=40, importance=3, deep_work=True)
 
-    def test_focus_runs_on_next_task_counts_down_and_raises_proof(self) -> None:
-        self.text(tpl.MENU_FOCUS)  # не запускает сразу: случайное нажатие ничего не стоит
+    def test_focus_runs_on_next_task_and_raises_proof(self) -> None:
+        """D50: в Telegram ни пульта, ни обратного отсчёта, ни «Без прерываний?» — таймер в приложении."""
+        self.text(tpl.MENU_FOCUS)  # кнопка старой клавиатуры: отсылает в приложение, ничего не запускает
         self.assertIsNone(self.core.store.kv_get("focus"))
-        self.assertIn("На сколько?", self.api.last)
-        self.assertIn(("25 мин", "f:go:25"), self.api.sent[-1][1][0])
-        self.press("f:go:25")
-        text, buttons = self.api.sent[-1]
-        self.assertEqual(text, "🎯 Фокус 25 мин · Математика ОГЭ\nДо 16:20. Телефон убрать.")
-        self.assertEqual(buttons, [[("⏸ Пауза", "f:pause"), ("⏹ Закончить", "f:stop")], [("✕ Отменить, не записывать", "f:cancel")]])
+        self.assertIn("в приложении", self.api.last)
+        self.press("f:go:25")  # кнопка из старого сообщения ещё работает
+        self.assertFalse(any(b for _, b in self.api.sent[-1:] if b))
         self.assertEqual(self.core.state.tasks[self.math.id].status, "active")  # таймер = блок пошёл
-        timer_id = len(self.api.sent)
         self.at(moscow(2026, 11, 2, 16, 3))
         self.scheduler.tick()
-        self.assertEqual(self.api.edited[-1][0], timer_id)
-        self.assertIn("осталось 18 мин", self.api.edited[-1][1])  # 16:03 → до 16:20: 17 полных минут + текущая
+        self.assertEqual(self.api.edited, [])
         self.at(moscow(2026, 11, 2, 16, 21))
         self.scheduler.tick()
-        self.assertIn("закончен", self.api.edited[-1][1])
-        self.assertIn("Без прерываний?", self.api.last)
-        self.press("f:ok:25")
-        self.assertIn("Фокус: 25 мин · Математика ОГЭ — записано", self.api.texts[-2])
+        self.assertFalse(any("Без прерываний?" in t for t in self.api.texts))
         self.assertEqual(self.core.state.tasks[self.math.id].focus_min, 25)
         self.core.complete_task(self.math.id, report="40 задач")
         closed = [e for e in self.core.store.read(0) if e.kind == "task_completed"][-1].payload
