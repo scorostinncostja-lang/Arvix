@@ -469,7 +469,7 @@ def apply_actions(
                 done.append(f"❌ {result['task'].title}" + (" · в долг" if result["debt"] else ""))
             elif kind == "defer_task":
                 # Время — точное (start «19:45»); минуты — только если человек сказал «на 20 минут».
-                # Ни того ни другого — честный отказ в квитанции, а не молчаливые +15 (D45).
+                # Ни того ни другого — честный отказ в квитанции, а не молчаливые +15 (D46).
                 task = core.defer_task(action["task"], int(action.get("minutes") or 0) or None, to=action.get("start"),
                                        day=action.get("date"), source=source)
                 done.append(f"⏳ {task.title} → {task.start}" + (" · завтра" if task.local_date > core.today() else ""))

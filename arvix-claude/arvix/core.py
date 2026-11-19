@@ -499,7 +499,7 @@ class Core:
 
     def defer_task(self, ref: Any, minutes: int | None = 15, *, to: Any = None, day: Any = None, source: str = "claude") -> Task:
         """Перенос: на minutes вперёд (кнопки «+15») или на точное время to («на 19:45»).
-        Точное время — для головы (D45): «переношу на 19:45» и minutes, посчитанные моделью, расходились."""
+        Точное время — для головы (D46): «переношу на 19:45» и minutes, посчитанные моделью, расходились."""
         with self.tx():
             task = self.resolve_task(ref)
             if task.status != "planned":

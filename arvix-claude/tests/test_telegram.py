@@ -268,7 +268,7 @@ class InboxTest(BotCase):
         self.voice("abc")
         self.assertEqual(self.bot.stt.seen, [b"OGG:abc"])
         self.assertFalse(any(t.startswith("🎙") for t in self.api.texts), self.api.texts)
-        self.assertEqual(self.api.texts, ["Шесть часов — мало.\n\nсон 6ч00м"])  # одно сообщение, квитанция в конце (D45)
+        self.assertEqual(self.api.texts, ["Шесть часов — мало.\n\nсон 6ч00м"])  # одно сообщение, квитанция в конце (D46)
         self.assertEqual(self.brain.calls[-1]["prompt"], "спал шесть часов, лёг в час")
         self.assertEqual(self.core.state.days[self.core.today()].sleep_min, 360)
         heard = [e for e in self.core.store.read(0) if e.kind == "message_in"][-1]
@@ -326,7 +326,7 @@ class InboxTest(BotCase):
 
 
 class OneMessageTest(BotCase):
-    """Ответ головы — одно сообщение (D45): абзацы через пустую строку, квитанция — в конце, без id."""
+    """Ответ головы — одно сообщение (D46): абзацы через пустую строку, квитанция — в конце, без id."""
 
     def test_paragraphs_stay_in_one_readable_message(self) -> None:
         self.brain.answers.append({"reply": "Прогулка не засчитана: телефон был в кармане.\n\nПушкин завтра, ставлю на 19:30.\n\n\nСегодня 0 из 3.", "actions": []})
@@ -363,7 +363,7 @@ class OneMessageTest(BotCase):
 
     def test_defer_to_exact_time_matches_the_reply(self) -> None:
         """Баг 19.11: «переношу на 19:45», а блок уехал на 19:09 — модель не дала minutes, код молча добавил 15.
-        Теперь голова называет время (start), минуты считает код (D45)."""
+        Теперь голова называет время (start), минуты считает код (D46)."""
         self.at(moscow(2026, 11, 19, 18, 54))
         math = self.core.add_task("Математика: блок 45 минут", start="18:54", duration_min=45, importance=3)
         self.brain.answers.append({"reply": "Переношу блок на 19:45, до 20:30.", "actions": [
@@ -617,7 +617,7 @@ class LessonTest(BotCase):
         self.assertIn("проверка 67%", receipt)
         self.assertIn("В карточки и журнал ошибок: при удвоении R ток уменьшается вдвое", receipt)
         self.assertIn("📝 Заметка своими словами: 06_Feyn Concept/Закон Ома.md", receipt)
-        self.assertIn("Следующий блок: 5 задач №8", receipt)  # отзыв и квитанция — одним сообщением (D45)
+        self.assertIn("Следующий блок: 5 задач №8", receipt)  # отзыв и квитанция — одним сообщением (D46)
         self.assertIsNone(self.core.store.kv_get("lesson"))
         self.assertEqual(self.core.state.lessons[-1]["score"], 67)
         from arvix.context import build_context

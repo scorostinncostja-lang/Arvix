@@ -9,7 +9,7 @@ home = "~/Arvix"      # папка, где Claude Code запускается в
 [telegram]
 token = ""
 owner_id = 0
-# Ответ головы — одним сообщением (D45); прежние bubble_* больше не читаются.
+# Ответ головы — одним сообщением (D46); прежние bubble_* больше не читаются.
 
 # Где в хранилище живут файлы Арвикса. Пути — от корня хранилища.
 # Чужие заметки Арвикс только дополняет; перезаписывает лишь свои и нетронутые.
@@ -107,9 +107,9 @@ social = 2
 novelty = 1
 offscreen = 3
 
-[tts]                   # голос Арвикса (D34, D36, D45): голосовое — только когда стоит послушать; голос в звонке
+[tts]                   # голос Арвикса (D34, D36, D46): голосовое — только когда стоит послушать; голос в звонке
 engine = "off"          # "gemini" — arvix setup --tts gemini (ключ AI Studio); "command" — своя команда (Piper)
 voice = "Charon"        # мужские голоса Gemini: Charon, Orus, Iapetus, Algieba, Sadaltager, Puck, Fenrir…
 command = ""
-voice_replies = true    # голосовые в Telegram (voice_note головы, D45); false — только текст
+voice_replies = true    # голосовые в Telegram (voice_note головы, D46); false — только текст
 voice_notes_per_day = 3 # не больше стольких голосовых в сутки
