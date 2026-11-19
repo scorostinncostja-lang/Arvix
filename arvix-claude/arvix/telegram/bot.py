@@ -3,8 +3,9 @@
 Порядок для текста: кнопка меню → safety-маркеры → ожидаемый ответ (отчёт, причина,
 разбор, интервью) → голова (L1). Кнопки и команды обрабатывает код без модели (L0).
 
-Ответ головы уходит «пузырьками»: абзац — отдельное сообщение с паузой, как пишет
-человек; квитанция кода (что записано, что отказано, сомнения) — последним сообщением.
+Ответ головы — одно сообщение (D46): абзацы через пустую строку, квитанция кода (что записано,
+что отказано, сомнения) — в конце того же сообщения. Голосовое — отдельно и только если голова
+сочла, что это стоит послушать (voice_note), а не пересказ текста.
 Панель дня — одно закреплённое сообщение с кнопками, которое бот правит на месте.
 """
 
@@ -99,7 +100,6 @@ summary — логика распорядка, 2–4 строки, голосо�
 WEEKDAY_NAMES = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
 DAY_TYPE_RU = {"study": "учебный", "work": "рабочий", "deep": "глубокий", "recovery": "восстановительный", "silent": "тихий"}
 PENDING = "tg_pending_templates"
-PARAGRAPH = re.compile(r"\n\s*\n")
 
 
 def weekdays_label(days: list[int]) -> str:
@@ -165,12 +165,21 @@ def parse_quick_task(text: str) -> dict[str, Any]:
     return out
 
 
-def bubbles(text: str, limit: int = 4) -> list[str]:
-    """Абзацы ответа — отдельные сообщения. Больше limit — хвост склеивается в последний."""
-    parts = [p.strip() for p in PARAGRAPH.split(text.strip()) if p.strip()]
-    if len(parts) > limit:
-        parts = parts[: limit - 1] + ["\n\n".join(parts[limit - 1 :])]
-    return parts
+VOICE_NOTE_MAX = 400  # символов: голосовое — до ~30 секунд, не лекция
+_WORD = re.compile(r"\w{3,}")
+
+
+def voice_note_check(note: str, reply: str) -> str:
+    """Голосовое пропускается, только если оно не пересказ текста (D46). Пустая строка — не отправлять.
+    Повтор — когда 70 % слов голосового уже есть в тексте ответа: озвучивать прочитанное незачем."""
+    note = (note or "").strip()
+    if not note or len(note) > VOICE_NOTE_MAX:
+        return ""
+    words = [w.lower() for w in _WORD.findall(note)]
+    if not words:
+        return ""
+    seen = {w.lower() for w in _WORD.findall(reply or "")}
+    return "" if sum(w in seen for w in words) / len(words) >= 0.7 else note
 
 
 class Bot:
@@ -183,13 +192,8 @@ class Bot:
         self.owner = int(owner_id)
         self.stt = stt if stt is not None else STT(core.cfg)
         self.tts = tts if tts is not None else TTS(core.cfg)
-        self.speak = False  # ответ на голос: короче, «для слуха», и голосовым, если есть озвучка (D34)
         self.sleep = sleep or time.sleep
-        tg = core.cfg.section("telegram")
-        self.pause_base = float(tg.get("bubble_pause_sec", 0.6) or 0)
-        self.pause_per_char = float(tg.get("bubble_pause_per_char", 0.012) or 0)
-        self.pause_max = float(tg.get("bubble_pause_max_sec", 2.5) or 0)
-        self.bubbles_max = int(tg.get("bubbles_max", 4) or 1)
+        self.voice_notes_per_day = int(core.cfg.section("tts").get("voice_notes_per_day", 3) or 0)
         self.channel = "telegram"  # приложение (arvix/web) создаёт свой Bot с channel="web"
         self.memory = Memory(core)
         self.first_today = False
@@ -223,30 +227,37 @@ class Bot:
         self.core.message_in(text, channel=self.channel)
         self.core.store.kv_set("last_in_at", self.core.now().timestamp())
 
-    def reply(self, text: str, receipt: str = "", *, keyboard: list[list[str]] | None = None, key: str | None = None) -> None:
-        """Ответ головы: абзацы — отдельными сообщениями с паузой «набирает…», квитанция
-        кода — последним. В журнале — одно message_out с полным текстом (для истории)."""
-        parts = bubbles(text, self.bubbles_max) if self.pause_base > 0 else [text.strip()]
-        parts = [fmt.sentence_lines(p) for p in parts if p.strip()]
+    def reply(self, text: str, receipt: str = "", *, keyboard: list[list[str]] | None = None, key: str | None = None,
+              voice_note: str = "") -> None:
+        """Ответ головы — одним сообщением (D46): абзацы через пустую строку, предложения по строкам,
+        квитанция кода — в конце того же сообщения. voice_note — отдельное короткое голосовое,
+        только если голова сочла, что это стоит послушать, и код не нашёл в нём пересказа текста."""
+        parts = [fmt.sentence_lines(text)] if text.strip() else []
         if receipt.strip():
             parts.append(receipt.strip())
-        if not parts:
-            parts = ["…"]
-        for i, part in enumerate(parts):
-            if i:
-                try:
-                    self.api.typing(self.owner)
-                except TelegramError:
-                    pass
-                self.sleep(min(self.pause_max, self.pause_base + len(part) * self.pause_per_char))
-            self.api.send(self.owner, fmt.strip_markup(part), keyboard=keyboard if i == len(parts) - 1 else None,
-                          html=fmt.to_html(part))
-        self.core.message_out("\n\n".join(parts), channel=self.channel, key=key)
-        if self.speak and self.channel == "telegram" and self.tts.enabled and self.tts.voice_replies:
-            try:
-                self.api.send_voice(self.owner, self.tts.synth(text))  # голос — вдобавок к тексту, не вместо
-            except (TTSError, TelegramError) as exc:
-                log.info("голосовой ответ не отправлен: %s", exc)
+        body = "\n\n".join(parts) or "…"
+        self.api.send(self.owner, fmt.strip_markup(body), keyboard=keyboard, html=fmt.to_html(body))
+        self.core.message_out(body, channel=self.channel, key=key)
+        if note := voice_note_check(voice_note, text):
+            self.send_voice_note(note)
+
+    def send_voice_note(self, note: str) -> None:
+        """Голосовое в Telegram: озвучка включена, не больше [tts] voice_notes_per_day в сутки."""
+        if self.channel != "telegram" or not (self.tts.enabled and self.tts.voice_replies):
+            return
+        today = self.core.today().isoformat()
+        count = self.core.store.kv_get("voice_notes") or {}
+        sent = int(count.get("n", 0)) if count.get("day") == today else 0
+        if sent >= self.voice_notes_per_day:
+            log.info("голосовое не отправлено: лимит %s в день", self.voice_notes_per_day)
+            return
+        try:
+            self.api.send_voice(self.owner, self.tts.synth(note))
+        except (TTSError, TelegramError) as exc:
+            log.info("голосовое не отправлено: %s", exc)
+            return
+        self.core.store.kv_set("voice_notes", {"day": today, "n": sent + 1})
+        self.core.message_out("🔊 " + note, channel=self.channel)
 
     def await_set(self, kind: str, **data: Any) -> None:
         # asked_at: сообщение, отправленное раньше вопроса (очередь после обрыва сети),
@@ -1184,8 +1195,8 @@ class Bot:
         lines = []
         if self.first_today:
             part = "Доброе утро" if 5 <= now.hour < 12 else "Добрый вечер" if now.hour >= 18 else "Привет"
-            lines.append(f"Первое сообщение человека за сегодня: начни с короткого приветствия отдельным сообщением "
-                         f"(«{part}» или «Привет», по-своему, без вопросов «как дела?»), потом — ответ.")
+            lines.append(f"Первое сообщение человека за сегодня: начни ответ с короткого приветствия первой строкой "
+                         f"(«{part}» или «Привет», по-своему, без вопросов «как дела?»), дальше в том же сообщении — ответ.")
         bedtime = self.core.state.profile.get("bedtime_target") or "23:00"
         try:
             bed = self.core.at(now.date(), bedtime)
@@ -1232,15 +1243,13 @@ class Bot:
         return ids[-(HISTORY + 1):][0] if ids else None
 
     def converse(self, text: str, extra: str = "", *, voice: bool = False) -> None:
-        self.speak = voice
-        try:
-            self._converse(text, extra, voice=voice)
-        finally:
-            self.speak = False
-
-    def _converse(self, text: str, extra: str = "", *, voice: bool = False) -> None:
         core = self.core
-        if voice:
+        if voice and self.channel == "telegram":
+            # Голосовое в Telegram: ответ читают глазами (D46), а распознавание может путать слова.
+            extra += ("\n<dictated>Человек надиктовал это голосом; распознавание могло исказить слова — понимай по смыслу. "
+                      "Ответ он прочитает текстом: обычный ответ по правилам канала, не пересказ для слуха.</dictated>")
+        elif voice:
+            # Режим разговора в приложении: ответ озвучивается целиком (D34).
             extra += ("\n<spoken>Человек говорит голосом, ответ будут слушать: 2–5 коротких предложений, без списков, "
                       "заголовков и смайлов; если разговор продолжается — закончи вопросом.</spoken>")
         if core.store.kv_get("answer_mode"):
@@ -1292,8 +1301,11 @@ class Bot:
                 else:
                     reply += "\n\n(Первоисточник не назван — сверь тему с учебником или официальной документацией.)"
         actions = result.get("actions") or []
+        voice_note = str(result.get("voice_note") or "")
+        if core.effective_mode() == "red" and gentle_violation(voice_note):
+            voice_note = ""  # правило №5 и для голоса: в 🟥 про дисциплину не говорят ни текстом, ни вслух
         done, failed, warnings = apply_actions(core, actions, source=self.channel, fallback_report=text)
-        self.reply(reply, self.receipt(done, failed, warnings))
+        self.reply(reply, self.receipt(done, failed, warnings), voice_note=voice_note)
         if done:
             self.refresh_panel()
         self.run_ui_actions([a for a in actions if a.get("type") in UI_ACTIONS], text)
@@ -1378,7 +1390,7 @@ class Bot:
                                           [("✖️ Не сейчас", f"l:{task.id}:later")]])
 
     def send_rich(self, text: str, buttons: list[list[tuple[str, str]]] | None = None, *, key: str | None = None) -> int | None:
-        """Сообщение кода с разметкой (жирный, строки) — как ответ головы, но одним пузырём."""
+        """Сообщение кода с разметкой (жирный, строки) — как ответ головы."""
         message_id = self.api.send(self.owner, fmt.strip_markup(text), buttons, html=fmt.to_html(text))
         self.core.message_out(fmt.strip_markup(text), key=key, channel=self.channel, buttons=buttons)
         return message_id

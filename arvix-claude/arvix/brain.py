@@ -52,7 +52,7 @@ _ACTION_FIELDS = {
     "type": {"type": "string", "enum": list(ACTION_TYPES)},
     "task": {"type": "string", "description": "id задачи из контекста"},
     "title": {"type": "string"}, "sphere": {"type": "string"}, "importance": {"type": "integer"},
-    "difficulty": {"type": "integer"}, "start": {"type": "string", "description": "время начала ЧЧ:ММ — для add_task обязательно"},
+    "difficulty": {"type": "integer"}, "start": {"type": "string", "description": "время начала ЧЧ:ММ — для add_task обязательно; для defer_task — новое время блока (минуты посчитает код)"},
     "duration_min": {"type": "integer"}, "deep_work": {"type": "boolean"}, "date": {"type": "string"},
     "done_pct": {"type": "integer"}, "report": {"type": "string", "description": "для complete_task: что именно сделано, словами человека"},
     "reason": {"type": "string"},
@@ -109,6 +109,7 @@ VOICE_SCHEMA = {
         "reply": {"type": "string"},
         "actions": {"type": "array", "items": {"type": "object", "properties": _ACTION_FIELDS, "required": ["type"]}},
         "learning": {"type": "boolean"},
+        "voice_note": {"type": "string", "description": "чаще пусто; короткое голосовое, которое полезнее слушать, чем читать, и не пересказ reply"},
     },
     "required": ["reply", "actions"],
 }
@@ -467,8 +468,11 @@ def apply_actions(
                 result = core.fail_task(action["task"], reason=action.get("reason", ""), source=source)
                 done.append(f"❌ {result['task'].title}" + (" · в долг" if result["debt"] else ""))
             elif kind == "defer_task":
-                task = core.defer_task(action["task"], int(action.get("minutes") or 15), source=source)
-                done.append(f"⏳ {task.title} → {task.start}")
+                # Время — точное (start «19:45»); минуты — только если человек сказал «на 20 минут».
+                # Ни того ни другого — честный отказ в квитанции, а не молчаливые +15 (D46).
+                task = core.defer_task(action["task"], int(action.get("minutes") or 0) or None, to=action.get("start"),
+                                       day=action.get("date"), source=source)
+                done.append(f"⏳ {task.title} → {task.start}" + (" · завтра" if task.local_date > core.today() else ""))
             elif kind == "cancel_task":
                 task = core.cancel_task(action["task"], reason=action.get("reason", ""), source=source)
                 done.append(f"✖️ {task.title} отменена")
