@@ -1,4 +1,4 @@
-"""Голос Арвикса (D34, D36): ответ на голосовое — голосовым, голос в звонке (режим разговора).
+"""Голос Арвикса (D36, D46, D52): голосовое — только то, что стоит послушать; кнопка 🔊 в приложении.
 
 Движки [tts] engine:
 - gemini — Gemini TTS по API Google AI Studio (бесплатный тариф): живой нейросетевой голос,
@@ -7,7 +7,7 @@
   Google может использовать его для улучшения своих продуктов;
 - command — своя команда на машине бота (Piper: deploy/tts-local.sh — без сети, но голос
   механический). Текст — в файле {in} (или на stdin, если {in} в команде нет), звук — в {out};
-- off — по умолчанию: звонок в приложении говорит голосом телефона, в Telegram — только текст.
+- off — по умолчанию: голосовых нет, 🔊 в приложении говорит голосом телефона.
 
 fallback_command — запасная команда, если основной движок не дал звука. По умолчанию её нет:
 лучше голос телефона или текст, чем робот (владелец, 18.11).
@@ -17,12 +17,14 @@ fallback_command — запасная команда, если основной 
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -39,6 +41,70 @@ MALE_VOICES = ("Charon", "Orus", "Iapetus", "Algieba", "Sadaltager", "Puck", "Fe
 
 class TTSError(RuntimeError):
     pass
+
+
+AUDIO_NAME = re.compile(r"^[0-9a-f]{16}\.ogg$")
+AUDIO_KEEP_DAYS = 60
+
+
+def audio_dir() -> Path:
+    from arvix.config import data_dir
+
+    return data_dir() / "voice"
+
+
+def audio_name(ogg: bytes) -> str:
+    return hashlib.sha1(ogg).hexdigest()[:16] + ".ogg"
+
+
+def save_audio(ogg: bytes) -> str:
+    """Голосовое Арвикса — файлом рядом с базой: приложение проигрывает его в ленте (D52).
+    Имя — хэш звука. Старше 60 дней — удаляется: журнал хранит текст, звук восстановим озвучкой."""
+    folder = audio_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    name = audio_name(ogg)
+    target = folder / name
+    if not target.exists():
+        tmp = target.with_suffix(".tmp")
+        tmp.write_bytes(ogg)
+        tmp.replace(target)
+    cutoff = time.time() - AUDIO_KEEP_DAYS * 86400
+    for old in folder.glob("*.ogg"):
+        try:
+            if old.stat().st_mtime < cutoff:
+                old.unlink()
+        except OSError:
+            pass
+    return name
+
+
+def audio_path(name: str) -> Path:
+    """Файл голосового по имени из журнала; чужие пути не принимаются."""
+    if not AUDIO_NAME.match(name or ""):
+        raise ValueError("Нет такого голосового")
+    path = audio_dir() / name
+    if not path.is_file():
+        raise ValueError("Голосовое не сохранилось — нажми 🔊, Арвикс озвучит текст заново")
+    return path
+
+
+def cached_synth(tts: "TTS", text: str) -> bytes:
+    """Озвучка по кнопке 🔊 в приложении: тот же текст второй раз не уходит в Gemini (лимит бесплатного тарифа)."""
+    key = hashlib.sha1(f"{tts.label}|{text}".encode()).hexdigest()[:16]
+    cache = audio_dir() / "tts" / f"{key}.ogg"
+    if cache.is_file():
+        return cache.read_bytes()
+    ogg = tts.synth(text)
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(ogg)
+        cutoff = time.time() - 7 * 86400
+        for old in cache.parent.glob("*.ogg"):
+            if old.stat().st_mtime < cutoff:
+                old.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return ogg
 
 
 def speakable(text: str) -> str:
@@ -203,4 +269,5 @@ def gemini_error(code: int, raw: bytes) -> str:
     return f"Gemini: HTTP {code} {message[:160]}".strip()
 
 
-__all__ = ["DEFAULT_VOICE", "MALE_VOICES", "TTS", "TTSError", "find_audio", "gemini_error", "speakable"]
+__all__ = ["DEFAULT_VOICE", "MALE_VOICES", "TTS", "TTSError", "audio_path", "cached_synth", "find_audio", "gemini_error",
+           "save_audio", "speakable"]

@@ -13,8 +13,9 @@ GET  /api/graph               граф заметок: узлы, связи, п�
 GET  /api/stream              поток событий: строка {"v": …} при любом изменении (fetch + ReadableStream)
 GET  /api/pair                одноразовая ссылка установки на телефон (только из Mini App)
 GET  /api/pair/claim?code=…   без входа: одноразовый код → ключ приложения (15 мин, один раз)
-POST /api/message {text} · /api/voice (аудио) · /api/button {data}
-POST /api/tts {text}          озвучка ответа (ogg), если [tts] включена; иначе 404 — говорит голос телефона
+GET  /api/audio?name=…        голосовое Арвикса из ленты (ogg; Telegram и приложение, D52)
+POST /api/message {text, cid} · /api/voice (аудио, X-Client-Id) · /api/button {data}
+POST /api/tts {text}          озвучка по кнопке 🔊 (ogg, с кэшем), если [tts] включена; иначе 404 — говорит голос телефона
 POST /api/upload              файл телом запроса (X-File-Name, X-Caption — urlencoded), до 20 МБ
 POST /api/tasks {…} · /api/tasks/<id>/<op> · /api/tasks/<id>/photo (фото отчёта телом, X-File-Name) · /api/lesson/<id>
 POST /api/focus {minutes, task | topic} · /api/focus/<pause|resume|stop|cancel> · /api/focus/note {event, note}
@@ -189,6 +190,10 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     self.send_json({"results": app.vault().search(query.get("q") or "", 20)})
                 elif url.path == "/api/stream":
                     self.stream()
+                elif url.path == "/api/audio":
+                    from arvix.tts import audio_path
+
+                    self.send_audio(audio_path(query.get("name") or "").read_bytes(), cache=True)
                 elif url.path == "/api/pair":
                     if who != "telegram":
                         self.fail(HTTPStatus.FORBIDDEN, "Ключ выдаётся только внутри Telegram")
@@ -221,10 +226,11 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             parts = [p for p in url.path.split("/") if p][1:]  # без «api»
             try:
                 if parts == ["message"]:
-                    text = str(self.body_json().get("text") or "").strip()
+                    body = self.body_json()
+                    text = str(body.get("text") or "").strip()
                     if not text:
                         raise ArvixError("Пустое сообщение")
-                    app.hub.post(api.chat(text[:16000]), label="думаю")
+                    app.hub.post(api.chat(text[:16000], cid=self.cid(body)), label="думаю")
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif parts == ["voice"]:
                     audio = self.body_bytes()
@@ -232,7 +238,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                         raise ArvixError("Пустая запись")
                     kind = (self.headers.get("Content-Type") or "audio/webm").split(";")[0]
                     ext = {"audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav"}.get(kind, "webm")
-                    app.hub.post(api.voice(audio, f"voice.{ext}"), label="слушаю")
+                    app.hub.post(api.voice(audio, f"voice.{ext}", cid=self.cid()), label="слушаю")
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif parts == ["upload"]:
                     data = self.body_bytes()
@@ -241,26 +247,21 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     name = urllib.parse.unquote(self.headers.get("X-File-Name") or "файл")
                     caption = urllib.parse.unquote(self.headers.get("X-Caption") or "").strip()[:4000]
                     kind = (self.headers.get("Content-Type") or "").split(";")[0]
-                    app.hub.post(api.upload(data, name, kind, caption), label="смотрю файл")
+                    app.hub.post(api.upload(data, name, kind, caption, cid=self.cid()), label="смотрю файл")
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif parts == ["tts"]:
-                    from arvix.tts import TTS, TTSError
+                    from arvix.tts import TTS, TTSError, cached_synth
 
-                    text = str(self.body_json().get("text") or "").strip()
+                    text = str(self.body_json().get("text") or "").strip()[:4000]
                     tts = TTS(app.cfg)
                     if not tts.enabled:
                         self.fail(HTTPStatus.NOT_FOUND, "Озвучка на сервере выключена — говорит голос телефона")
                         return
                     try:
-                        audio = tts.synth(text)
+                        audio = cached_synth(tts, text)
                     except TTSError as exc:
                         raise ArvixError(str(exc)) from exc
-                    self.send_response(200)
-                    self.send_header("Content-Type", "audio/ogg")
-                    self.send_header("Content-Length", str(len(audio)))
-                    self.send_header("Cache-Control", "no-store")
-                    self.end_headers()
-                    self.wfile.write(audio)
+                    self.send_audio(audio)
                 elif parts == ["button"]:
                     data = str(self.body_json().get("data") or "")
                     app.hub.post(api.button(data), label="думаю")
@@ -290,7 +291,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     text = str(self.body_json().get("text") or "").strip()
                     if not text:
                         raise ArvixError("Пустое сообщение")
-                    app.hub.post(api.project_chat(parts[1], text[:16000]), label="думаю")
+                    app.hub.post(api.project_chat(parts[1], text[:16000], cid=self.cid(self.body_json())), label="думаю")
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif len(parts) == 3 and parts[0] == "projects" and parts[2] == "upload":
                     data = self.body_bytes()
@@ -349,6 +350,19 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 self.fail(HTTPStatus.BAD_REQUEST, str(exc))
 
         # --- разное --------------------------------------------------------------------
+
+        def cid(self, body: dict[str, Any] | None = None) -> str | None:
+            """Метка черновика из приложения (D52): по ней лента заменяет «отправляется…» настоящим сообщением."""
+            raw = str((body or {}).get("cid") or self.headers.get("X-Client-Id") or "")
+            return raw[:40] if raw.replace("-", "").isalnum() else None
+
+        def send_audio(self, audio: bytes, *, cache: bool = False) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/ogg")
+            self.send_header("Content-Length", str(len(audio)))
+            self.send_header("Cache-Control", "private, max-age=86400" if cache else "no-store")
+            self.end_headers()
+            self.wfile.write(audio)
 
         def notes_dir(self, rel: str) -> dict[str, Any]:
             vault = app.vault()

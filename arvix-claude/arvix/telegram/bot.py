@@ -43,7 +43,7 @@ from arvix.context import build_context, end_time, hm, task_line
 from arvix.core import ArvixError, Core, is_goodnight, parse_sleep_text
 from arvix.prompt import constitution, voice_prompt
 from arvix.stt import STT, STTError
-from arvix.tts import TTS, TTSError
+from arvix.tts import TTS, TTSError, save_audio
 from arvix.telegram import fmt
 from arvix.telegram import templates as tpl
 from arvix.telegram.api import TelegramAPI, TelegramError
@@ -167,17 +167,48 @@ def parse_quick_task(text: str) -> dict[str, Any]:
 
 VOICE_NOTE_MAX = 400  # символов: голосовое — до ~30 секунд, не лекция
 _WORD = re.compile(r"\w{3,}")
+_LATIN = re.compile(r"[A-Za-z]")
+_LETTER = re.compile(r"[^\W\d_]")
+VOICE_KINDS = ("pronunciation", "memorize")
+# Человек сам просит услышать: «как это звучит», «произнеси», «озвучь», «скажи голосом»
+_WANTS_VOICE = re.compile(r"(озвуч|произн[ое]с|произнош|как (это |оно )?звучит|голос(ом|овое|овым)|вслух|послушать|дай послушать)",
+                          re.IGNORECASE)
 
 
-def voice_note_check(note: str, reply: str) -> str:
-    """Голосовое пропускается, только если оно не пересказ текста (D46). Пустая строка — не отправлять.
-    Повтор — когда 70 % слов голосового уже есть в тексте ответа: озвучивать прочитанное незачем."""
+def wants_voice(text: str) -> bool:
+    return bool(_WANTS_VOICE.search(text or ""))
+
+
+def foreign_share(text: str) -> float:
+    """Доля латинских букв среди всех: английское слово или фраза, которую надо услышать."""
+    letters = _LETTER.findall(text or "")
+    return len(_LATIN.findall(text or "")) / len(letters) if letters else 0.0
+
+
+def voice_note_check(note: str, reply: str, kind: str = "", *, asked: bool = False) -> str:
+    """Голосовое — только когда его стоит послушать (D46, D52). Пустая строка — не отправлять.
+    Решает голова (voice_kind), проверяет код:
+    - pronunciation — произношение: в голосовом есть иностранные слова (≥ 25 % латинских букв).
+      Совпадать с текстом можно и нужно: прочитал слово — услышал, как оно звучит;
+    - memorize — правило, формула, строчка на слух: не пересказ текста (меньше 70 % слов уже в ответе);
+    - другого нет: «живая фраза», мотивация, пересказ ответа голосом — дубль, его не шлём.
+    Попросил сам («как это звучит», «озвучь») — пересказ ответа тоже можно: он хочет его услышать."""
     note = (note or "").strip()
     if not note or len(note) > VOICE_NOTE_MAX:
         return ""
     words = [w.lower() for w in _WORD.findall(note)]
     if not words:
         return ""
+    if kind not in VOICE_KINDS and not asked:
+        if foreign_share(note) < 0.25:
+            return ""  # без назначения — не «надо послушать», а фраза голосом: мотивация, пересказ
+        kind = "pronunciation"
+    if foreign_share(note) >= 0.25 and (kind == "pronunciation" or asked):
+        return note
+    if kind == "pronunciation" and not asked:
+        return ""  # «произношение» без иностранных слов — это просто текст голосом
+    if asked:
+        return note
     seen = {w.lower() for w in _WORD.findall(reply or "")}
     return "" if sum(w in seen for w in words) / len(words) >= 0.7 else note
 
@@ -196,6 +227,8 @@ class Bot:
         self.sleep = sleep or time.sleep
         self.voice_notes_per_day = int(core.cfg.section("tts").get("voice_notes_per_day", 3) or 0)
         self.channel = "telegram"  # приложение (arvix/web) создаёт свой Bot с channel="web"
+        self.lane: Callable[[Callable[[], Any]], None] | None = None  # Hub.think в службе бота (D52)
+        self.cid: str | None = None  # метка сообщения из приложения: его черновик в ленте
         self.memory = Memory(core)
         self.first_today = False
 
@@ -227,6 +260,7 @@ class Bot:
             yield
         finally:
             self.channel, self.api, self.sleep = saved
+            self.cid = None
 
     def tg_send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None, *, key: str | None = None) -> int | None:
         """Сообщение, которое живёт в Telegram независимо от канала (таймер, панель)."""
@@ -235,40 +269,51 @@ class Bot:
         return message_id
 
     def log_in(self, text: str) -> None:
-        self.core.message_in(text, channel=self.channel, project=self.project)
+        cid, self.cid = self.cid, None  # метка черновика приложения — только первому message_in (D52)
+        self.core.message_in(text, channel=self.channel, project=self.project, cid=cid)
         self.core.store.kv_set("last_in_at", self.core.now().timestamp())
 
     def reply(self, text: str, receipt: str = "", *, keyboard: list[list[str]] | None = None, key: str | None = None,
-              voice_note: str = "") -> None:
+              voice_note: str = "", voice_kind: str = "", asked_voice: bool = False) -> None:
         """Ответ головы — одним сообщением (D46): абзацы через пустую строку, предложения по строкам,
         квитанция кода — в конце того же сообщения. voice_note — отдельное короткое голосовое,
-        только если голова сочла, что это стоит послушать, и код не нашёл в нём пересказа текста."""
+        только если его стоит послушать, а не прочитать (voice_note_check, D52)."""
         parts = [fmt.sentence_lines(text)] if text.strip() else []
         if receipt.strip():
             parts.append(receipt.strip())
         body = "\n\n".join(parts) or "…"
         self.api.send(self.owner, fmt.strip_markup(body), keyboard=keyboard, html=fmt.to_html(body))
         self.core.message_out(body, channel=self.channel, key=key, project=self.project)
-        if note := voice_note_check(voice_note, text):
-            self.send_voice_note(note)
+        if note := voice_note_check(voice_note, text, voice_kind, asked=asked_voice):
+            self.send_voice_note(note, asked=asked_voice)
 
-    def send_voice_note(self, note: str) -> None:
-        """Голосовое в Telegram: озвучка включена, не больше [tts] voice_notes_per_day в сутки."""
-        if self.channel != "telegram" or not (self.tts.enabled and self.tts.voice_replies):
+    def send_voice_note(self, note: str, *, asked: bool = False) -> None:
+        """Голосовое: в Telegram — голосовым сообщением, в приложении — плеером в ленте; звук
+        сохраняется файлом, и приложение проигрывает голосовые из обоих каналов (D52).
+        Без просьбы — не больше [tts] voice_notes_per_day в сутки; попросил сам — лимита нет."""
+        if not (self.tts.enabled and self.tts.voice_replies):
             return
         today = self.core.today().isoformat()
         count = self.core.store.kv_get("voice_notes") or {}
         sent = int(count.get("n", 0)) if count.get("day") == today else 0
-        if sent >= self.voice_notes_per_day:
+        if not asked and sent >= self.voice_notes_per_day:
             log.info("голосовое не отправлено: лимит %s в день", self.voice_notes_per_day)
             return
         try:
-            self.api.send_voice(self.owner, self.tts.synth(note))
+            ogg = self.tts.synth(note)
+            if self.channel == "telegram":
+                self.api.send_voice(self.owner, ogg)
         except (TTSError, TelegramError) as exc:
             log.info("голосовое не отправлено: %s", exc)
             return
-        self.core.store.kv_set("voice_notes", {"day": today, "n": sent + 1})
-        self.core.message_out("🔊 " + note, channel=self.channel, project=self.project)
+        try:
+            audio = save_audio(ogg)
+        except OSError as exc:
+            log.warning("голосовое не сохранено для приложения: %s", exc)
+            audio = None
+        if not asked:
+            self.core.store.kv_set("voice_notes", {"day": today, "n": sent + 1})
+        self.core.message_out("🔊 " + note, channel=self.channel, project=self.project, audio=audio)
 
     def await_set(self, kind: str, **data: Any) -> None:
         # asked_at: сообщение, отправленное раньше вопроса (очередь после обрыва сети),
@@ -1193,8 +1238,9 @@ class Bot:
     def history(self, exclude_last: str = "") -> list[str]:
         start = max(0, self.core.state.last_event_id - 400)
         events = [e for e in self.core.store.read(start) if e.kind in ("message_in", "message_out")]
-        if self.project:  # в окне проекта — его нить: голова не путает проект с разговором о сне
-            events = [e for e in events if e.payload.get("project") == self.project]
+        # У каждого чата своя нить (D47): в окне проекта — его сообщения, в общем чате — без проектов.
+        # Раньше общий чат видел и нити проектов, которых нет ни в Telegram, ни в ленте приложения.
+        events = [e for e in events if e.payload.get("project") == self.project]
         lines = []
         for event in events[-(HISTORY + 1):]:
             who = "ЧЕЛОВЕК" if event.kind == "message_in" else "АРВИКС"
@@ -1204,20 +1250,22 @@ class Bot:
         return lines[-HISTORY:]
 
     @contextmanager
-    def typing_kept(self) -> Any:
+    def typing_kept(self, api: Any = None) -> Any:
         """«печатает…» всё время, пока думает голова: Telegram гасит индикатор через 5 с,
-        а ответ идёт 5–30 с. Поток трогает только HTTP, базу — нет."""
+        а ответ идёт 5–30 с. Поток трогает только HTTP, базу — нет. api — канал разговора:
+        голова думает в своём потоке, а self.api тем временем мог смениться (D52)."""
+        api = api or self.api
         stop = threading.Event()
 
         def loop() -> None:
             while not stop.wait(TYPING_EVERY):
                 try:
-                    self.api.typing(self.owner)
+                    api.typing(self.owner)
                 except TelegramError:
                     pass
 
         try:
-            self.api.typing(self.owner)
+            api.typing(self.owner)
         except TelegramError:
             pass
         worker = threading.Thread(target=loop, daemon=True)
@@ -1281,16 +1329,49 @@ class Bot:
         ids = [e.id for e in self.core.store.read(start) if e.kind in ("message_in", "message_out")]
         return ids[-(HISTORY + 1):][0] if ids else None
 
+    def snapshot(self) -> tuple[Any, ...]:
+        """Чей это разговор: канал, его API, проект, первое ли сообщение дня. Полоса головы (D52)
+        готовит и записывает ответ позже — уже после того, как бот обработал другие апдейты."""
+        return (self.channel, self.api, self.sleep, self.project, self.first_today)
+
+    @contextmanager
+    def restored(self, ctx: tuple[Any, ...]) -> Any:
+        saved = self.snapshot()
+        self.channel, self.api, self.sleep, self.project, self.first_today = ctx
+        try:
+            yield
+        finally:
+            self.channel, self.api, self.sleep, self.project, self.first_today = saved
+
     def converse(self, text: str, extra: str = "", *, voice: bool = False) -> None:
+        """Ответ головы. Без полосы (тесты, CLI) — сразу; в службе бота (`lane` = Hub.think) —
+        запрос готовится и ответ пишется в главном потоке, а голова думает в своём: кнопки,
+        таймер и Telegram в это время работают (D52)."""
+        ctx = self.snapshot()
+
+        def start() -> Any:
+            with self.restored(ctx):
+                return self.converse_start(text, extra, voice, ctx)
+
+        if self.lane is None:
+            plan = start()
+            if plan is not None:
+                think, finish = plan
+                finish(think())
+        else:
+            self.lane(start)
+
+    def converse_start(self, text: str, extra: str, voice: bool, ctx: tuple[Any, ...]) -> Any:
+        """Главный поток: собрать запрос. Возвращает (думать, записать)."""
         core = self.core
-        if voice and self.channel == "telegram":
-            # Голосовое в Telegram: ответ читают глазами (D46), а распознавание может путать слова.
+        if voice:
+            # Голосовое (Telegram или микрофон приложения): ответ читают глазами (D46), а распознавание может путать слова.
             extra += ("\n<dictated>Человек надиктовал это голосом; распознавание могло исказить слова — понимай по смыслу. "
                       "Ответ он прочитает текстом: обычный ответ по правилам канала, не пересказ для слуха.</dictated>")
-        elif voice:
-            # Режим разговора в приложении: ответ озвучивается целиком (D34).
-            extra += ("\n<spoken>Человек говорит голосом, ответ будут слушать: 2–5 коротких предложений, без списков, "
-                      "заголовков и смайлов; если разговор продолжается — закончи вопросом.</spoken>")
+        asked_voice = wants_voice(text)
+        if asked_voice:
+            extra += ("\n<voice_request>Человек просит услышать — заполни voice_note (то, что он хочет услышать: "
+                      "слово, фразу, правило) и voice_kind.</voice_request>")
         if core.store.kv_get("answer_mode"):
             core.store.kv_del("answer_mode")
             extra += "\n<answer_mode>Человек запросил готовый ответ. Дай полный ответ с источниками и action learning_question с direct=true.</answer_mode>"
@@ -1312,43 +1393,68 @@ class Bot:
             if block:
                 extra += "\n" + block
         # Статичная часть — системный промпт (из кэша), всё живое — в запросе (D40).
-        system, prompt = voice_prompt(core, channel=self.channel if self.channel == "telegram" else "telegram",
-                                      message=text, history=self.history(exclude_last=text), extra=extra.strip())
+        system, prompt = voice_prompt(core, channel="telegram", message=text, history=self.history(exclude_last=text),
+                                      extra=extra.strip())
+        red = core.effective_mode() == "red"
         # Навыки (D33): в 🟥 и при выключенном менторе — только мягкие (разговор, тревога), правило №5.
-        skills = "gentle" if core.effective_mode() == "red" or not core.state.mentor_enabled else "full"
+        skills = "gentle" if red or not core.state.mentor_enabled else "full"
         ask = {"system": system, "schema": VOICE_SCHEMA, "vault_tools": True, "web": True, "skills": skills, "effort": effort_for(text)}
-        with self.typing_kept():
-            result = self.brain.ask(prompt=prompt, **ask)
-            if result is None:
-                heard = f"🎙 «{clip(text, 300)}»\n" if voice else ""  # голова молчит — пусть хотя бы видно, что услышано
-                self.send(heard + " ".join(x for x in (tpl.FALLBACK, self.brain_down_hint()) if x))
-                return
-            reply = (result.get("reply") or "").strip()
-            # Перегенерация — с пометкой в запросе, а не в системном промпте: кэш системного остаётся.
-            if core.effective_mode() == "red" and gentle_violation(reply):
-                retry = self.brain.ask(
-                    prompt=prompt + "\n\n<validator>В ответе были слова про дисциплину, задачи или метрики. В мягком режиме это запрещено. Перепиши по-человечески.</validator>",
-                    **ask,
-                )
-                ok = retry is not None and not gentle_violation(retry.get("reply", ""))
-                result = retry if ok else {"actions": []}
-                reply = retry["reply"].strip() if ok else tpl.GENTLE_FALLBACK
-            if result.get("learning") and not has_source(reply):
-                retry = self.brain.ask(
-                    prompt=prompt + "\n\n<validator>Ответ обучающий, но первоисточник не назван. Назови его: учебник и параграф, "
-                    "официальная документация или спецификация. Ссылку давай только настоящую; не уверен — без ссылки. Не выдумывай URL.</validator>",
-                    **ask,
-                )
-                if retry and has_source(retry.get("reply", "")):
-                    result, reply = retry, retry["reply"].strip()
-                else:
-                    reply += "\n\n(Первоисточник не назван — сверь тему с учебником или официальной документацией.)"
+        api = self.api
+
+        def think() -> dict[str, Any] | None:
+            """Отдельный поток: только голова и HTTP «печатает…», базу не трогает."""
+            with self.typing_kept(api):
+                return self.think(prompt, ask, red=red)
+
+        def finish(out: dict[str, Any] | None) -> None:
+            with self.restored(ctx):
+                self.converse_finish(text, voice, out, red=red, asked_voice=asked_voice)
+
+        return think, finish
+
+    def think(self, prompt: str, ask: dict[str, Any], *, red: bool) -> dict[str, Any] | None:
+        """Вызов головы с валидаторами (перегенерация). None — голова недоступна."""
+        result = self.brain.ask(prompt=prompt, **ask)
+        if result is None:
+            return None
+        reply = (result.get("reply") or "").strip()
+        # Перегенерация — с пометкой в запросе, а не в системном промпте: кэш системного остаётся.
+        if red and gentle_violation(reply):
+            retry = self.brain.ask(
+                prompt=prompt + "\n\n<validator>В ответе были слова про дисциплину, задачи или метрики. В мягком режиме это запрещено. Перепиши по-человечески.</validator>",
+                **ask,
+            )
+            ok = retry is not None and not gentle_violation(retry.get("reply", ""))
+            result = retry if ok else {"actions": []}
+            reply = retry["reply"].strip() if ok else tpl.GENTLE_FALLBACK
+        if result.get("learning") and not has_source(reply):
+            retry = self.brain.ask(
+                prompt=prompt + "\n\n<validator>Ответ обучающий, но первоисточник не назван. Назови его: учебник и параграф, "
+                "официальная документация или спецификация. Ссылку давай только настоящую; не уверен — без ссылки. Не выдумывай URL.</validator>",
+                **ask,
+            )
+            if retry and has_source(retry.get("reply", "")):
+                result, reply = retry, retry["reply"].strip()
+            else:
+                reply += "\n\n(Первоисточник не назван — сверь тему с учебником или официальной документацией.)"
+        return {**result, "reply": reply}
+
+    def converse_finish(self, text: str, voice: bool, result: dict[str, Any] | None, *, red: bool, asked_voice: bool) -> None:
+        """Главный поток: actions → Core, ответ одним сообщением, голосовое — если оно по делу."""
+        core = self.core
+        if result is None:
+            heard = f"🎙 «{clip(text, 300)}»\n" if voice else ""  # голова молчит — пусть хотя бы видно, что услышано
+            self.send(heard + " ".join(x for x in (tpl.FALLBACK, self.brain_down_hint()) if x))
+            return
+        core.refresh(catch_up=False)  # пока голова думала, могли прийти кнопки, CLI, Claude Code
+        reply = result.get("reply") or ""
         actions = result.get("actions") or []
         voice_note = str(result.get("voice_note") or "")
-        if core.effective_mode() == "red" and gentle_violation(voice_note):
+        if red and gentle_violation(voice_note):
             voice_note = ""  # правило №5 и для голоса: в 🟥 про дисциплину не говорят ни текстом, ни вслух
         done, failed, warnings = apply_actions(core, actions, source=self.channel, fallback_report=text)
-        self.reply(reply, self.receipt(done, failed, warnings), voice_note=voice_note)
+        self.reply(reply, self.receipt(done, failed, warnings), voice_note=voice_note,
+                   voice_kind=str(result.get("voice_kind") or ""), asked_voice=asked_voice)
         if done:
             self.refresh_panel()
         self.run_ui_actions([a for a in actions if a.get("type") in UI_ACTIONS], text)

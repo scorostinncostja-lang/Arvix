@@ -109,6 +109,8 @@ VOICE_SCHEMA = {
         "actions": {"type": "array", "items": {"type": "object", "properties": _ACTION_FIELDS, "required": ["type"]}},
         "learning": {"type": "boolean"},
         "voice_note": {"type": "string", "description": "чаще пусто; короткое голосовое, которое полезнее слушать, чем читать, и не пересказ reply"},
+        "voice_kind": {"type": "string", "enum": ["", "pronunciation", "memorize"],
+                       "description": "зачем голосовое: pronunciation — как звучат иностранные слова; memorize — правило на слух"},
     },
     "required": ["reply", "actions"],
 }
