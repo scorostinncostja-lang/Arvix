@@ -587,6 +587,9 @@ class Bot:
                 self.on_project_button(project_id, op)
             elif kind == "z":
                 self.on_sleep_button(rest)
+            elif kind == "g":
+                plan_id, _, op = rest.partition(":")
+                self.on_goal_plan_button(plan_id, op)
         except ArvixError as exc:
             self.send(f"Отказ: {exc}")
 
@@ -1384,6 +1387,8 @@ class Bot:
                     self.send(tpl.week(self.core))
                 elif kind == "show_goals":
                     self.cmd_goals("")
+                elif kind == "plan_goal":
+                    self.run_goal_plan(action.get("goal_id") or "")
                 elif kind == "debrief_now":
                     self.send_debrief(manual=True)
                 elif kind == "rest_day":
@@ -1757,7 +1762,48 @@ class Bot:
             self.refresh_panel()
         elif op == "pause":
             projects.set_project(self.core, project_id=project["id"], status="paused", source="telegram")
-            self.send(f"⏸ «{project['title']}» на паузе. Это решение, а не провал: вернуть — во вкладке «Проекты» или словами.")
+            self.send(f"⏸ «{project['title']}» на паузе. Это решение, а не провал: вернуть — во вкладке «Цели» или словами.")
+
+    def run_goal_plan(self, goal_id: str = "", *, auto: bool = False) -> bool:
+        """Стратег (D52, L2): Арвикс решает, что нужно цели, — план приходит отдельным сообщением с кнопками.
+        Зовётся после ответа (действие plan_goal), кнопкой приложения или планировщиком — никогда в цепочке ответа."""
+        from arvix import strategist, strategy
+
+        core = self.core
+        if core.effective_mode() == "red" or not core.state.mentor_enabled:
+            if not auto:
+                self.send("Сегодня без планов на цели — день восстановления. Вернёмся, когда будешь в норме.")
+            return False
+        if not goal_id:
+            goal = strategy.auto_candidate(core) or next(iter(strategy.focus(core)[0]), None)
+            if goal is None:
+                self.send("Целей нет — сначала скажи, к чему идёшь: «моя цель — …».")
+                return False
+            goal_id = goal["id"]
+        try:
+            result = strategist.generate(core, self.brain, goal_id, system=self.analyst_system(""))
+        except ArvixError as exc:
+            if not auto:
+                self.send(f"План к цели не собрался: {exc}")
+            return False
+        plan = result["plan"]
+        self.send_rich(strategist.message(core, plan), [[("✅ Принять", f"g:{plan['id']}:all"), ("✖️ Не надо", f"g:{plan['id']}:no")]],
+                       key=f"plan:{plan['id']}")
+        return True
+
+    def on_goal_plan_button(self, plan_id: str, op: str) -> None:
+        """Кнопки плана стратега: принять всё — код раскладывает пункты событиями; «не надо» — отказ тоже данные."""
+        from arvix import strategy
+
+        if op == "all":
+            done, failed = strategy.accept_all(self.core, plan_id, source="telegram")
+            lines = [f"✅ {x}" for x in done] + [f"⚠️ {x}" for x in failed]
+            self.send("\n".join(lines) or "Все пункты уже решены.")
+            if done:
+                self.refresh_panel()
+        elif op == "no":
+            strategy.reject_item(self.core, plan_id, source="telegram")
+            self.send("Не берём. Запомнил отказ — в следующий раз предложу другое. Скажи словами, что не так, — учту сразу.")
 
     def build_project_roadmap(self, goal_id: str) -> None:
         """Роадмап проектов под цель (D44): совет в фоне — проекты ложатся идеями, ответ приходит сообщением."""
@@ -1770,7 +1816,7 @@ class Bot:
             return
         text = f"🗺 Роадмап проектов к цели «{result['goal']['title']}»\n\n{clip(result['summary'], 900)}"
         if result["created"]:
-            text += "\n\nДобавил идеями по порядку: " + " → ".join(result["created"]) + ". В работу берёшь сам — во вкладке «Проекты»."
+            text += "\n\nДобавил идеями по порядку: " + " → ".join(result["created"]) + ". В работу берёшь сам — во вкладке «Цели»."
         else:
             text += "\n\nНовых проектов не добавил: текущий роадмап уже ведёт к цели."
         if result["path"]:

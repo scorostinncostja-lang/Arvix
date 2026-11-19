@@ -208,8 +208,10 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
             done = sum(1 for g in st.goals.values() if g.get("parent_id") == goal["id"] and g.get("status") == "done")
             nxt = min(stages, key=lambda g: g.get("deadline") or "9999")
             lines.append(f"ЭТАПЫ: {done}/{done + len(stages)} пройдено · следующий: [{nxt['id']}] {nxt['title']}" + (f" до {nxt['deadline']}" if nxt.get("deadline") else ""))
-    from arvix import projects
+    from arvix import projects, strategy
 
+    if strategy_lines := strategy.context_lines(core):  # фокус, система цели, минуты, дубли — считает код (D52)
+        lines.append("СТРАТЕГИЯ (цели в фокусе):\n" + "\n".join(strategy_lines))
     if project_lines := projects.context_lines(core):  # цифры и несостыковки проектов считает код (D43)
         lines.append("ПРОЕКТЫ:\n" + "\n".join(project_lines))
     traits = sorted(st.traits.values(), key=lambda t: -int(t.get("severity", 3)))[:4]

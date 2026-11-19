@@ -63,6 +63,7 @@ class Scheduler:
                 self.reminders(now)
                 self.midday(now)
                 self.projects(now)
+                self.strategy(now)
                 self.curiosity(now)
             if full or back:
                 self.bedtime(now, gentle=red)
@@ -137,6 +138,27 @@ class Scheduler:
                 continue
             self.bot.send(tpl.project_stall(project, stats, projects.next_step(self.core, project)), tpl.project_buttons(project["id"]), key=key)
             return  # одно за оборот: два застоя — два сообщения, но не пачкой
+
+    def strategy(self, now: datetime) -> None:
+        """Стратег приходит к цели сам (D52): в окно чек-ина, одна цель в день, цель в фокусе без системы
+        или стоит, не чаще раза в неделю на цель (strategy.auto_candidate). L0 решает «когда», L2 — «что»."""
+        from arvix import strategy
+
+        when = self._when("midday")
+        if not when or not (when <= now < when + timedelta(hours=3)):
+            return
+        key = f"strategy:{now.date().isoformat()}"
+        if self.core.store.kv_get("strategy_tried") == now.date().isoformat() or self.core.store.kv_get("focus"):
+            return
+        goal = strategy.auto_candidate(self.core)
+        if goal is None:
+            return
+        self.core.store.kv_set("strategy_tried", now.date().isoformat())  # одна попытка в день: голова молчит — не дёргаем
+        try:
+            if not self.bot.run_goal_plan(goal["id"], auto=True):
+                log.info("план к цели не собрался — завтра снова")
+        except TelegramError as exc:
+            log.warning("план к цели не отправлен (%s): %s", key, exc)
 
     def debrief(self, now: datetime) -> None:
         when = self._when("debrief")

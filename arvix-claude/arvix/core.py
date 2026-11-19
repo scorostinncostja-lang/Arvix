@@ -827,10 +827,14 @@ class Core:
         goal_id: str | None = None,
         parent_id: str | None = None,
         status: str | None = None,
+        focus: bool | None = None,
+        merged_into: str | None = None,
         source: str = "claude",
     ) -> str:
         """Цель или её этап (иерархия 03-DATA-MODEL §2: мечта → главная → … → веха).
-        С goal_id — обновление: непереданные поля остаются прежними, событие новое."""
+        С goal_id — обновление: непереданные поля остаются прежними, событие новое.
+        focus — человек сам поставил цель в фокус (True) или в «потом» (False); None — решает код
+        (strategy.focus). merged_into — цель слита с другой (strategy.merge, D52)."""
         old = self.state.goals.get(goal_id or "", {})
         if goal_id and not old:
             raise ArvixError(f"Цели {goal_id} нет")
@@ -849,6 +853,13 @@ class Core:
             "parent_id": parent_id or old.get("parent_id"),
             "status": status or old.get("status", "active"),
         }
+        focus = old.get("focus") if focus is None else bool(focus)
+        if focus is not None:
+            payload["focus"] = focus
+        if merged_into or old.get("merged_into"):
+            payload["merged_into"] = merged_into or old.get("merged_into")
+        if payload["parent_id"] == payload["id"]:
+            raise ArvixError("Цель не может быть этапом самой себя")
         if not payload["title"]:
             raise ArvixError("У цели нет названия")
         if not payload["why"].strip() and not payload["parent_id"]:
