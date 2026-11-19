@@ -479,32 +479,28 @@ kbd { display: inline-block; font: 600 11px/1.3 ui-monospace, SFMono-Regular, Me
 @media (min-width: 900px) {
   :root { --side-w: 228px; --top-h: 64px; }
   html { scrollbar-width: thin; }
+  :root { --side-w: calc(228px + env(safe-area-inset-left)); }
   #app { max-width: none; margin: 0; padding-left: var(--side-w); }
   .top { height: var(--top-h); padding: 0 32px; border-bottom: 1px solid var(--line); }
   .top-day { font-size: 18px; }
   main { width: 100%; max-width: 1320px; margin: 0 auto; padding: 22px 32px 48px; }
 
   /* вкладки → боковая панель */
-  .tabs { top: 0; right: auto; width: var(--side-w); flex-direction: column; justify-content: flex-start; gap: 2px; padding: 14px 12px;
+  .tabs { top: 0; right: auto; width: var(--side-w); flex-direction: column; justify-content: flex-start; gap: 2px;
+    padding: 14px 12px 14px calc(12px + env(safe-area-inset-left));
     background: var(--card); backdrop-filter: none; -webkit-backdrop-filter: none; border-top: 0; border-right: 1px solid var(--line); }
   .brand { display: flex; align-items: center; gap: 10px; padding: 6px 10px 18px; font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
   .brand img { border-radius: 8px; }
   .tabs button { flex: none; max-width: none; flex-direction: row; gap: 12px; padding: 9px 12px; font-size: 15px; font-weight: 500;
     color: var(--text); border-radius: 10px; text-align: left; }
-  .tabs button:hover { background: var(--card-2); }
   .tabs button.active { background: color-mix(in srgb, var(--accent) 13%, transparent); color: var(--accent); font-weight: 600; }
   .tabs button .ico { height: 20px; }
   .tabs button .ico .ic { width: 20px; height: 20px; }
   .tabs kbd { display: inline-block; margin-left: auto; opacity: 0; transition: opacity .15s; }
-  .tabs button:hover kbd { opacity: 1; }
   .dot { top: 50%; right: 44px; transform: translateY(-50%); }
   .side-hint { display: block; margin-top: auto; padding: 12px; font-size: 12px; line-height: 1.7; color: var(--muted); }
 
-  /* наведение мышью */
   .task, .list-item, .icon-btn, .pill, .seg button, .btn, .msg .btns button { transition: background .12s, box-shadow .12s, filter .12s; }
-  .icon-btn:hover, .pill:hover, .seg button:not(.on):hover, .btn:hover, .msg .btns button:hover { filter: brightness(.95); }
-  :root:not([data-theme="light"]) .icon-btn:hover { filter: brightness(1.25); }
-  .list-item:hover { background: var(--card-2); }
 
   /* Сегодня: план слева, цифры и фокус справа */
   .today-grid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(340px, 30vw, 420px); gap: 28px; align-items: start; }
@@ -546,7 +542,6 @@ kbd { display: inline-block; font: 600 11px/1.3 ui-monospace, SFMono-Regular, Me
   .proj-top .btn { margin-top: 0; }
   .proj-list { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
   .proj-list .card { margin: 0; }
-  .proj-card:hover { box-shadow: 0 0 0 1px var(--line), var(--shadow); }
   .proj-grid { display: grid; grid-template-columns: minmax(0, 1fr) clamp(320px, 30vw, 400px); gap: 24px; align-items: start; }
 
   /* Прогресс: карточки сеткой */
@@ -559,4 +554,40 @@ kbd { display: inline-block; font: 600 11px/1.3 ui-monospace, SFMono-Regular, Me
 }
 @media (min-width: 1400px) {
   .progress-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* Наведение — только там, где есть мышь или тачпад: на сенсорном экране подсветка «залипает» после касания */
+@media (min-width: 900px) and (hover: hover) {
+  .tabs button:hover { background: var(--card-2); }
+  .tabs button:hover kbd { opacity: 1; }
+  .icon-btn:hover, .pill:hover, .seg button:not(.on):hover, .btn:hover, .msg .btns button:hover { filter: brightness(.95); }
+  :root:not([data-theme="light"]) .icon-btn:hover { filter: brightness(1.25); }
+  .list-item:hover { background: var(--card-2); }
+  .proj-card:hover { box-shadow: 0 0 0 1px var(--line), var(--shadow); }
+}
+
+/* --- Планшет вертикально (600–899 px): нижние вкладки как на телефоне, но во всю ширину, без полос по бокам ---- */
+@media (min-width: 600px) and (max-width: 899.98px) {
+  :root { --pad: max(28px, env(safe-area-inset-left), env(safe-area-inset-right)); }
+  #app { max-width: none; }
+  .top { padding-left: var(--pad); padding-right: var(--pad); }
+  .top-day { font-size: 22px; }
+  main { padding-left: var(--pad); padding-right: var(--pad); }
+  .stats { gap: 12px; }
+  .stat { padding: 12px 14px; }
+  .stat b { font-size: 20px; }
+  .fab { right: var(--pad); }
+  .tabs button { font-size: 12px; }
+
+  .chat { max-width: 760px; margin: 0 auto; }
+  .msg { max-width: 78%; }
+  .composer { max-width: none; padding: 8px max(var(--pad), calc((100vw - 760px) / 2)); }
+
+  .sheet { max-width: 640px; }
+
+  .proj-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .proj-list .card { margin: 0; }
+  .progress-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; margin-bottom: 12px; }
+  .progress-grid .card { margin: 0; }
+  #g-canvas { height: 56vh; }
 }
