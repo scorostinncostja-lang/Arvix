@@ -82,6 +82,7 @@ if (( DRY )); then
   2. код и конфиг на сервер, установка                                    deploy/sync-server.sh $HOST --init
   3. журнал $EVENTS событий → ~/.local/share/arvix/arvix.db, проверка arvix rebuild
   4. хранилище ноутбука → ~/vault                                          deploy/vault-sync.sh
+     и проекты, которых нет в снимке журнала, — из карточек и роадмапов     arvix restore-projects --apply
   5. вход в Claude для головы бота (ссылка → браузер → код)                 deploy/server-claude-token.sh
   6. бот: systemctl --user enable --now arvix-telegram
   7. приложение по HTTPS: Caddy, адрес https://${IP//./-}.sslip.io:8443     deploy/web-setup.sh
@@ -130,6 +131,9 @@ fi
 step "4/8 Хранилище Obsidian"
 if [[ "$VAULT" != - && -d "$VAULT" ]]; then
   bash "$SRC/deploy/vault-sync.sh" "$HOST"
+  # Проекты, созданные после снимка журнала, живы в заметках: карточки папок и роадмапы целей (D54).
+  # Создаются только те, которых в журнале нет, — повторный запуск ничего не дублирует.
+  "${RUN[@]}" '~/.local/bin/arvix restore-projects --apply' || echo "⚠ проекты из хранилища не восстановлены: ssh $HOST '~/.local/bin/arvix restore-projects'"
 else
   echo "пропущено: на ноутбуке нет хранилища"
 fi
