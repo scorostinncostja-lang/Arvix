@@ -103,6 +103,7 @@ const ICON_PATHS = {
   list: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>',
   calendar: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+  study: '<path d="M21.42 10.92a1 1 0 0 0-.02-1.84l-8.57-3.9a2 2 0 0 0-1.66 0l-8.57 3.9a1 1 0 0 0 0 1.83l8.57 3.91a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>',
   projects: '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
   github: '<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>',
   sidebar: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/>',
@@ -124,11 +125,13 @@ document.querySelectorAll("[data-ic]").forEach((el) => { el.innerHTML = icon(el.
 function setTab(tab) {
   if (tab === "chat" && state.tab !== "chat") { chatUI.stick = true; chatUI.unread = 0; }
   if (tab !== "chat") closeMsgMenu();
+  state.tab_prev = state.tab;
   state.tab = tab;
   renderTop();
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   if (tab === "chat") { $("#chat-dot").classList.add("hidden"); }
   state.note = tab === "notes" ? state.note : null;
+  if (tab === "study" && state.tab_prev !== "study") studyUI.auto = !studyUI.open;  // вход во вкладку: идёт урок — на стол
   if (tab !== "projects" && state.project) { state.project = null; if (TG) { TG.BackButton.offClick(projectBack); TG.BackButton.hide(); } }
   render();
   load(tab);
@@ -168,6 +171,7 @@ async function load(tab = state.tab) {
     }
     if (tab === "progress") state.history = await api("history?days=30");
     if (tab === "projects") await loadProjects();
+    if (tab === "study") await loadStudy();
     if (tab === "notes" && !state.note && !state.notesList) state.notesList = await api("notes?dir=" + encodeURIComponent(state.notesDir));
     renderTop(); render();
   } catch (err) {
@@ -195,11 +199,12 @@ function renderMode(d) {
 }
 
 function render() {
-  view.classList.toggle("full", state.tab === "projects");  // окна проектов — на всю ширину экрана
+  view.classList.toggle("full", state.tab === "projects" || state.tab === "study");  // окна проектов и сессии — на всю ширину
   if (state.tab === "today") renderToday();
   else if (state.tab === "chat") renderChat();
   else if (state.tab === "notes") renderNotes();
   else if (state.tab === "projects") renderProjects();
+  else if (state.tab === "study") renderStudy();
   else renderProgress();
   $(".fab") && $(".fab").remove();
   $(".composer") && state.tab !== "chat" && $(".composer").remove();
@@ -244,7 +249,8 @@ function renderToday() {
   html += focusCard(d);
   if (d.lesson && d.lesson.topic) {
     html += `<div class="card"><h3>Урок</h3><div><b>${esc(d.lesson.topic)}</b></div>
-      <div class="muted small">${d.lesson.started ? "идёт — в конце 3 вопроса проверки, ответь в чате" : "план готов — начни из чата или кнопкой ▶ у задачи"}</div></div>`;
+      <div class="muted small">${d.lesson.started ? "идёт — в конце вопросы проверки" : "план готов — ▶ на рабочем столе"}</div>
+      <button class="pill small-pill primary" data-act="study-open" style="margin-top:8px">${icon("study")} Открыть сессию</button></div>`;
   }
   html += `</div><div class="today-main">`;
   const items = [...(d.tasks || []).map((t) => ({ ...t, kind: "task" })), ...(d.busy || []).map((b) => ({ ...b, kind: "busy" }))]
@@ -403,7 +409,10 @@ function bindToday() {
     try {
       if (act === "start") {
         const t = findTask(id);
-        if (t && t.sphere === "learning") { await api("lesson/" + id, { json: {} }); toast("Готовлю план урока — он придёт в чат"); setTab("chat"); return; }
+        if (t && t.sphere === "learning") {  // учебный блок — урок на рабочем столе «Обучения»: план, окна, таймер (D55)
+          await api("lesson/" + id, { json: {} }); toast("Готовлю сессию — план и окна появятся в «Обучении»");
+          studyUI.open = true; studyUI.task = id; studyUI.notes = {}; setTab("study"); return;
+        }
         await api(`tasks/${id}/start`, { json: {} }); toast("Пошло. Удачи.");
       } else if (act === "done") {
         const t = findTask(id);
@@ -422,7 +431,8 @@ function bindToday() {
         if (op === "stop" && r.session) { await load("today"); openFocusNoteSheet(r.session); return; }
         if (op === "stop") toast("Меньше 5 минут — не сессия, ничего не записано");
         if (op === "cancel") toast("Отменено, ничего не записано");
-      } else if (act === "focus-note") { openFocusNoteSheet({ event_id: +el.dataset.event, minutes: +el.dataset.min, title: el.dataset.title }); return; }
+      } else if (act === "study-open") { studyUI.open = true; studyUI.task = null; setTab("study"); return; }
+      else if (act === "focus-note") { openFocusNoteSheet({ event_id: +el.dataset.event, minutes: +el.dataset.min, title: el.dataset.title }); return; }
       await load("today");
     } catch (err) { notify("error"); toast(err.message); }
   }));
@@ -511,7 +521,7 @@ function openTaskSheet(t) {
   openSheet(`<h2>${esc(t.title)}</h2>
     <p class="muted small">${esc(t.start || "без времени")} · ${hm(t.duration_min)} · ${esc(t.sphere_ru)}</p>
     <div class="sheet-actions">
-      ${t.sphere === "learning" && t.open ? `<button class="btn" data-op="lesson">📚 Урок: план, таймер, проверка</button>` : ""}
+      ${t.sphere === "learning" ? `<button class="btn" data-op="lesson">📚 ${t.open ? "Сессия: план, окна, таймер, проверка" : "Посмотреть сессию"}</button>` : ""}
       <button class="btn" data-op="part">◐ Сделано частично…</button>
       <button class="btn" data-op="report">📝 Сделано, с отчётом…</button>
       <button class="btn" data-op="defer" data-min="15">⏳ Перенести на 15 мин</button>
@@ -524,7 +534,7 @@ function openTaskSheet(t) {
       const op = b.dataset.op;
       haptic();
       try {
-        if (op === "lesson") { await api("lesson/" + t.id, { json: {} }); closeSheet(); toast("Готовлю план урока — он придёт в чат"); setTab("chat"); return; }
+        if (op === "lesson") { closeSheet(); openStudySession({ task: t.id }); return; }
         if (op === "part") { openPartSheet(t); return; }
         if (op === "report") { openReportSheet(t); return; }
         if (op === "defer") { const r = await api(`tasks/${t.id}/defer`, { json: { minutes: +b.dataset.min } }); toast("→ " + r.start); }
@@ -1805,7 +1815,7 @@ function projHeadHtml() {
 }
 
 function obsidianUrl(path) {
-  const vault = (state.projects && state.projects.vault) || "";
+  const vault = (state.projects && state.projects.vault) || (state.study && state.study.vault) || "";
   return `obsidian://open?vault=${encodeURIComponent(vault)}&file=${encodeURIComponent(String(path || "").replace(/\.md$/, ""))}`;
 }
 
@@ -1886,12 +1896,13 @@ function projLearnHtml() {
   const todo = items.filter((x) => x.status === "todo"), done = items.filter((x) => x.status === "done");
   return `<div class="pp-h"><b>Что выучить для проекта</b><button class="link small" data-plearn-add>+ тема</button></div>
     ${todo.length ? todo.map((x) => `<div class="lr"><button class="ms-check" data-plearn-done="${esc(x.id)}" aria-label="Выучено"></button>
-      <div class="grow"><div class="ms-title">${esc(x.topic)}</div>${x.why ? `<div class="muted small">${esc(x.why)}</div>` : ""}
+      <div class="grow"><div class="ms-title">${esc(x.topic)} <button class="chip ${x.kind === "practice" ? "accent" : ""}" data-plearn-kind="${esc(x.id)}" title="Теория ↔ практика">${x.kind === "practice" ? "практика" : "теория"}</button></div>${x.why ? `<div class="muted small">${esc(x.why)}</div>` : ""}
         ${(x.sources || []).length ? `<div class="small">${x.sources.map((s) => /^https?:/.test(s) ? `<a href="${esc(s)}" target="_blank" rel="noopener">${esc(s)}</a>` : esc(s)).join(" · ")}</div>` : ""}
-        ${x.task_status && x.task_status !== "done" ? `<div class="muted small">урок ${ddmm(x.task_date)} — в «Сегодня»</div>` : `<button class="pill small-pill" data-plearn-start="${esc(x.id)}">${icon("play")} Учить сейчас</button>`}</div></div>`).join("")
+        ${x.task_status && x.task_status !== "done" ? `<button class="pill small-pill" data-plearn-open="${esc(x.task_id)}">${icon("study")} Блок ${ddmm(x.task_date)} — в «Обучение»</button>` : `<button class="pill small-pill" data-plearn-start="${esc(x.id)}">${icon("play")} Учить сейчас</button>`}</div></div>`).join("")
       : `<div class="muted small">Тем нет. Спроси в чате: «что мне выучить для этого?» — Арвикс добавит сам.</div>`}
     ${done.length ? `<details style="margin-top:8px"><summary class="muted small">Выучено · ${done.length}</summary>${done.map((x) => `<div class="small">✓ ${esc(x.topic)}</div>`).join("")}</details>` : ""}
-    <p class="muted small" style="margin-top:12px">«Учить сейчас» ставит учебный блок: план по минутам, таймер и проверка из 3 вопросов. Эти же темы возьмёт будущая вкладка «Обучение».</p>`;
+    <p class="muted small" style="margin-top:12px">«Учить сейчас» ставит учебный блок и открывает сессию в «Обучении»: план по минутам, окна (тест, доска, схема, видео), таймер и проверка. Теория — понять, практика — сделать руками.</p>
+    <button class="pill small-pill" data-plearn-tab>${icon("study")} Все темы — в «Обучении»</button>`;
 }
 
 // --- действия ----------------------------------------------------------------------------------
@@ -2000,9 +2011,12 @@ function bindProjects() {
     try { await projectOp("learn", { topic }, "+ тема"); } catch (err) { toast(err.message); }
   });
   on("[data-plearn-done]", async (el) => { try { await projectOp("learn", { item: el.dataset.plearnDone, status: "done" }, "✓ Выучено"); } catch (err) { toast(err.message); } });
-  on("[data-plearn-start]", async (el) => {
-    try { await projectOp("learn_start", { item: el.dataset.plearnStart, minutes: 45 }, (r) => `Учебный блок ${ddmm(r.task.date)} в ${r.task.start} — ▶ в «Сегодня» начнёт урок`); state.data = await api("state"); }
-    catch (err) { toast(err.message); }
+  on("[data-plearn-start]", (el) => openStudySession({ item: el.dataset.plearnStart }));  // тема проекта → сессия в «Обучении» (D55)
+  on("[data-plearn-open]", (el) => openStudySession({ task: el.dataset.plearnOpen }));
+  on("[data-plearn-tab]", () => { studyUI.open = false; studyUI.task = null; setTab("study"); });
+  on("[data-plearn-kind]", async (el) => {
+    const x = (state.project.learn || []).find((i) => i.id === el.dataset.plearnKind); if (!x) return;
+    try { await projectOp("learn", { item: x.id, kind: x.kind === "practice" ? "theory" : "practice" }); } catch (err) { toast(err.message); }
   });
   view.querySelectorAll("[data-pact]").forEach((el) => el.addEventListener("click", async () => {
     haptic();
@@ -2157,6 +2171,537 @@ function openLogSheet() {
   });
 }
 
+// --- Обучение (D55) ----------------------------------------------------------------------------------
+/* Учебная сессия = учебный блок + его урок (план по минутам, таймер, проверка) + окна, которые ставит
+ * Арвикс: тест (варианты проверяет код), доска (графики и чертежи), схема, видео, объяснение, заметка.
+ * Очередь тем — общая с «Проектами»: тема проекта (теория или практика) видна здесь, выученная — там.
+ * Арвикс видит сессию (ответы, текст заметки, время) — она уходит ему блоком <study> с каждым вопросом. */
+const STUDY_LAYOUT_KEY = "arvix_studylayout";
+const studyLayout = (() => {
+  try { return { pane: "desk", ...JSON.parse(localStorage.getItem(STUDY_LAYOUT_KEY) || "{}") }; } catch (_) { return { pane: "desk" }; }
+})();
+const saveStudyLayout = () => { try { localStorage.setItem(STUDY_LAYOUT_KEY, JSON.stringify(studyLayout)); } catch (_) { /* приватный режим */ } };
+const studyUI = { open: false, task: null, quiz: {}, notes: {}, deskKey: "", auto: false };
+const KIND_RU = { theory: "теория", practice: "практика" };
+
+async function loadStudy() {
+  state.study = await api("study" + (studyUI.task ? "?task=" + encodeURIComponent(studyUI.task) : ""));
+  const s = state.study.session;
+  // Вход во вкладку при идущем уроке — сразу на рабочий стол. Только при входе: ← должен оставаться ←.
+  if (studyUI.auto && !state.study.gentle && s && s.live) studyUI.open = true;
+  studyUI.auto = false;
+  // Стол держится за свою задачу: после проверки урок уходит из памяти бота, а итог должен остаться на экране
+  if (studyUI.open && s && !studyUI.task) studyUI.task = s.task.id;
+}
+
+/* Перерисовка по живому потоку не должна перезагружать видео и сбивать ответы теста: если на рабочем
+ * столе ничего не поменялось (поменялся только чат), обновляется только лента чата. */
+function deskKey(s) {
+  if (!s) return "";
+  const { messages, ...rest } = s;
+  return JSON.stringify(rest);
+}
+
+function renderStudy(opts = {}) {
+  const S = state.study;
+  if (!S) { view.innerHTML = `<div class="empty">Загружаю…</div>`; return; }
+  if (S.gentle) { view.innerHTML = `<div class="card note-card">${esc(S.note)}</div>`; return; }
+  const s = S.session;
+  if (!(studyUI.open && s)) { studyUI.deskKey = ""; view.innerHTML = studyOverviewHtml(S); bindStudy(); return; }
+  const key = deskKey(s);
+  if (opts.live && key === studyUI.deskKey && $("#sc-thread")) { drawStudyThread(); return; }
+  const keep = captureStudyComposer();
+  const deskEl = $(".sw-desk"), deskTop = deskEl ? deskEl.scrollTop : 0;  // правка заметки или ответ теста не уводят стол наверх
+  studyUI.deskKey = key;
+  const chat = s.live;  // закрытая сессия — история: стол без чата, переписка осталась в общем чате
+  const pane = !chat ? "desk" : isWide() ? "both" : studyLayout.pane;
+  view.innerHTML = `<div class="sw${isWide() && chat ? " wide" : ""}">
+    <section class="sw-desk">${studyHeadHtml(s)}
+      ${isWide() || !chat ? "" : `<div class="seg pm-tabs">${[["desk", "Стол"], ["chat", "Чат с Арвиксом"]].map(([k, l]) =>
+        `<button type="button" data-spane="${k}" class="${pane === k ? "on" : ""}">${l}</button>`).join("")}</div>`}
+      ${pane !== "chat" ? `<div class="sw-panels">${studyDeskHtml(s)}</div>` : ""}</section>
+    ${pane !== "desk" ? `<aside class="sw-chat">${studyChatHtml(s)}</aside>` : ""}</div>`;
+  bindStudy();
+  restoreStudyComposer(keep);
+  if (deskTop && $(".sw-desk")) $(".sw-desk").scrollTop = deskTop;
+  drawStudyThread();
+  tickStudy();
+}
+
+// --- обзор: сегодня · очередь · пройденное -----------------------------------------------------
+function studyOverviewHtml(S) {
+  let html = `<div class="so">`;
+  const s = S.session;
+  if (s && s.live) {
+    html += `<div class="card so-live" data-sresume role="button" tabindex="0"><h3>Сессия ${s.started ? "идёт" : "готова"}</h3>
+      <div class="so-row"><div class="grow"><b>${esc(s.topic)}</b><div class="muted small">${esc(s.task.title)} · ${hm(s.task.duration_min)} · окон ${s.panels.length}</div></div>
+      <button class="pill primary">${icon("chevron")} Открыть</button></div></div>`;
+  }
+  html += `<div class="section-title first"><span>Сегодня</span><span>${S.blocks.length ? S.blocks.length + " учебн." : ""}</span></div>`;
+  html += S.blocks.length ? S.blocks.map((t) => `<div class="task ${esc(t.status)}"><div class="time"><b>${esc(t.start || "—")}</b>${esc(t.end || "")}</div>
+      <div class="body"><div class="title">${esc(t.title)}</div><div class="meta"><span class="chip">${hm(t.duration_min)}</span>
+        ${t.score != null ? `<span class="chip ${t.score >= 70 ? "green" : "yellow"}">проверка ${t.score}%</span>` : t.status === "done" ? `<span class="chip green">✓</span>` : ""}
+        ${t.live ? `<span class="chip accent">сессия</span>` : ""}</div></div>
+      <div class="acts"><button class="pill small-pill${t.open ? " primary" : ""}" data-sopen="${esc(t.id)}">${t.open ? (t.lesson ? "Открыть" : "Начать сессию") : "Посмотреть"}</button></div></div>`).join("")
+    : `<div class="muted small so-hint">Учебных блоков сегодня нет. Возьми тему из очереди — Арвикс поставит блок в свободное окно и подготовит сессию.</div>`;
+  const todo = S.queue.filter((x) => x.status === "todo"), done = S.queue.filter((x) => x.status === "done");
+  html += `<div class="section-title"><span>Что выучить</span><button class="link small" data-slearn-add>+ тема</button></div>`;
+  if (!todo.length) html += `<div class="muted small so-hint">Очередь пустая. Темы приходят из проектов («что мне выучить для этого?») или добавь сам.</div>`;
+  const groups = new Map();
+  for (const x of todo) { const g = x.project || x.goal || "Без проекта"; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(x); }
+  for (const [g, items] of groups) {
+    html += `<div class="pl-ghead">${esc(g)}</div>` + items.map((x) => `<div class="card so-item">
+      <div class="grow"><div class="so-top"><b>${esc(x.topic)}</b><button class="chip ${x.kind === "practice" ? "accent" : ""}" data-skind="${esc(x.id)}" title="Теория ↔ практика">${esc(x.kind_ru)}</button></div>
+        ${x.why ? `<div class="muted small">${esc(x.why)}</div>` : ""}
+        ${(x.sources || []).length ? `<div class="small">${x.sources.map((src) => /^https?:/.test(src) ? `<a href="${esc(src)}" target="_blank" rel="noopener">${esc(src)}</a>` : esc(src)).join(" · ")}</div>` : ""}
+        <div class="pills">${x.task_status && x.task_status !== "done" && x.task_id ? `<button class="pill small-pill primary" data-sopen="${esc(x.task_id)}">${icon("play")} Блок ${ddmm(x.task_date)} — открыть</button>`
+          : `<button class="pill small-pill primary" data-sitem="${esc(x.id)}">${icon("play")} Учить сейчас</button>`}
+          <button class="pill small-pill" data-sdone="${esc(x.id)}">${icon("check")} Уже знаю</button></div></div></div>`).join("");
+  }
+  if (done.length) html += `<details class="card"><summary class="muted small">Выучено · ${done.length}</summary>${done.map((x) => `<div class="small">✓ ${esc(x.topic)}${x.project ? ` <span class="muted">· ${esc(x.project)}</span>` : ""}</div>`).join("")}</details>`;
+  if (S.history.length) {
+    html += `<div class="section-title"><span>Пройдено</span><span>${S.subjects.map((x) => `${esc(x.subject)} ${x.lessons}${x.avg != null ? " · " + x.avg + "%" : ""}`).join(" · ")}</span></div>`;
+    html += S.history.map((x) => `<div class="card so-hist" data-shist="${esc(x.task_id)}" role="button" tabindex="0"><div class="so-row"><div class="grow">
+        <b>${esc(x.topic)}</b><div class="muted small">${ddmm(x.date)} · ${esc(x.subject)}${x.panels ? ` · окон ${x.panels}` : ""}</div></div>
+        <span class="chip ${x.score >= 70 ? "green" : x.score != null ? "yellow" : ""}">${x.score != null ? x.score + "%" : x.checked ? "без оценки" : "без проверки"}</span></div>
+      ${x.gaps.length ? `<div class="small so-gaps">В карточки: ${x.gaps.map(esc).join("; ")}</div>` : ""}</div>`).join("");
+  }
+  return html + `</div>`;
+}
+
+// --- рабочий стол ------------------------------------------------------------------------------
+function studyHeadHtml(s) {
+  const chips = [`<span class="chip">${hm(s.task.duration_min)}</span>`];
+  if (s.item) chips.push(`<span class="chip ${s.item.kind === "practice" ? "accent" : ""}">${KIND_RU[s.item.kind] || ""}</span>`);
+  if (s.project) chips.push(`<span class="chip">→ ${esc(s.project.title)}</span>`);
+  if (s.roadmap_node) chips.push(`<span class="chip">${esc(s.roadmap_node)}</span>`);
+  if (s.result) chips.push(`<span class="chip ${s.result.score >= 70 ? "green" : "yellow"}">проверка ${s.result.score != null ? s.result.score + "%" : "—"}</span>`);
+  let act = "";
+  if (s.live && s.focus) act = `<div class="sw-timer" id="sw-timer" data-until="${esc(s.focus.until)}" data-paused="${esc(s.focus.paused_at || "")}"><b id="sw-left">--:--</b>
+      ${s.focus.paused_at ? `<button class="icon-btn sm go" data-sfocus="resume" aria-label="Дальше">${icon("play")}</button>` : `<button class="icon-btn sm" data-sfocus="pause" aria-label="Пауза">${icon("pause")}</button>`}</div>`;
+  else if (s.live && s.task.open && !s.started) act = `<button class="pill primary small-pill" data-sgo>${icon("play")} Начать · ${hm(s.task.duration_min)}</button>`;
+  if (s.live && s.started && !s.check.length && s.task.open) act += `<button class="pill small-pill" data-scheck title="Закончить раньше и ответить на вопросы">Готов к проверке</button>`;
+  return `<div class="ph"><button class="icon-btn sm" data-sback aria-label="К разделу">${icon("back")}</button>
+    <div class="grow ph-text"><div class="ph-title">${esc(s.topic)}</div><div class="muted small">${esc(s.task.title)}</div><div class="meta">${chips.join("")}</div></div>
+    <div class="ph-acts">${act}</div></div>`;
+}
+
+function studyDeskHtml(s) {
+  let html = "";
+  if (!s.prepared && s.live === false && s.task.open) {
+    html += `<div class="sp sp-wide"><div class="muted">Арвикс готовит сессию: смотрит роадмап, твои заметки о методе, прошлые уроки…</div></div>`;
+  }
+  if (s.check.length) {
+    html += `<div class="sp sp-wide sp-check"><div class="sp-h"><b>Проверка — ${s.check.length} вопроса</b></div>
+      <ol class="small">${s.check.map((q) => `<li>${esc(q)}</li>`).join("")}</ol>
+      <textarea id="sk-text" rows="4" placeholder="Ответь одним сообщением, по номерам. Не знаешь — так и напиши: это тоже ответ."></textarea>
+      <button class="btn primary" data-skheck>${icon("send")} Отправить ответы</button>
+      <div class="muted small">Ответ и есть отчёт: Арвикс оценит по эталонам и закроет блок.</div></div>`;
+  }
+  if (s.result) {
+    html += `<div class="sp sp-wide"><div class="sp-h"><b>Итог проверки</b><span class="chip ${s.result.score >= 70 ? "green" : "yellow"}">${s.result.score != null ? s.result.score + "%" : "без оценки"}</span></div>
+      ${(s.result.gaps || []).length ? `<div class="small"><b>В карточки Anki и журнал ошибок:</b><ul>${s.result.gaps.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></div>` : ""}
+      ${s.result.next_step ? `<div class="small"><b>Следующий блок:</b> ${esc(s.result.next_step)}</div>` : ""}</div>`;
+  }
+  if (s.plan.length) {
+    const elapsed = s.started ? (Date.now() - new Date(s.started).getTime()) / 60000 : -1;
+    html += `<div class="sp"><div class="sp-h"><b>План</b><span class="muted small">${s.started ? "идёт" : "▶ — таймер на весь блок"}</span></div>
+      ${s.plan.map((st) => { const on = elapsed >= st.from_min && elapsed < st.to_min, past = elapsed >= st.to_min;
+        return `<div class="sp-step${on ? " on" : ""}${past ? " past" : ""}"><span class="sp-min">${st.from_min}–${st.to_min}</span><div class="grow">${esc(st.step)}${st.tool ? `<div class="muted small">${esc(st.tool)}</div>` : ""}</div></div>`; }).join("")}
+      ${s.fallback ? `<div class="muted small">Голова была недоступна — план общий.</div>` : ""}</div>`;
+  }
+  for (const p of s.panels) html += panelHtml(s.live ? p : { ...p, fixed: true });
+  const notePath = s.note || "";
+  if (notePath && !s.panels.some((p) => p.type === "note" && p.path === notePath)) html += panelHtml({ id: "lesson-note", type: "note", title: "Заметка своими словами", path: notePath, by: "arvix", fixed: true });
+  if (s.sources.length) html += panelHtml({ id: "lesson-sources", type: "sources", title: "Источники", list: s.sources, fixed: true });
+  if (s.task.open) {
+    html += `<div class="sp sp-add"><div class="muted small">Окна ставит Арвикс по ходу — попроси в чате. Сам можешь добавить видео по ссылке.</div>
+      <div class="pills"><button class="pill small-pill" data-sadd="video">+ Видео по ссылке</button></div></div>`;
+  }
+  return html;
+}
+
+function panelHtml(p) {
+  const by = p.by === "me" ? `<span class="chip">ты</span>` : "";
+  const close = p.fixed ? "" : `<button class="icon-btn sm" data-shide="${esc(p.id)}" aria-label="Скрыть окно">${icon("x")}</button>`;
+  const wide = ["board", "diagram", "video", "note"].includes(p.type) ? " sp-wide" : "";
+  return `<div class="sp sp-${esc(p.type)}${wide}" data-panel="${esc(p.id)}"><div class="sp-h"><b>${esc(p.title)}</b><span class="grow"></span>${by}${close}</div>${panelBody(p)}</div>`;
+}
+
+function panelBody(p) {
+  if (p.type === "quiz") return quizHtml(p);
+  if (p.type === "board") return boardSvg(p);
+  if (p.type === "diagram") return diagramSvg(p);
+  if (p.type === "text") return `<div class="obs">${obsidian(p.text).html}</div>`;
+  if (p.type === "sources") return `<ol class="small sp-src">${p.list.map((x) => `<li>${/^https?:\/\//.test(x) ? `<a href="${esc(x)}" target="_blank" rel="noopener">${esc(x)}</a>` : esc(x)}</li>`).join("")}</ol>`;
+  if (p.type === "video") {
+    let body = "";
+    if (p.embed) body = `<div class="sp-player"><iframe src="${esc(p.embed)}" title="${esc(p.title)}" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+    else if (p.url) body = `<a class="pill small-pill" href="${esc(p.url)}" target="_blank" rel="noopener">Открыть видео</a> <span class="muted small">${esc(p.url)}</span>`;
+    else body = `<a class="pill small-pill" href="${esc(p.search)}" target="_blank" rel="noopener">Найти: «${esc(p.query)}»</a><div class="muted small">Настоящей ссылки у Арвикса нет — выбери сам и пришли её в чат, он поставит видео сюда.</div>`;
+    return body + (p.ask ? `<div class="small sp-ask">После просмотра ответь в чате: <b>${esc(p.ask)}</b></div>` : "");
+  }
+  if (p.type === "note") return noteBody(p);
+  return "";
+}
+
+// --- тест: варианты проверяет код, открытые — Арвикс на проверке блока ------------------------------
+function quizHtml(p) {
+  const sel = studyUI.quiz[p.id] || (studyUI.quiz[p.id] = {});
+  const qs = p.questions.map((q, i) => {
+    if (p.done) {
+      const mark = q.open ? "•" : q.ok ? "✓" : "✗";
+      const opts = q.open ? `<div class="small">Твой ответ: ${esc(q.given || "—")}</div><div class="small muted">Эталон: ${esc(q.a || "")}</div>`
+        : `<div class="sq-opts">${q.options.map((o, j) => `<span class="sq-opt${j === q.answer ? " right" : ""}${j === q.given && j !== q.answer ? " wrong" : ""}">${esc(o)}</span>`).join("")}</div>`;
+      return `<div class="sq ${q.open ? "" : q.ok ? "ok" : "bad"}"><div><b>${mark}</b> ${esc(q.q)}</div>${opts}${q.why ? `<div class="small muted">${esc(q.why)}</div>` : ""}</div>`;
+    }
+    const body = q.open ? `<textarea class="sq-text" data-sq="${esc(p.id)}" data-i="${i}" rows="2" placeholder="Своими словами">${esc(sel[i] || "")}</textarea>`
+      : `<div class="sq-opts">${q.options.map((o, j) => `<button type="button" class="sq-opt${sel[i] === j ? " on" : ""}" data-sq="${esc(p.id)}" data-i="${i}" data-j="${j}">${esc(o)}</button>`).join("")}</div>`;
+    return `<div class="sq"><div>${i + 1}. ${esc(q.q)}</div>${body}</div>`;
+  }).join("");
+  return qs + (p.done ? `<div class="small">${p.score_pct != null ? `<b>${p.score_pct}%</b> по вопросам с вариантами. ` : ""}Открытые Арвикс учтёт на проверке блока. Ошибся — спроси в чате «почему».</div>`
+    : `<button class="btn primary" data-squiz="${esc(p.id)}">Проверить</button>`);
+}
+
+// --- доска: формулы разбирает свой парсер (без eval), рисует SVG ---------------------------------
+const FN = { sin: Math.sin, cos: Math.cos, tan: Math.tan, sqrt: Math.sqrt, abs: Math.abs, log: Math.log10, ln: Math.log, exp: Math.exp,
+  asin: Math.asin, acos: Math.acos, atan: Math.atan };
+function parseExpr(src) {
+  const toks = String(src).replace(/,/g, ".").match(/\d+\.?\d*|\.\d+|[a-z_]+|[+\-*/^()]/gi) || [];
+  let i = 0;
+  const peek = () => toks[i], next = () => toks[i++];
+  const primary = () => {
+    const t = next();
+    if (t === undefined) throw new Error("конец формулы");
+    if (/^[\d.]/.test(t)) { const v = parseFloat(t); return () => v; }
+    if (t === "(") { const e = expr(); if (next() !== ")") throw new Error("нет )"); return e; }
+    const w = t.toLowerCase();
+    if (w === "x") return (x) => x;
+    if (w === "pi") return () => Math.PI;
+    if (w === "e") return () => Math.E;
+    if (FN[w]) { if (next() !== "(") throw new Error("нет ( после " + w); const a = expr(); if (next() !== ")") throw new Error("нет )"); const f = FN[w]; return (x) => f(a(x)); }
+    throw new Error("непонятно: " + t);
+  };
+  const unary = () => { if (peek() === "-") { next(); const u = unary(); return (x) => -u(x); } if (peek() === "+") { next(); return unary(); } return power(); };
+  const power = () => { const b = primary(); if (peek() === "^") { next(); const ex = unary(); return (x) => Math.pow(b(x), ex(x)); } return b; };
+  const term = () => {
+    let a = unary();
+    for (;;) {
+      const t = peek();
+      if (t === "*" || t === "/") { next(); const b = unary(), l = a; a = t === "*" ? (x) => l(x) * b(x) : (x) => l(x) / b(x); }
+      else if (t !== undefined && (/^[\d.a-z(]/i.test(t))) { const b = power(), l = a; a = (x) => l(x) * b(x); }  // 2x, 3sin(x), (x+1)(x-1)
+      else return a;
+    }
+  };
+  const expr = () => {
+    let a = term();
+    while (peek() === "+" || peek() === "-") { const op = next(), b = term(), l = a; a = op === "+" ? (x) => l(x) + b(x) : (x) => l(x) - b(x); }
+    return a;
+  };
+  const f = expr();
+  if (i < toks.length) throw new Error("лишнее: " + toks[i]);
+  return f;
+}
+
+const BOARD_COLORS = ["var(--accent)", "var(--accent-2)", "var(--warn)", "var(--bad)", "#d65db1"];
+function boardSvg(p) {
+  // Масштаб по осям один и тот же: окружность — круг, квадрат — квадрат (геометрия). Высота — по пропорции
+  // окна доски; слишком высокая или низкая — окно расширяется по другой оси, а не сплющивает чертёж.
+  let [x0, x1, y0, y1] = p.view;
+  const W = 480;
+  let H = (W * (y1 - y0)) / (x1 - x0);
+  if (H > 420) { H = 420; const span = ((y1 - y0) * W) / H, cx = (x0 + x1) / 2; x0 = cx - span / 2; x1 = cx + span / 2; }
+  if (H < 220) { H = 220; const span = ((x1 - x0) * H) / W, cy = (y0 + y1) / 2; y0 = cy - span / 2; y1 = cy + span / 2; }
+  H = Math.round(H);
+  const sx = (x) => ((x - x0) / (x1 - x0)) * W, sy = (y) => H - ((y - y0) / (y1 - y0)) * H;
+  const num = (v) => (+v).toFixed(1);
+  let g = "";
+  const step = (span) => { const raw = span / 10, p10 = Math.pow(10, Math.floor(Math.log10(raw))); return [1, 2, 5, 10].map((m) => m * p10).find((s) => s >= raw); };
+  const dx = step(x1 - x0), dy = step(y1 - y0);
+  for (let x = Math.ceil(x0 / dx) * dx; x <= x1; x += dx) g += `<line x1="${num(sx(x))}" x2="${num(sx(x))}" y1="0" y2="${H}" class="bd-grid"/>` + (Math.abs(x) > 1e-9 && y0 <= 0 && y1 >= 0 ? `<text x="${num(sx(x))}" y="${num(Math.min(H - 3, sy(0) + 13))}" class="bd-tick" text-anchor="middle">${+x.toFixed(6)}</text>` : "");
+  for (let y = Math.ceil(y0 / dy) * dy; y <= y1; y += dy) g += `<line y1="${num(sy(y))}" y2="${num(sy(y))}" x1="0" x2="${W}" class="bd-grid"/>` + (Math.abs(y) > 1e-9 && x0 <= 0 && x1 >= 0 ? `<text x="${num(Math.max(3, sx(0) - 4))}" y="${num(sy(y) + 4)}" class="bd-tick" text-anchor="end">${+y.toFixed(6)}</text>` : "");
+  if (y0 <= 0 && y1 >= 0) g += `<line x1="0" x2="${W}" y1="${num(sy(0))}" y2="${num(sy(0))}" class="bd-axis"/>`;
+  if (x0 <= 0 && x1 >= 0) g += `<line y1="0" y2="${H}" x1="${num(sx(0))}" x2="${num(sx(0))}" class="bd-axis"/>`;
+  let c = 0, errors = [];
+  for (const it of p.items) {
+    const color = BOARD_COLORS[c % BOARD_COLORS.length];
+    if (it.kind === "fn") {
+      c++;
+      let f;
+      try { f = parseExpr(it.expr); } catch (err) { errors.push(`${it.expr}: ${err.message}`); continue; }
+      let d = "", pen = false;
+      for (let k = 0; k <= 400; k++) {
+        const x = x0 + ((x1 - x0) * k) / 400, y = f(x);
+        if (!isFinite(y) || y < y0 - (y1 - y0) * 2 || y > y1 + (y1 - y0) * 2) { pen = false; continue; }
+        d += `${pen ? "L" : "M"}${num(sx(x))} ${num(sy(y))}`; pen = true;
+      }
+      g += `<path d="${d}" class="bd-fn" stroke="${color}"/>`;
+      if (it.label) g += `<text x="${W - 6}" y="${14 + 16 * (c - 1)}" class="bd-label" text-anchor="end" fill="${color}">${esc(it.label)}</text>`;
+    } else if (it.kind === "point") {
+      g += `<circle cx="${num(sx(it.x))}" cy="${num(sy(it.y))}" r="4" class="bd-pt"/>` + (it.label ? `<text x="${num(sx(it.x) + 6)}" y="${num(sy(it.y) - 6)}" class="bd-label">${esc(it.label)}</text>` : "");
+    } else if (it.kind === "label") {
+      g += `<text x="${num(sx(it.x))}" y="${num(sy(it.y))}" class="bd-label">${esc(it.label)}</text>`;
+    } else if (it.kind === "segment") {
+      g += `<line x1="${num(sx(it.x))}" y1="${num(sy(it.y))}" x2="${num(sx(it.x2))}" y2="${num(sy(it.y2))}" class="bd-shape"/>` + (it.label ? `<text x="${num((sx(it.x) + sx(it.x2)) / 2 + 4)}" y="${num((sy(it.y) + sy(it.y2)) / 2 - 4)}" class="bd-label">${esc(it.label)}</text>` : "");
+    } else if (it.kind === "circle") {
+      g += `<ellipse cx="${num(sx(it.x))}" cy="${num(sy(it.y))}" rx="${num((it.r / (x1 - x0)) * W)}" ry="${num((it.r / (y1 - y0)) * H)}" class="bd-shape"/>` + (it.label ? `<text x="${num(sx(it.x) + 4)}" y="${num(sy(it.y) - 4)}" class="bd-label">${esc(it.label)}</text>` : "");
+    } else if (it.kind === "polygon") {
+      g += `<polygon points="${it.points.map(([x, y]) => `${num(sx(x))},${num(sy(y))}`).join(" ")}" class="bd-shape bd-fill"/>` + (it.label ? `<text x="${num(sx(it.points[0][0]) + 4)}" y="${num(sy(it.points[0][1]) - 4)}" class="bd-label">${esc(it.label)}</text>` : "");
+    }
+  }
+  return `<svg class="board" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(p.title)}">${g}</svg>` +
+    (errors.length ? `<div class="small warn">Не нарисовал: ${errors.map(esc).join("; ")}</div>` : "");
+}
+
+/* Схема: слои по стрелкам от корней (узлы без входящих), в слое — по порядку; длинное имя — в две строки. */
+function diagramSvg(p) {
+  const incoming = new Map(p.nodes.map((n) => [n.id, 0]));
+  p.edges.forEach((e) => incoming.set(e.to, (incoming.get(e.to) || 0) + 1));
+  const layer = new Map();
+  const queue = p.nodes.filter((n) => !incoming.get(n.id)).map((n) => n.id);
+  if (!queue.length) queue.push(p.nodes[0].id);
+  queue.forEach((id) => layer.set(id, 0));
+  for (let k = 0; k < queue.length; k++) {
+    const id = queue[k];
+    for (const e of p.edges) if (e.from === id && !layer.has(e.to)) { layer.set(e.to, layer.get(id) + 1); queue.push(e.to); }
+  }
+  p.nodes.forEach((n) => { if (!layer.has(n.id)) layer.set(n.id, 0); });
+  const rows = [];
+  p.nodes.forEach((n) => { const l = layer.get(n.id); (rows[l] = rows[l] || []).push(n); });
+  const BW = 132, BH = 42, GX = 16, GY = 46;
+  const W = Math.max(...rows.map((r) => r.length)) * (BW + GX) + GX, H = rows.length * (BH + GY) + GY - 20;
+  const pos = new Map();
+  rows.forEach((r, li) => { const off = (W - r.length * (BW + GX) + GX) / 2; r.forEach((n, k) => pos.set(n.id, { x: off + k * (BW + GX), y: 14 + li * (BH + GY) })); });
+  const split = (s) => { if (s.length <= 18) return [s]; const cut = s.lastIndexOf(" ", 18); const a = cut > 6 ? s.slice(0, cut) : s.slice(0, 18); const b = s.slice(a.length).trim(); return [a, b.length > 18 ? b.slice(0, 17) + "…" : b]; };
+  let g = `<defs><marker id="dg-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="dg-head"/></marker></defs>`;
+  for (const e of p.edges) {
+    const a = pos.get(e.from), b = pos.get(e.to);
+    const up = b.y <= a.y;
+    const x1 = a.x + BW / 2, y1 = up ? a.y : a.y + BH, x2 = b.x + BW / 2, y2 = up ? b.y + BH : b.y;
+    g += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" class="dg-edge" marker-end="url(#dg-arrow)"/>`;
+    if (e.label) g += `<text x="${(x1 + x2) / 2 + 4}" y="${(y1 + y2) / 2}" class="bd-tick">${esc(e.label)}</text>`;
+  }
+  for (const n of p.nodes) {
+    const { x, y } = pos.get(n.id), lines = split(n.label);
+    g += `<rect x="${x}" y="${y}" width="${BW}" height="${BH}" rx="10" class="dg-node"/>` +
+      lines.map((l, k) => `<text x="${x + BW / 2}" y="${y + BH / 2 + 5 + (k - (lines.length - 1) / 2) * 15}" text-anchor="middle" class="dg-text">${esc(l)}</text>`).join("");
+  }
+  return `<div class="dg-wrap"><svg class="diagram" viewBox="0 0 ${W} ${H}" width="${W}" role="img" aria-label="${esc(p.title)}">${g}</svg></div>`;
+}
+
+// --- заметка урока: пишет человек, Арвикс читает ---------------------------------------------
+function noteBody(p) {
+  const n = studyUI.notes[p.path];
+  if (!n) {
+    loadStudyNote(p.path);
+    return `<div class="muted small">Открываю ${esc(p.path)}…</div>`;
+  }
+  if (n.missing) return `<div class="muted small">Заметки ${esc(p.path)} нет в хранилище.</div>`;
+  const at = `data-snote="${esc(n.path)}"`;
+  const bar = n.edit ? `<button class="pill small-pill primary" data-snote-save ${at}>Сохранить</button><button class="pill small-pill" data-snote-cancel ${at}>Отмена</button>`
+    : `<button class="pill small-pill" data-snote-edit ${at}>${icon("pencil")} Писать</button><a class="pill small-pill" href="${obsidianUrl(n.path)}">Obsidian</a>`;
+  const doc = n.edit ? null : obsidian(n.text);
+  return `<div class="pn-bar"><span class="muted small grow">${esc(n.path)}</span>${bar}</div>
+    ${n.edit ? `<textarea class="pn-edit sn-edit" ${at}>${esc(n.text)}</textarea>`
+      : `<div class="obs pn-view">${doc.props.length ? propsHtml(doc.props) : ""}${doc.html || `<p class="muted">Пусто — «Писать».</p>`}</div>`}
+    <div class="muted small">Своими словами, без подглядывания — Арвикс видит, что написано, и спросит по пробелам.</div>`;
+}
+
+const notesLoading = new Set();
+async function loadStudyNote(path) {
+  if (notesLoading.has(path)) return;
+  notesLoading.add(path);
+  try { const n = await api("note?path=" + encodeURIComponent(path)); studyUI.notes[path] = { path: n.path, text: n.text, sha: n.sha, edit: false }; }
+  catch (_) { studyUI.notes[path] = { path, missing: true }; }
+  notesLoading.delete(path);
+  if (state.tab === "study" && !studyEditing()) { studyUI.deskKey = ""; renderStudy(); }
+}
+const studyEditing = () => Object.values(studyUI.notes).some((n) => n.edit);
+
+// --- чат урока: те же сообщения, что в общем чате, с начала сессии ---------------------------
+function studyChatHtml(s) {
+  const can = s.live;
+  return `<div class="pc sc"><div class="pc-thread" id="sc-thread"></div>
+    ${can ? `<div class="aw-chips">${s.asks.map((q) => `<button class="chip" data-sask="${esc(q)}">${esc(q)}</button>`).join("")}</div>
+    <div class="pc-compose"><textarea id="sc-text" rows="1" placeholder="Спроси Арвикса по теме — он видит этот стол"></textarea>
+      <button class="icon-btn go" id="sc-send" aria-label="Отправить">${icon("send")}</button></div>`
+      : `<div class="muted small">Сессия закрыта — переписка в общем чате.</div>`}</div>`;
+}
+
+function drawStudyThread() {
+  const box = $("#sc-thread"), s = state.study && state.study.session;
+  if (!box || !s) return;
+  const msgs = s.messages || [];
+  const thinking = state.thinking && (!msgs.length || msgs[msgs.length - 1].who === "me");
+  box.innerHTML = (msgs.length ? msgs.map((m) => `<div class="msg ${m.who === "me" ? "me" : ""}">${quoteHtml(m.reply_to)}<div class="mtext">${linkify(esc(m.text))}</div>
+      ${(m.buttons || []).length ? `<div class="btns">${m.buttons.map((row) => row.map(([label, data]) => `<button data-sbtn="${esc(data)}">${esc(label)}</button>`).join("")).join("")}</div>` : ""}</div>`).join("")
+    : `<div class="pc-empty muted small">Застрял — спроси. Арвикс объяснит у доски по шагам, нарисует график, даст тест или найдёт видео — окна появятся на столе.</div>`)
+    + (thinking ? `<div class="msg typing">Арвикс думает…</div>` : "");
+  box.scrollTop = box.scrollHeight;
+  box.querySelectorAll("[data-sbtn]").forEach((b) => b.addEventListener("click", async () => {
+    haptic(); try { await api("button", { json: { data: b.dataset.sbtn } }); } catch (err) { toast(err.message); }
+  }));
+}
+
+async function studySend(text) {
+  text = String(text || "").trim();
+  if (!text) return;
+  const s = state.study.session;
+  s.messages = [...(s.messages || []), { who: "me", text, at: new Date().toISOString() }];
+  state.thinking = "думаю";
+  drawStudyThread();
+  try { await api("message", { json: { text } }); } catch (err) { toast(err.message); }
+}
+
+function captureStudyComposer() {
+  const ta = $("#sc-text"), sk = $("#sk-text");
+  return { value: ta ? ta.value : "", focus: ta && document.activeElement === ta, check: sk ? sk.value : "", checkFocus: sk && document.activeElement === sk };
+}
+function restoreStudyComposer(keep) {
+  const ta = $("#sc-text"), sk = $("#sk-text");
+  if (ta && keep.value) ta.value = keep.value;
+  if (ta && keep.focus) ta.focus();
+  if (sk && keep.check) sk.value = keep.check;
+  if (sk && keep.checkFocus) sk.focus();
+}
+
+let studyTimer;
+function tickStudy() {
+  clearInterval(studyTimer);
+  const el = $("#sw-timer");
+  if (!el) return;
+  const draw = () => {
+    const left = el.dataset.paused ? new Date(el.dataset.until) - new Date(el.dataset.paused) : new Date(el.dataset.until) - Date.now();
+    const sec = Math.max(0, Math.round(left / 1000));
+    const out = $("#sw-left"); if (out) out.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+  };
+  draw();
+  if (!el.dataset.paused) studyTimer = setInterval(() => { if (!document.body.contains(el)) { clearInterval(studyTimer); return; } draw(); }, 1000);
+}
+
+// --- действия ----------------------------------------------------------------------------------
+async function openStudySession(body) {
+  try {
+    const r = await api("study/open", { json: body });
+    studyUI.open = true; studyUI.task = r.task_id; studyUI.notes = {}; studyUI.deskKey = "";
+    if (r.queued) { state.thinking = "готовлю урок"; toast("Арвикс готовит сессию — план и окна появятся здесь"); }
+    if (state.tab !== "study") { setTab("study"); return; }
+    await loadStudy(); renderStudy();
+  } catch (err) { toast(err.message); }
+}
+
+async function studyOp(op, body, msg) {
+  const s = state.study.session;
+  const r = await api(`study/${s.task.id}/${op}`, { json: body });
+  state.study.session = r.session; notify("success");
+  if (msg) toast(typeof msg === "function" ? msg(r) : msg);
+  studyUI.deskKey = ""; renderStudy();
+  return r;
+}
+
+function openStudyLearnSheet() {
+  const S = state.study, form = { kind: "theory" };
+  openSheet(`<h2>Что выучить</h2>
+    <div class="field"><input id="sl-topic" placeholder="Например: тригонометрия, asyncio, задание 15 ОГЭ"></div>
+    <div class="field"><label>Вид</label>${seg("kind", ["theory", "practice"], "theory", (v) => KIND_RU[v])}</div>
+    <div class="field"><textarea id="sl-why" rows="2" placeholder="Зачем — по желанию: экзамен, проект, интерес"></textarea></div>
+    ${S.projects.length ? `<div class="field"><select id="sl-proj" class="input"><option value="">Без проекта</option>${S.projects.map((p) => `<option value="${esc(p.id)}">${esc(p.title)}</option>`).join("")}</select></div>` : ""}
+    <button class="btn primary" id="sl-save">Добавить</button>
+    <p class="muted small">Теория — понять и объяснить своими словами. Практика — сделать руками: задачи, код, упражнение. Тема проекта видна и в проекте.</p>`, (root) => {
+    bindSeg(root, form);
+    setTimeout(() => $("#sl-topic").focus(), 50);
+    $("#sl-save").onclick = async () => {
+      const topic = $("#sl-topic").value.trim();
+      if (!topic) { toast("Какая тема?"); return; }
+      try { const r = await api("study/learn", { json: { topic, kind: form.kind, why: $("#sl-why").value.trim(), project: $("#sl-proj") ? $("#sl-proj").value : "" } });
+        state.study = r.study; closeSheet(); notify("success"); toast("+ тема"); renderStudy(); }
+      catch (err) { toast(err.message); }
+    };
+  });
+}
+
+function bindStudy() {
+  const on = (sel, fn) => view.querySelectorAll(sel).forEach((el) => el.addEventListener("click", (e) => { haptic("soft"); fn(el, e); }));
+  on("[data-sresume]", () => { studyUI.open = true; studyUI.task = null; renderStudy(); window.scrollTo(0, 0); });
+  on("[data-sopen]", (el) => openStudySession({ task: el.dataset.sopen }));
+  on("[data-sitem]", (el) => openStudySession({ item: el.dataset.sitem }));
+  on("[data-shist]", async (el) => { studyUI.task = el.dataset.shist; studyUI.open = true; studyUI.notes = {}; await loadStudy(); renderStudy(); window.scrollTo(0, 0); });
+  on("[data-slearn-add]", () => openStudyLearnSheet());
+  on("[data-sdone]", async (el) => {
+    try { const r = await api("study/learn", { json: { item: el.dataset.sdone, status: "done" } }); state.study = r.study; toast("✓ Отмечено — в проекте тоже"); renderStudy(); }
+    catch (err) { toast(err.message); }
+  });
+  on("[data-skind]", async (el) => {
+    const x = state.study.queue.find((q) => q.id === el.dataset.skind); if (!x) return;
+    try { const r = await api("study/learn", { json: { item: x.id, kind: x.kind === "practice" ? "theory" : "practice" } }); state.study = r.study; renderStudy(); }
+    catch (err) { toast(err.message); }
+  });
+  on("[data-sback]", async () => { studyUI.open = false; studyUI.task = null; studyUI.notes = {}; await loadStudy(); renderStudy(); window.scrollTo(0, 0); });
+  on("[data-spane]", (el) => { studyLayout.pane = el.dataset.spane; saveStudyLayout(); studyUI.deskKey = ""; renderStudy(); });
+  on("[data-sgo]", async () => {
+    try { await api("lesson/" + state.study.session.task.id, { json: {} }); toast("Пошло. Телефон — экраном вниз."); } catch (err) { toast(err.message); }
+  });
+  on("[data-scheck]", async () => {
+    const s = state.study.session;
+    if (!confirm("Закончить блок и ответить на вопросы проверки?")) return;
+    try {
+      if (s.focus) await api("focus/stop", { json: {} });  // прошедшие минуты — в журнал, таймер не пришлёт проверку второй раз
+      await api("button", { json: { data: `l:${s.task.id}:check` } });
+    } catch (err) { toast(err.message); }
+  });
+  on("[data-sfocus]", async (el) => { try { await api("focus/" + el.dataset.sfocus, { json: {} }); } catch (err) { toast(err.message); } });
+  on("[data-skheck]", async () => {
+    const t = $("#sk-text").value.trim();
+    if (!t) { toast("Ответь хотя бы «не знаю» — это тоже ответ"); return; }
+    $("#sk-text").value = "";
+    if (!isWide()) { studyLayout.pane = "chat"; saveStudyLayout(); }
+    await studySend(t);
+    studyUI.deskKey = ""; renderStudy();
+  });
+  on("[data-sask]", (el) => { if (!isWide()) { studyLayout.pane = "chat"; saveStudyLayout(); studyUI.deskKey = ""; renderStudy(); } studySend(el.dataset.sask); });
+  on("[data-shide]", async (el) => { try { await studyOp("hide", { panel: el.dataset.shide }); } catch (err) { toast(err.message); } });
+  on("[data-sadd]", async () => {
+    const url = (prompt("Ссылка на видео (YouTube, RuTube, Vimeo — встроится; другое — ссылкой)", "") || "").trim(); if (!url) return;
+    try { await studyOp("panel", { panel: { type: "video", url, title: "Видео" } }, "Видео на столе"); } catch (err) { toast(err.message); }
+  });
+  view.querySelectorAll("button[data-sq]").forEach((b) => b.addEventListener("click", () => {
+    haptic("soft");
+    const sel = studyUI.quiz[b.dataset.sq] || (studyUI.quiz[b.dataset.sq] = {});
+    sel[+b.dataset.i] = +b.dataset.j;
+    b.parentElement.querySelectorAll(".sq-opt").forEach((o) => o.classList.toggle("on", o === b));
+  }));
+  view.querySelectorAll("textarea[data-sq]").forEach((t) => t.addEventListener("input", () => {
+    (studyUI.quiz[t.dataset.sq] || (studyUI.quiz[t.dataset.sq] = {}))[+t.dataset.i] = t.value;
+  }));
+  on("[data-squiz]", async (el) => {
+    const p = state.study.session.panels.find((x) => x.id === el.dataset.squiz); if (!p) return;
+    const sel = studyUI.quiz[p.id] || {};
+    const answers = p.questions.map((q, i) => (q.open ? String(sel[i] || "") : sel[i] ?? null));
+    if (answers.some((a, i) => !p.questions[i].open && a == null) && !confirm("Не на все вопросы выбран ответ. Проверить так?")) return;
+    try { await studyOp("answer", { panel: p.id, answers }, (r) => r.score_pct != null ? `${r.score_pct}% — разбор под вопросами` : "Записал — оценит на проверке"); delete studyUI.quiz[p.id]; }
+    catch (err) { toast(err.message); }
+  });
+  const noteOf = (el) => studyUI.notes[el.dataset.snote];
+  on("[data-snote-edit]", (el) => { noteOf(el).edit = true; studyUI.deskKey = ""; renderStudy();
+    setTimeout(() => { const t = view.querySelector(`textarea.sn-edit[data-snote="${CSS.escape(el.dataset.snote)}"]`); if (t) t.focus(); }, 30); });
+  on("[data-snote-cancel]", (el) => { noteOf(el).edit = false; studyUI.deskKey = ""; renderStudy(); });
+  on("[data-snote-save]", async (el) => {
+    const n = noteOf(el), box = view.querySelector(`textarea.sn-edit[data-snote="${CSS.escape(n.path)}"]`);
+    try { const r = await api("note", { json: { path: n.path, text: box.value, sha: n.sha } });
+      studyUI.notes[n.path] = { path: r.path, text: r.text, sha: r.sha, edit: false }; toast("Сохранено — Арвикс видит"); studyUI.deskKey = ""; renderStudy(); }
+    catch (err) { if (err.status === 409) { toast("Заметку изменили — открыл свежую"); delete studyUI.notes[n.path]; loadStudyNote(n.path); } else toast(err.message); }
+  });
+  view.querySelectorAll(".sp-text .obs, .sp-note .obs").forEach((el) => hydrateAssets(el));
+  view.querySelectorAll("[data-sresume], [data-shist]").forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter") el.click(); }));
+  const ta = $("#sc-text");
+  if (ta) {
+    const grow = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; };
+    ta.addEventListener("input", grow); grow();
+    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && isWide()) { e.preventDefault(); const t = ta.value; ta.value = ""; studySend(t); } });
+    $("#sc-send").onclick = () => { const t = ta.value; ta.value = ""; studySend(t); };
+  }
+}
+
 // --- живые обновления --------------------------------------------------------------------------
 async function stream() {
   let delay = 1000;
@@ -2210,16 +2755,20 @@ function onChange(ev) {
           await loadProjects();
           if (!(state.projNote && state.projNote.edit)) renderProjects();  // правку заметки не сбиваем
         }
+        if (state.tab === "study") {
+          await loadStudy();
+          if (!studyEditing()) renderStudy({ live: true });  // видео и ответы теста не сбиваем: стол без изменений — только чат
+        }
       }
     } catch (err) { if (err.auth) renderLogin(); }
   }, 250);
 }
 
 // --- клавиатура (ноутбук) ----------------------------------------------------------------------
-/* Ctrl/Alt+1…5 — вкладки, Alt+N — новая задача, / — поиск или поле сообщения, E — править заметку
+/* Ctrl/Alt+1…6 — вкладки, Alt+N — новая задача, / — поиск или поле сообщения, E — править заметку
  * (клавиши — по e.code, чтобы работали и на русской раскладке),
  * Ctrl+S — сохранить, Esc — закрыть окно, заметку или разговор. На телефоне клавиатуры нет — ничего не мешает. */
-const TABS = ["today", "chat", "notes", "projects", "progress"];
+const TABS = ["today", "chat", "notes", "projects", "study", "progress"];
 document.addEventListener("keydown", (e) => {
   const typing = e.target instanceof Element && !!e.target.closest("input, textarea, select, [contenteditable]");
   if ((e.ctrlKey || e.metaKey) && e.code === "KeyS" && $("#e-text")) { e.preventDefault(); saveEditor(); return; }
@@ -2228,10 +2777,11 @@ document.addEventListener("keydown", (e) => {
     if (state.tab === "notes" && state.note) { e.preventDefault(); noteBack(); return; }
     if (state.tab === "projects" && state.projNote) { e.preventDefault(); state.projNote = null; renderProjects(); return; }
     if (state.tab === "projects" && state.project && !isWide()) { e.preventDefault(); projectBack(); return; }
+    if (state.tab === "study" && studyUI.open && !typing) { e.preventDefault(); const b = view.querySelector("[data-sback]"); if (b) b.click(); return; }
     if (typing) e.target.blur();
     return;
   }
-  if ((e.altKey || e.ctrlKey) && !e.shiftKey && /^Digit[1-5]$/.test(e.code)) {
+  if ((e.altKey || e.ctrlKey) && !e.shiftKey && /^Digit[1-6]$/.test(e.code)) {
     e.preventDefault();
     const tab = TABS[+e.code.slice(5) - 1];
     if (tab !== state.tab && !(state.noteEdit && !confirmLeaveEditor())) setTab(tab);
@@ -2241,7 +2791,7 @@ document.addEventListener("keydown", (e) => {
   if (e.altKey && e.code === "KeyN") { e.preventDefault(); if (state.data && !state.data.gentle) openAddSheet(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey || !$("#sheet").classList.contains("hidden")) return;
   if (e.key === "/" || e.code === "Slash") {  // физическая клавиша: на русской раскладке она даёт «.»
-    const box = state.tab === "notes" ? $("#n-q") : state.tab === "chat" ? $("#msg") : null;
+    const box = state.tab === "notes" ? $("#n-q") : state.tab === "chat" ? $("#msg") : state.tab === "study" ? $("#sc-text") : null;
     if (box) { e.preventDefault(); box.focus(); }
   } else if (e.code === "KeyE" && state.tab === "notes" && state.note && !state.noteEdit) {
     e.preventDefault(); state.noteEdit = true; renderNote();

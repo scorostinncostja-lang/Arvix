@@ -73,7 +73,7 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `focus_noted` | `focus_event_id, date, note` — «что успел» к прошедшей сессии; сама сессия не меняется | человек |
 | `file_received` | `name, kind, size, path, read, caption` — файл от человека в хранилище (`arvix/files.py`) | человек |
 | `lesson_started` | `task_id, topic, subject, roadmap_node, minutes, plan[], sources[], questions[], note, fallback` — учебный блок подготовлен ([06-LEARNING.md §8](06-LEARNING.md#8-учебный-блок-в-telegram-)) | код + модель |
-| `lesson_checked` | `task_id, score_pct (null — голова недоступна), answers, gaps[], next_step` — проверка в конце блока; `State.lessons` | код + модель |
+| `lesson_checked` | `task_id, score_pct (null — голова недоступна), answers, gaps[], next_step` — проверка в конце блока; `State.lessons` (флаг `checked`: пустая оценка без головы — тоже проверка) | код + модель |
 | `expense_logged` | `amount, currency, category, impulse, note` | человек, модель |
 | `project_set` | `id, title, why, kind (подсказка или своё слово), purposes[], expectation, deadline, weekly_min, goal_id, order, weeks, status, skills[], link, folder, by, reason?, started?` — `folder` — папка в Obsidian, фиксируется первым настоящим названием (D47) — проект целиком (правка — новое событие); свёртка добавляет `started`, `closed` (D43, D44); `started` в самом событии — только у проекта, восстановленного из хранилища (дата из карточки, D54) | человек, модель, L2 (роадмап), `restore` |
 | `milestone_set` | `id, project_id, title, dod, due, status (open·done·dropped), order`; свёртка ставит `done_date` | человек, модель |
@@ -81,7 +81,9 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `project_money` | `project_id, amount, direction, …` — касса проекта 0.7; с D44 не пишется и не показывается, старые события в журнале | — |
 | `channel_set` | каналы привлечения 0.7–0.8; с D47 не пишутся, старые события в журнале | — |
 | `resource_set` | `id, project_id, title, url, kind (source·doc·course·video·tool·example·repo·design·note·chat·other), note, status (active·removed), by` — источник, инструмент, пример чужой работы | человек, модель, L2 |
-| `learn_item_set` | `id, topic, why, project_id, goal_id, sources[], status (todo·done·dropped), task_id` — очередь «учиться» для проектов и будущей вкладки «Обучение» (D47) | человек, модель |
+| `learn_item_set` | `id, topic, why, project_id, goal_id, sources[], status (todo·done·dropped), kind (theory·practice, D55), task_id` — очередь «учиться», общая у проектов и раздела «Обучение» (D47, D55); `project_id` необязателен | человек, модель |
+| `study_panel` | `task_id, panel {id, type (quiz·board·diagram·video·text·note·sources), title, by (arvix·me), hidden?, …поля вида}` — окно учебной сессии; тот же `id` — замена, `hidden` — скрыто; `State.study` (D55) | модель, человек |
+| `study_answer` | `task_id, panel_id, answers[], results[] (true·false·null — открытый), score_pct` — ответ на тест окна; варианты проверяет код (D55) | человек |
 | `repo_activity` | коммиты GitHub 0.8; с D47 не пишется, старые события в журнале | — |
 | `social_contact` | `who` | человек, модель |
 | `reason_declared` | `reason` — причина плохого дня: важное, не сделанное в этот день, не уходит в долг | человек, модель |

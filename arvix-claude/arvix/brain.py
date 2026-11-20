@@ -21,6 +21,7 @@ from typing import Any
 
 from arvix.config import Config, data_dir
 from arvix.core import ArvixError, Core
+from arvix.study import PANEL_SCHEMA
 
 HEAD_SKILLS = Path(__file__).resolve().parent.parent / "head-skills"  # библиотека навыков головы (D33)
 
@@ -32,6 +33,8 @@ ACTION_TYPES = (
     "set_goal", "add_trait", "declare_reason", "learning_question", "safety_flag", "set_template",
     # Проекты (D43): карточка, этап с критерием, блок в план, журнал, деньги, канал привлечения.
     "set_project", "set_milestone", "plan_project", "project_log", "project_resource", "project_note", "learn_add",
+    # Окно учебной сессии (D55): тест, доска, схема, видео, объяснение — в разделе «Обучение».
+    "study_panel",
 ) + (
     # Действия интерфейса: их исполняет бот после ответа, а не ядро (05-INTERFACES §2.1).
     # Так человек говорит словами, а не командами: «давай позанимаемся физикой» → урок.
@@ -46,6 +49,7 @@ ACTION_RU = {
     "learning_question": "учебный вопрос", "safety_flag": "safety", "set_template": "распорядок",
     "set_project": "проект", "set_milestone": "этап проекта", "plan_project": "блок проекта", "project_log": "журнал проекта",
     "project_resource": "источник проекта", "project_note": "заметка проекта", "learn_add": "учиться",
+    "study_panel": "окно урока",
 }
 
 _ACTION_FIELDS = {
@@ -84,9 +88,11 @@ _ACTION_FIELDS = {
     "order": {"type": "integer", "description": "для set_project: место в роадмапе цели (1 — первый)"},
     "url": {"type": "string", "description": "для project_resource: ссылка — только настоящая; чужой репозиторий как пример — kind=example"},
     "append": {"type": "boolean", "description": "для project_note: дописать в конец, а не создать или перезаписать свою"},
-    "learn": {"type": "string", "description": "для learn_add: id темы — отметить (status=done) или исправить"},
+    "learn": {"type": "string", "description": "для learn_add: id темы — отметить (status=done) или исправить; "
+                                               "kind=theory (понять) или practice (сделать руками); project — необязателен"},
     "sources": {"type": "array", "items": {"type": "string"}, "description": "для learn_add: источники темы — учебник и глава, документация, курс"},
     "link": {"type": "string"},
+    "panel": {**PANEL_SCHEMA, "description": "для study_panel: окно сессии в разделе «Обучение» (см. <study>)"},
     "blocks": {
         "type": "array",
         "items": {
@@ -405,6 +411,8 @@ def _project_action(core: Core, kind: str, a: dict[str, Any], source: str) -> tu
         p = core.state.projects[pid]
         # Несостыковки проекта модель и так видит в контексте, человек — в «Плане»: в квитанции не дублируем
         return f"проект «{p['title']}» · {projects.STATUSES[p['status']]}", []
+    if kind == "learn_add" and not a.get("project"):
+        return _learn_add(core, a, None, source)  # тема без проекта — для раздела «Обучение» (D55)
     project = projects.resolve(core, a.get("project") or a.get("goal_id") or "")
     if kind == "set_milestone":
         status = a.get("status") if a.get("status") in projects.MILESTONE_STATUSES else None
@@ -430,10 +438,19 @@ def _project_action(core: Core, kind: str, a: dict[str, Any], source: str) -> tu
         rel = projects.write_note(core, project["id"], a.get("title") or a.get("name") or "", a.get("text") or a.get("content") or "",
                                   append=bool(a.get("append")), source=source)
         return f"заметка {rel}", []
+    return _learn_add(core, a, project["id"], source)
+
+
+def _learn_add(core: Core, a: dict[str, Any], project_id: str | None, source: str) -> tuple[str, list[str]]:
+    from arvix import projects
+
     status = a.get("status") if a.get("status") in ("todo", "done", "dropped") else None
-    projects.set_learn(core, a.get("topic") or a.get("title") or "", item_id=a.get("learn") or None, project_ref=project["id"],
-                       why=a.get("why", ""), sources=a.get("sources"), status=status, source=source)
-    return f"учиться: {a.get('topic') or a.get('title') or 'тема'}" + (" · пройдено" if status == "done" else ""), []
+    kind = a.get("kind") if a.get("kind") in ("theory", "practice") else None
+    projects.set_learn(core, a.get("topic") or a.get("title") or "", item_id=a.get("learn") or None, project_ref=project_id,
+                       goal_id=a.get("goal_id") or None, why=a.get("why", ""), sources=a.get("sources"), status=status,
+                       kind=kind, source=source)
+    label = {"theory": " · теория", "practice": " · практика"}.get(kind or "", "")
+    return f"учиться: {a.get('topic') or a.get('title') or 'тема'}{label}" + (" · пройдено" if status == "done" else ""), []
 
 
 def apply_actions(
@@ -523,6 +540,11 @@ def apply_actions(
             elif kind == "set_template":
                 core.set_template(action.get("weekdays") or [], action.get("day_type", ""), action.get("blocks") or [], source=source)
                 done.append(f"шаблон «{action.get('day_type')}» для дней {action.get('weekdays')}")
+            elif kind == "study_panel":
+                from arvix import study
+
+                panel = study.add_panel(core, action.get("panel") or {}, task_ref=action.get("task") or None, by="arvix", source=source)
+                done.append(f"окно урока: {study.PANEL_RU[panel['type']]} «{panel['title']}»" + (" скрыто" if panel.get("hidden") else ""))
             elif kind in PROJECT_ACTIONS:
                 line, extra = _project_action(core, kind, action, source)
                 done.append(line)

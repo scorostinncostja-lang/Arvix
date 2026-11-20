@@ -23,6 +23,7 @@ from typing import Any
 
 from arvix import interview, load, rules, safety, weather
 from arvix import lesson as lesson_mod
+from arvix import study
 from arvix.memory import Memory, export_transcripts
 from arvix.brain import (
     DEBRIEF_SCHEMA,
@@ -1196,6 +1197,7 @@ class Bot:
             roadmaps=paths.get("roadmaps") or "03_Resources/Роадмапы", methods=methods,
             history="; ".join(core.lesson_history(subject)) or "нет",
             tools=(": " + ", ".join(str(t) for t in tools)) if tools else "", questions=questions,
+            hint=("\n" + hint) if (hint := study.lesson_hint(core, task)) else "", panels=study.PANEL_RULES,
         )
         system = "\n\n".join([
             constitution(core.state.profile, gentle=True, sections=("identity", "mission", "autonomy_rule", "honesty")),
@@ -1205,12 +1207,21 @@ class Bot:
             result = self.brain.ask(system=system, prompt=f"Подготовь учебный блок: {task.title}, {task.duration_min} минут.",
                                     schema=lesson_mod.LESSON_SCHEMA, role="voice", vault_tools=True)
         if not result or not result.get("plan"):
-            result = {"topic": task.title, "why": "", "roadmap_node": "", "plan": lesson_mod.fallback_plan(task.duration_min),
-                      "sources": [], "check": [], "fallback": True}
+            item = study.learn_item_of(core, task)
+            result = {"topic": item["topic"] if item else task.title, "why": (item or {}).get("why", ""), "roadmap_node": "",
+                      "plan": lesson_mod.fallback_plan(task.duration_min), "sources": list((item or {}).get("sources") or []),
+                      "check": [], "fallback": True}
         result["check"] = [c for c in result.get("check") or [] if c.get("q") and c.get("a")][:questions]
         note_path = core.concept_skeleton(result.get("note_title") or result["topic"], subject,
                                           [c["q"] for c in result["check"]], list(result.get("sources") or []))
         core.lesson_started(task.id, result, note_path=note_path)
+        accepted = []
+        for raw in (result.get("panels") or [])[:3]:  # окна сессии (D55): кривое окно отбрасывается, урок — нет
+            try:
+                accepted.append(study.add_panel(core, raw, task_ref=task.id, by="arvix", source=self.channel))
+            except (ArvixError, TypeError, ValueError) as exc:
+                log.info("окно урока отброшено: %s", exc)
+        result["panels"] = accepted
         lesson = {"task_id": task.id, "topic": result["topic"], "plan": result["plan"], "check": result["check"],
                   "note": note_path, "sources": result.get("sources") or [], "started": None}
         core.store.kv_set(LESSON, lesson)
@@ -1269,9 +1280,11 @@ class Bot:
         core = self.core
         lesson = core.store.kv_get(LESSON) or {}
         task = core.resolve_task(lesson["task_id"])
+        quiz = study.quiz_summary(core, task.id)
         system = "\n\n".join([
             constitution(core.state.profile, gentle=True, sections=("identity", "voice", "honesty")),
-            lesson_mod.CHECK_RULES.format(topic=lesson.get("topic", ""), pairs=lesson_mod.check_pairs(lesson)),
+            lesson_mod.CHECK_RULES.format(topic=lesson.get("topic", ""), pairs=lesson_mod.check_pairs(lesson),
+                                          quiz=("\nОтветы на тесты в окнах сессии — учти в оценке, открытые оцени сам:\n" + quiz) if quiz else ""),
         ])
         try:
             self.api.typing(self.owner)
@@ -1304,15 +1317,16 @@ class Bot:
     def lesson_context(self) -> str:
         """Блок <lesson> в промпт L1, пока идёт учебный блок: объяснение у доски вместо подсказки."""
         lesson = self.core.store.kv_get(LESSON) or {}
-        if not lesson.get("started"):
-            return ""
-        task = self.core.state.tasks.get(lesson["task_id"])
+        task = self.core.state.tasks.get(lesson.get("task_id") or "")
         if task is None:
             return ""
+        session = study.context_block(self.core, task.id, lesson.get("note"))  # окна, ответы, заметка (D55)
+        if not lesson.get("started"):
+            return session  # план готов, ▶ не нажат: окна уже видны человеку — и Арвиксу
         elapsed = int((self.core.now() - datetime.fromisoformat(lesson["started"])).total_seconds() // 60)
         plan = "; ".join(f"{s.get('from_min')}–{s.get('to_min')} {s.get('step')}" for s in lesson.get("plan") or [])
         return lesson_mod.LESSON_CONTEXT.format(topic=lesson.get("topic", ""), title=task.title, minutes=task.duration_min,
-                                                elapsed=f"{elapsed} мин", plan=plan)
+                                                elapsed=f"{elapsed} мин", plan=plan) + "\n" + session
 
     def on_block_start(self, task: Any, *, key: str) -> bool:
         """T+0 у учебной задачи: вместо «Блок пошёл» — план урока с кнопкой «Начать». False — обычный путь."""

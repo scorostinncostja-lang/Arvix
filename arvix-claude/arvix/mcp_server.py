@@ -138,7 +138,7 @@ TOOLS: dict[str, dict[str, Any]] = {
             "с итогом в reason; в работе не больше 3), milestone (project, title, dod — критерий обязателен; отметить: milestone + "
             "status done), block (блок в свободное окно: project, duration_min, date, start), log (project, text, kind "
             "update|decision|lesson|blocker|release|feedback|idea, minutes), note (заметка в папке проекта: project, title, text "
-            "Markdown, append), learn (что выучить: project, topic, why, sources; отметить: learn + status done), resource "
+            "Markdown, append), learn (что выучить: project — необязательно, topic, why, sources, kind theory|practice; отметить: learn + status done), resource "
             "(источник, инструмент, пример чужой работы: project, title, url — только настоящая, kind). Работаешь в папке с кодом "
             "проекта — веди его отсюда: этапы, журнал, заметки. Код за человека не пишешь."
         ),

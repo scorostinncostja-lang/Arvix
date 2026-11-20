@@ -106,6 +106,8 @@ class State:
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)
     resources: dict[str, dict[str, Any]] = field(default_factory=dict)  # источники и инструменты проектов (D44)
     learn_items: dict[str, dict[str, Any]] = field(default_factory=dict)  # «учиться»: очередь тем для проектов и вкладки «Обучение» (D47)
+    # Окна учебных сессий (D55): задача → {"panels": [окно…] по порядку, "answers": {id окна → ответ на тест}}
+    study: dict[str, dict[str, Any]] = field(default_factory=dict)
     repos: dict[str, dict[str, Any]] = field(default_factory=dict)  # проект → последнее, что видели в GitHub
     commits: dict[str, dict[str, Any]] = field(default_factory=dict)  # sha → коммит проекта: движение без слов
     # Как в мессенджере (D52): реакция человека на сообщение (id события → эмодзи) и до какого сообщения он прочитал
@@ -316,13 +318,15 @@ class State:
 
     def _on_lesson_started(self, ev: Event, p: dict, day: Day) -> None:
         self.lessons.append({"task_id": p.get("task_id"), "topic": p.get("topic", ""), "subject": p.get("subject", ""),
-                             "date": ev.local_date.isoformat(), "score": None})
+                             "date": ev.local_date.isoformat(), "at": ev.at.isoformat(), "score": None, "gaps": [], "checked": False,
+                             "note": p.get("note"), "roadmap_node": p.get("roadmap_node", ""), "fallback": bool(p.get("fallback"))})
 
     def _on_lesson_checked(self, ev: Event, p: dict, day: Day) -> None:
         for lesson in reversed(self.lessons):
-            if lesson["task_id"] == p.get("task_id") and lesson["score"] is None:
-                lesson["score"] = p.get("score_pct")
-                lesson["gaps"] = list(p.get("gaps") or [])
+            # «checked», а не score is None: проверка без головы оставляет оценку пустой, и следующая
+            # проверка той же задачи перезаписала бы прошлый урок
+            if lesson["task_id"] == p.get("task_id") and not lesson.get("checked"):
+                lesson.update(score=p.get("score_pct"), gaps=list(p.get("gaps") or []), next_step=p.get("next_step", ""), checked=True)
                 break
 
     def _on_safety_flag(self, ev: Event, p: dict, day: Day) -> None:
@@ -384,6 +388,22 @@ class State:
     def _on_learn_item_set(self, ev: Event, p: dict, day: Day) -> None:
         old = self.learn_items.get(p["id"], {})
         self.learn_items[p["id"]] = {**p, "date": old.get("date") or ev.local_date.isoformat(), "updated": ev.local_date.isoformat()}
+
+    def _on_study_panel(self, ev: Event, p: dict, day: Day) -> None:
+        session = self.study.setdefault(p["task_id"], {"panels": [], "answers": {}})
+        panel = {**p["panel"], "at": ev.at.isoformat()}
+        panels = session["panels"]
+        idx = next((i for i, x in enumerate(panels) if x["id"] == panel["id"]), None)
+        if idx is None:
+            panels.append(panel)
+        else:  # тот же id — замена окна (или скрытие): старый ответ на тест к новому тесту не относится
+            if panels[idx].get("questions") != panel.get("questions"):
+                session["answers"].pop(panel["id"], None)
+            panels[idx] = panel
+
+    def _on_study_answer(self, ev: Event, p: dict, day: Day) -> None:
+        session = self.study.setdefault(p["task_id"], {"panels": [], "answers": {}})
+        session["answers"][p["panel_id"]] = {k: p.get(k) for k in ("answers", "results", "score_pct")} | {"at": ev.at.isoformat()}
 
     def _on_resource_set(self, ev: Event, p: dict, day: Day) -> None:
         self.resources[p["id"]] = {**p, "date": self.resources.get(p["id"], {}).get("date") or ev.local_date.isoformat()}
