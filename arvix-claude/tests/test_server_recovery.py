@@ -17,7 +17,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from tests.helpers import ROOT
+from tests.helpers import ROOT, ArvixCase
 
 SSH_STUB = r"""#!/usr/bin/env bash
 # Заглушка ssh: опции пропускаются, команда выполняется в $FAKE_SERVER_HOME.
@@ -204,12 +204,52 @@ class RestorePlanTest(Sandbox):
         self.assertIn("пропускаю повреждённый снимок", run.stdout)
         self.assertIn("arvix-2026-11-18.db — 7 событий", run.stdout)
         self.assertIn("203-0-113-7.sslip.io", run.stdout)
+        self.assertIn("arvix app-link", run.stdout)                         # план кончается ссылкой привязки
         self.assertEqual(self.calls(), "")                                  # ни ssh, ни systemctl
 
     def test_refuses_without_snapshot(self) -> None:
         run = self.run_script("restore-server.sh", "root@203.0.113.7", "--dry-run")
         self.assertNotEqual(run.returncode, 0)
         self.assertIn("нет целого снимка", run.stderr)
+
+
+class AppLinkTest(ArvixCase):
+    """`arvix app-link`: после переезда браузер не знает ключа нового адреса — без ссылки приложение пустое."""
+
+    def link(self) -> str:
+        import contextlib
+        import io
+
+        from arvix.cli import main
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            main(["app-link"])
+        return out.getvalue().strip()
+
+    def test_prints_one_time_link_that_pairs_once(self) -> None:
+        from arvix.config import load_config, write_user_config
+        from arvix.core import Core
+        from arvix.store import Store
+        from arvix.web.auth import app_token, claim_pair
+
+        write_user_config({"web": {"public_url": "https://203-0-113-7.sslip.io:8443/"}})
+        first, second = self.link(), self.link()
+        self.assertTrue(second.startswith("https://203-0-113-7.sslip.io:8443/#p="), second)
+        self.assertEqual(second.count("\n"), 0)                              # stdout — только ссылка, её берёт скрипт
+        core = Core(load_config(), Store(Path(os.environ["ARVIX_DATA_DIR"]) / "arvix.db"))
+        try:
+            self.assertIsNone(claim_pair(core, first.split("#p=")[1]))      # новая ссылка отменяет прежнюю
+            self.assertEqual(claim_pair(core, second.split("#p=")[1]), app_token(core))
+            self.assertIsNone(claim_pair(core, second.split("#p=")[1]))     # второй раз — нет
+            self.assertNotIn(app_token(core), second)                        # постоянный ключ наружу не выходит
+        finally:
+            core.close()
+
+    def test_without_public_address_refuses(self) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            self.link()
+        self.assertIn("web-setup.sh", str(ctx.exception.code))
 
 
 if __name__ == "__main__":
