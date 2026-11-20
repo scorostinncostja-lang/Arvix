@@ -117,6 +117,18 @@ class CssStructureTest(unittest.TestCase):
             self.assertGreaterEqual(depth, 0)
         self.assertEqual(depth, 0)
 
+    def test_new_project_form_does_not_overflow(self) -> None:
+        """Скриншот владельца 21.11: форма «Что хочешь сделать?» уходила за правый край — select без ширины
+        растягивался по самому длинному названию цели, а колонка grid (auto) — вслед за ним."""
+        import re
+
+        css = (STATIC / "app.css").read_text()
+        welcome = re.search(r"\.pw-welcome \{([^}]*)\}", css).group(1)
+        self.assertIn("grid-template-columns: minmax(0, 1fr)", welcome)
+        select = re.search(r"select\.input \{([^}]*)\}", css).group(1)
+        self.assertIn("width: 100%", select)
+        self.assertIn("min-width: 0", select)
+
 
 class TabletLayoutTest(unittest.TestCase):
     """Планшет (Lenovo Tab P11): «portrait» в манифесте заставлял Android рисовать WebAPK полосой с обоями по бокам."""

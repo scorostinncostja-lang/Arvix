@@ -369,43 +369,108 @@ class ProjectChatTest(ProjectCase):
         self.assertTrue(any(f.startswith("01_Projects/Бот для расписания/Файлы/") and f.endswith("parser.py") for f in files), files)
 
 
+class FixedBrain:
+    def __init__(self, *answers):
+        self.answers, self.calls = list(answers), []
+
+    def ask(self, **kw):
+        self.calls.append(kw)
+        return self.answers.pop(0) if self.answers else None
+
+
 class RoadmapGenerationTest(ProjectCase):
-    def test_roadmap_from_head_becomes_ideas_with_milestones(self):
+    """D56: Арвикс предлагает ОДИН следующий проект — или говорит, что проект не нужен. Раньше цепочка
+    из 3–6 проектов на цель за два нажатия дала девять «отложенных», половина из них — не проекты."""
+
+    def goal(self, title="Стать бэкенд-разработчиком"):
+        return self.core.set_goal(title, why="работа мечты", kind="main")
+
+    def test_one_next_project_becomes_idea_with_milestones(self):
         from arvix import project_roadmap
 
-        goal = self.core.set_goal("Стать бэкенд-разработчиком", why="работа мечты", kind="main")
-        self.project("Бот расписания", goal_id=goal)
-
-        class Brain:
-            def __init__(self):
-                self.calls = []
-
-            def ask(self, **kw):
-                self.calls.append(kw)
-                return {"summary": "От простого к сложному.", "projects": [
-                    {"title": "Бот расписания", "why": "дубль", "expectation": "x", "milestones": []},
-                    {"title": "REST API заметок", "why": "HTTP и базы", "kind": "code", "purposes": ["skill", "portfolio", "чушь"],
-                     "expectation": "API в интернете с документацией", "weeks": 4, "weekly_min": 180, "skills": ["FastAPI"],
-                     "milestones": [{"title": "CRUD", "dod": "5 эндпоинтов с тестами"}, {"title": "Без критерия", "dod": ""}],
-                     "resources": [{"title": "FastAPI docs", "url": "https://fastapi.tiangolo.com", "kind": "doc"},
-                                   {"title": "Выдуманная", "url": "не ссылка", "kind": "doc"}]},
-                ]}
-
-        brain = Brain()
+        goal = self.goal()
+        done = self.project("Бот расписания", goal_id=goal)
+        projects.set_project(self.core, project_id=done, status="done", reason="бот работает у класса, 12 человек")
+        brain = FixedBrain({"summary": "Дальше — HTTP и базы.", "projects": [
+            {"title": "REST API заметок", "why": "HTTP и базы", "kind": "code", "purposes": ["skill", "portfolio", "чушь"],
+             "expectation": "API в интернете с документацией", "weeks": 4, "weekly_min": 180, "skills": ["FastAPI"],
+             "milestones": [{"title": "CRUD", "dod": "5 эндпоинтов с тестами"}, {"title": "Без критерия", "dod": ""}],
+             "resources": [{"title": "FastAPI docs", "url": "https://fastapi.tiangolo.com", "kind": "doc"},
+                           {"title": "Выдуманная", "url": "не ссылка", "kind": "doc"}]},
+            {"title": "Второй проект сверх одного", "why": "x", "expectation": "x", "milestones": []},
+        ]})
         result = project_roadmap.generate(self.core, brain, goal, system="SYS")
-        self.assertEqual(result["created"], ["REST API заметок"])
+        self.assertEqual(result["created"], ["REST API заметок"])  # второй из ответа код не берёт
         self.assertIn("Бот расписания", brain.calls[0]["prompt"])  # существующее модель видит
-        chain = projects.roadmap_chain(self.core, goal)
-        new = chain[-1]
+        self.assertIn("ОДИН или ни одного", brain.calls[0]["system"])
+        new = projects.roadmap_chain(self.core, goal)[-1]
         self.assertEqual((new["status"], new["by"], new["order"], new["weeks"]), ("idea", "arvix", 2, 4))
         self.assertEqual(new["purposes"], ["skill", "portfolio"])
         self.assertEqual([m["title"] for m in projects.milestones(self.core, new["id"])], ["CRUD"])
         self.assertEqual([r["title"] for r in projects.resources(self.core, new["id"])], ["FastAPI docs"])
         self.assertTrue((self.vault / result["path"]).exists())
-
-        class Down:
-            def ask(self, **kw):
-                return None
-
         with self.assertRaisesRegex(ArvixError, "недоступна"):
-            project_roadmap.generate(self.core, Down(), goal, system="SYS")
+            project_roadmap.generate(self.core, FixedBrain(), self.goal("Сдать ОГЭ"), system="SYS")
+
+    def test_open_step_blocks_without_asking_the_head(self):
+        """Старый код спрашивал голову при любом нажатии и копил идеи; теперь сначала решает человек."""
+        from arvix import project_roadmap
+
+        goal = self.goal()
+        pid = self.project("Бот расписания", goal_id=goal)
+        brain = FixedBrain({"summary": "", "projects": [{"title": "Ещё", "why": "x", "expectation": "x", "milestones": []}]})
+        with self.assertRaisesRegex(ArvixError, "доведи"):
+            project_roadmap.generate(self.core, brain, goal, system="SYS")
+        projects.set_project(self.core, project_id=pid, status="paused")
+        with self.assertRaisesRegex(ArvixError, "Не нужен"):
+            project_roadmap.generate(self.core, brain, goal, system="SYS")
+        self.assertEqual(brain.calls, [])
+
+    def test_too_many_untouched_ideas_block_new_ones(self):
+        from arvix import project_roadmap
+
+        for n, title in enumerate(("Монтаж роликов", "Сайт-визитка", "Олимпиадные задачи")):
+            self.project(title, goal_id=self.goal(f"Цель {n}"), status="idea")
+        with self.assertRaisesRegex(ArvixError, "Неначатых проектов уже 3"):
+            project_roadmap.generate(self.core, FixedBrain(), self.goal("Новая цель"), system="SYS")
+
+    def test_refused_project_is_not_suggested_again_even_reworded(self):
+        from arvix import project_roadmap
+
+        goal = self.goal("Поступить на EECS")
+        pid = self.project("Портфолио EECS: сайт, 2 проекта и английский", goal_id=goal, status="idea")
+        projects.set_project(self.core, project_id=pid, status="dropped", reason="Не нужен — убран из списка кнопкой ✕")
+        brain = FixedBrain({"summary": "Портфолио нужно.", "projects": [
+            {"title": "Сайт-портфолио для EECS и английский", "why": "x", "expectation": "сайт", "milestones": []}]})
+        result = project_roadmap.generate(self.core, brain, goal, system="SYS")
+        self.assertEqual(result["created"], [])
+        self.assertIsNone(result["path"])
+        self.assertIn("ОТКАЗАЛСЯ ИЛИ ЗАКРЫЛ", brain.calls[0]["prompt"])
+        self.assertIn("Портфолио EECS", brain.calls[0]["prompt"])
+        self.assertTrue(project_roadmap.similar("Пакет для поступления в Школу Газпром Бишкек", "Пакет поступления: школа Газпром"))
+        self.assertFalse(project_roadmap.similar("Бот расписания", "REST API заметок"))
+
+    def test_head_may_answer_that_no_project_is_needed(self):
+        from arvix import project_roadmap
+
+        goal = self.goal("Режим сна и 2 часа глубокой работы")
+        brain = FixedBrain({"summary": "", "not_project": "Это привычка: блок 45 минут каждый день — в распорядок, не проект.", "projects": []})
+        result = project_roadmap.generate(self.core, brain, goal, system="SYS")
+        self.assertEqual((result["created"], result["path"]), ([], None))
+        self.assertIn("привычка", result["not_project"])
+        self.assertEqual(self.core.state.projects, {})
+
+    def test_list_shows_goals_without_projects_apart(self):
+        """Пятнадцать целей пустыми группами с «предложить» прятали сами проекты (скриншот владельца 21.11)."""
+        exam, blog = self.goal("Сдать ОГЭ"), self.goal("Запустить блог")
+        idea = self.project("Регулярность: 2 поста в неделю", goal_id=blog, status="idea")
+        work = self.project("Ниша и 3 пробных поста", goal_id=blog)
+        view = api.projects_view(self.core)
+        self.assertEqual([g["goal"]["id"] for g in view["groups"]], [blog])
+        self.assertEqual([p["id"] for p in view["groups"][0]["projects"]], [work, idea])  # в работе — сверху
+        self.assertEqual([g["id"] for g in view["idle_goals"]], [exam])
+        self.assertEqual(view["ideas"], 1)
+        projects.set_project(self.core, project_id=idea, status="dropped", reason="Не нужен — убран из списка кнопкой ✕")
+        view = api.projects_view(self.core)
+        self.assertEqual([p["id"] for p in view["groups"][0]["projects"]], [work])
+        self.assertEqual([c["id"] for c in view["closed"]], [idea])  # вернуть можно из «Завершённых»

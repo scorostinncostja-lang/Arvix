@@ -1656,9 +1656,13 @@ function renderProgress() {
   else {
     const w = h.week;
     html += heatCard(h.heat) + `<div class="progress-grid">`;
+    // Нормы недели нет (распорядок не сохранён) — «2ч из 0м» бессмысленно: показываем факт без полосы
+    const weekRow = (label, done, need, cls, top) => `<div class="row"${top ? ' style="margin-top:6px"' : ""}><span>${label}</span><b>${hm(done)}${need ? " из " + hm(need) : ""}</b></div>`
+      + (need ? `<div class="bar${cls}"><i style="width:${Math.min(100, 100 * done / need)}%"></i></div>` : "");
     html += `<div class="card"><h3>Неделя</h3>
-      <div class="row"><span>Сделано</span><b>${hm(w.productive_min)} из ${hm(w.budget_min)}</b></div><div class="bar"><i style="width:${Math.min(100, 100 * w.productive_min / Math.max(1, w.budget_min))}%"></i></div>
-      <div class="row" style="margin-top:6px"><span>Глубокая работа</span><b>${hm(w.deep_min)} из ${hm(w.deep_budget_min)}</b></div><div class="bar deep"><i style="width:${Math.min(100, 100 * w.deep_min / Math.max(1, w.deep_budget_min))}%"></i></div>
+      ${weekRow("Сделано", w.productive_min, w.budget_min, "", false)}
+      ${weekRow("Глубокая работа", w.deep_min, w.deep_budget_min, " deep", true)}
+      ${!w.budget_min ? `<div class="muted small" style="margin-top:6px">Нормы недели нет: распорядок дней не сохранён. Скажи Арвиксу «собери распорядок».</div>` : ""}
       <div class="pills" style="margin-top:10px">${w.quotas.map((q) => `<span class="chip ${q.done >= q.need ? "green" : ""}">${esc(q.label)} ${q.done}/${q.need}</span>`).join("")}</div></div>`;
     html += chartCard("Выполнение, %", h.days, (d) => d.completion, 100, "var(--accent)");
     html += chartCard("Сон, часы", h.days, (d) => (d.sleep_min == null ? null : d.sleep_min / 60), 10, "var(--accent-2)", 7.5);
@@ -1669,7 +1673,7 @@ function renderProgress() {
         <div class="muted small">${[g.deadline ? "до " + esc(g.deadline) : "", g.metric ? esc(g.metric) : ""].filter(Boolean).join(" · ")}</div></div>`).join("")}</div>`;
     }
     if (h.lessons && h.lessons.length) {
-      html += `<div class="card"><h3>Уроки</h3>${h.lessons.slice().reverse().map((x) => `<div class="row"><span>${esc(x.subject)}: ${esc(x.topic)}</span>
+      html += `<div class="card"><h3>Уроки</h3>${h.lessons.slice().reverse().map((x) => `<div class="row"><span>${x.subject && !String(x.topic || "").toLowerCase().startsWith(String(x.subject).toLowerCase()) ? esc(x.subject) + ": " : ""}${esc(x.topic)}</span>
         <span class="chip ${x.score >= 70 ? "green" : x.score != null ? "yellow" : ""}">${x.score != null ? x.score + "%" : "—"}</span></div>`).join("")}</div>`;
     }
     html += `</div>`;
@@ -1772,11 +1776,18 @@ function restoreComposer(keep) {
 function projListHtml(P) {
   let html = `<button class="btn primary pl-new" data-pact="new">${icon("plus")} Новый проект</button>`;
   if (P.load_issue) html += `<div class="pl-warn">⚠️ ${esc(P.load_issue)}</div>`;
+  if (P.ideas > P.ideas_max) html += `<div class="pl-warn">Неначатых проектов ${P.ideas}. Пройдись по ним: что не нужно — ✕, что нужно — открой и «В работу». Новые Арвикс не предложит, пока их больше ${P.ideas_max}.</div>`;
   if (!P.count) html += `<p class="muted small pl-hint">Напиши, что хочешь сделать, — Арвикс сам разложит проект, заведёт папку в Obsidian и будет вести его с тобой.</p>`;
   for (const g of P.groups) {
-    html += `<div class="pl-group"><div class="pl-ghead"><span>${g.goal ? (g.goal.kind === "main" ? "★ " : "") + esc(g.goal.title) : "Без цели"}</span>
-      ${g.goal ? `<button class="link small" data-proadmap="${esc(g.goal.id)}" title="Арвикс предложит проекты к этой цели">✨ предложить</button>` : ""}</div>
-      ${g.projects.length ? g.projects.map(projItemHtml).join("") : `<div class="muted small pl-empty">проектов к цели пока нет</div>`}</div>`;
+    html += `<div class="pl-group"><div class="pl-ghead"><span>${g.goal ? (g.goal.kind === "main" ? "★ " : "") + esc(g.goal.title) : "Без цели"}</span></div>
+      ${g.projects.map(projItemHtml).join("")}</div>`;
+  }
+  const idle = P.idle_goals || [];
+  if (idle.length) {
+    html += `<details class="pl-group pl-idle"><summary class="pl-ghead"><span>Цели без проектов · ${idle.length}</span></summary>
+      <p class="muted small pl-hint">Не каждой цели нужен проект: экзамену — учёба, телу — привычка. ✨ — Арвикс предложит один следующий проект или скажет, что он не нужен.</p>
+      ${idle.map((g) => `<div class="pl-goal"><span class="grow">${g.kind === "main" ? "★ " : ""}${esc(g.title)}</span>
+        <button class="link small" data-proadmap="${esc(g.id)}" title="Арвикс предложит один проект к этой цели">✨</button></div>`).join("")}</details>`;
   }
   if (P.closed.length) html += `<details class="pl-group"><summary class="pl-ghead"><span>Завершённые · ${P.closed.length}</span></summary>${P.closed.map(projItemHtml).join("")}</details>`;
   return html;
@@ -1784,10 +1795,12 @@ function projListHtml(P) {
 
 function projItemHtml(p) {
   const on = state.project && state.project.id === p.id;
-  const sub = p.group === "closed" ? p.status_ru : p.group === "later" ? "отложен" + (p.by === "arvix" ? " · предложил Арвикс" : "")
+  const later = p.group === "later";
+  const sub = p.group === "closed" ? p.status_ru : later ? (p.status === "idea" ? "не начат" : "на паузе") + (p.by === "arvix" ? " · предложил Арвикс" : "")
     : p.idle_days >= 7 ? `<span class="warn">${p.idle_days} дн без движения</span>` : p.next ? "→ " + esc(p.next.title) : "этапов нет";
   return `<div class="pl-item${on ? " on" : ""} ${p.group}" data-proj="${esc(p.id)}" role="button" tabindex="0">
-    <span class="pl-dot"></span><div class="grow"><div class="pl-title">${esc(p.title)}</div><div class="pl-sub">${sub}</div></div></div>`;
+    <span class="pl-dot"></span><div class="grow"><div class="pl-title">${esc(p.title)}</div><div class="pl-sub">${sub}</div></div>
+    ${later ? `<button class="icon-btn sm pl-drop" data-pdrop="${esc(p.id)}" title="Не нужен — убрать из списка" aria-label="Не нужен">✕</button>` : ""}</div>`;
 }
 
 function projWelcomeHtml(P) {
@@ -1978,9 +1991,19 @@ function bindProjects() {
   on("[data-layout]", (el) => { projLayout[el.dataset.layout] = !projLayout[el.dataset.layout]; saveLayout(); renderProjects(); });
   on("[data-ask]", (el) => projectSend(el.dataset.ask));
   on("[data-proadmap]", async (el) => {
-    try { await api("projects/roadmap", { json: { goal: el.dataset.proadmap } }); toast("Арвикс подбирает проекты к цели — придёт сообщением, лягут в «отложены»"); }
+    try { await api("projects/roadmap", { json: { goal: el.dataset.proadmap } }); toast("Арвикс думает над целью — ответ придёт в чат: один проект или «проект не нужен»"); }
     catch (err) { toast(err.message); }
   });
+  view.querySelectorAll("[data-pdrop]").forEach((el) => el.addEventListener("click", async (e) => {
+    e.stopPropagation();  // кнопка внутри строки проекта: не открывать его
+    haptic("soft");
+    const id = el.dataset.pdrop;
+    try {
+      await api(`projects/${id}/status`, { json: { status: "dropped", reason: "Не нужен — убран из списка кнопкой ✕" } });
+      if (state.project && state.project.id === id) state.project = null;
+      state.projects = await api("projects"); notify("success"); toast("Убран. Вернуть — «Завершённые» → проект → «Вернуть в работу»"); renderProjects();
+    } catch (err) { toast(err.message); }
+  }));
   on("[data-pnote]", (el) => openProjNote(el.dataset.pnote));
   on("[data-pfile]", (el) => openProjFile(el.dataset.pfile));
   on("[data-pnote-close]", () => { state.projNote = null; renderProjects(); });
@@ -2213,7 +2236,7 @@ function renderStudy(opts = {}) {
   const keep = captureStudyComposer();
   const deskEl = $(".sw-desk"), deskTop = deskEl ? deskEl.scrollTop : 0;  // правка заметки или ответ теста не уводят стол наверх
   studyUI.deskKey = key;
-  const chat = s.live;  // закрытая сессия — история: стол без чата, переписка осталась в общем чате
+  const chat = s.live || (s.messages || []).length > 0;  // закрытая сессия — история: стол и её нить, только чтение
   const pane = !chat ? "desk" : isWide() ? "both" : studyLayout.pane;
   view.innerHTML = `<div class="sw${isWide() && chat ? " wide" : ""}">
     <section class="sw-desk">${studyHeadHtml(s)}
@@ -2518,14 +2541,14 @@ async function loadStudyNote(path) {
 }
 const studyEditing = () => Object.values(studyUI.notes).some((n) => n.edit);
 
-// --- чат урока: те же сообщения, что в общем чате, с начала сессии ---------------------------
+// --- чат урока: своя нить сессии (D56) — общий чат и разбор дня сюда не попадают ----------------
 function studyChatHtml(s) {
   const can = s.live;
   return `<div class="pc sc"><div class="pc-thread" id="sc-thread"></div>
     ${can ? `<div class="aw-chips">${s.asks.map((q) => `<button class="chip" data-sask="${esc(q)}">${esc(q)}</button>`).join("")}</div>
     <div class="pc-compose"><textarea id="sc-text" rows="1" placeholder="Спроси Арвикса по теме — он видит этот стол"></textarea>
       <button class="icon-btn go" id="sc-send" aria-label="Отправить">${icon("send")}</button></div>`
-      : `<div class="muted small">Сессия закрыта — переписка в общем чате.</div>`}</div>`;
+      : `<div class="muted small">Сессия закрыта — переписка сохранена здесь.</div>`}</div>`;
 }
 
 function drawStudyThread() {
@@ -2550,7 +2573,7 @@ async function studySend(text) {
   s.messages = [...(s.messages || []), { who: "me", text, at: new Date().toISOString() }];
   state.thinking = "думаю";
   drawStudyThread();
-  try { await api("message", { json: { text } }); } catch (err) { toast(err.message); }
+  try { await api(`study/${s.task.id}/message`, { json: { text } }); } catch (err) { toast(err.message); }
 }
 
 function captureStudyComposer() {
@@ -2678,8 +2701,9 @@ function bindStudy() {
     const sel = studyUI.quiz[p.id] || {};
     const answers = p.questions.map((q, i) => (q.open ? String(sel[i] || "") : sel[i] ?? null));
     if (answers.some((a, i) => !p.questions[i].open && a == null) && !confirm("Не на все вопросы выбран ответ. Проверить так?")) return;
+    el.disabled = true; el.textContent = "Проверяю…";  // проверка — код, но очередь может быть занята головой
     try { await studyOp("answer", { panel: p.id, answers }, (r) => r.score_pct != null ? `${r.score_pct}% — разбор под вопросами` : "Записал — оценит на проверке"); delete studyUI.quiz[p.id]; }
-    catch (err) { toast(err.message); }
+    catch (err) { el.disabled = false; el.textContent = "Проверить"; toast(err.message); }
   });
   const noteOf = (el) => studyUI.notes[el.dataset.snote];
   on("[data-snote-edit]", (el) => { noteOf(el).edit = true; studyUI.deskKey = ""; renderStudy();

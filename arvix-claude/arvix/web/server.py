@@ -17,7 +17,7 @@ POST /api/message {text} · /api/voice (аудио) · /api/button {data}
 POST /api/tts {text}          озвучка ответа (ogg), если [tts] включена; иначе 404 — говорит голос телефона
 POST /api/upload              файл телом запроса (X-File-Name, X-Caption — urlencoded), до 20 МБ
 POST /api/tasks {…} · /api/tasks/<id>/<op> · /api/tasks/<id>/photo (фото отчёта телом, X-File-Name) · /api/lesson/<id>
-    · /api/study/open {task | item} · /api/study/learn · /api/study/<task>/<answer|panel|hide> (D55); GET /api/study?task=
+    · /api/study/open {task | item} · /api/study/learn · /api/study/<task>/<answer|panel|hide|message> (D55, D56); GET /api/study?task=
 POST /api/focus {minutes, task | topic} · /api/focus/<pause|resume|stop|cancel> · /api/focus/note {event, note}
 POST /api/capture {text}      мысль в Inbox
 POST /api/note {path, text, sha} · /api/note/new {dir, name} · /api/note/toggle {path, line, sha} · /api/note/link {a, b}
@@ -318,6 +318,12 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     self.send_json(opened)
                 elif parts == ["study", "learn"]:
                     self.send_json(app.hub.call(api.study_learn(self.body_json())))
+                elif len(parts) == 3 and parts[0] == "study" and parts[2] == "message":
+                    text = str(self.body_json().get("text") or "").strip()
+                    if not text:
+                        raise ArvixError("Пустое сообщение")
+                    app.hub.post(api.study_chat(parts[1], text[:16000]), label="думаю", chat=True)
+                    self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif len(parts) == 3 and parts[0] == "study":
                     self.send_json(app.hub.call(api.study_op(parts[1], parts[2], self.body_json())))
                 elif parts == ["focus"]:

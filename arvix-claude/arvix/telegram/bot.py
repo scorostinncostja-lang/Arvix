@@ -194,6 +194,7 @@ class Bot:
         self.stt = stt if stt is not None else STT(core.cfg)
         self.tts = tts if tts is not None else TTS(core.cfg)
         self.project: str | None = None  # чат проекта в приложении (D47): своя нить, блок проекта в запросе
+        self.study: str | None = None  # чат учебной сессии (D56): своя нить — разбор дня и «ложись» в неё не попадают
         self.sleep = sleep or time.sleep
         self.voice_notes_per_day = int(core.cfg.section("tts").get("voice_notes_per_day", 3) or 0)
         self.channel = "telegram"  # приложение (arvix/web) создаёт свой Bot с channel="web"
@@ -213,7 +214,7 @@ class Bot:
              keyboard: list[list[str]] | None = None) -> int | None:
         target, tg_reply = self.quote_target()
         message_id = self.api.send(self.owner, text, buttons, keyboard=keyboard, reply_to=tg_reply)
-        self.core.message_out(text, key=key, channel=self.channel, buttons=buttons, project=self.project,
+        self.core.message_out(text, key=key, channel=self.channel, buttons=buttons, project=self.project, study=self.study,
                               reply_to=target, tg_id=self.tg_id(message_id))
         return message_id
 
@@ -277,7 +278,7 @@ class Bot:
         except Exception:  # noqa: BLE001 — очередь не должна ронять ответ
             pass
         return any(e.kind in Core.MESSAGE_KINDS and e.payload.get("project") == self.project
-                   for e in self.core.store.read(int(event_id)))
+                   and e.payload.get("study") == self.study for e in self.core.store.read(int(event_id)))
 
     def reply_block(self) -> str:
         """Человек ответил цитатой — голова получает, на что именно, фактом из журнала."""
@@ -331,7 +332,7 @@ class Bot:
         saved = self.answering
         self.answering = {"event": target.id, "force": target.id, "replied": False, "target": None}
         try:
-            with self.in_project(target.payload.get("project")):  # из чата проекта — ответ туда же
+            with self.in_project(target.payload.get("project")), self.in_study(target.payload.get("study")):  # из нити — ответ туда же
                 self.converse(f"{emoji} (реакция на твоё сообщение: непонятно)", extra=extra)
         finally:
             self.answering = saved
@@ -351,7 +352,8 @@ class Bot:
         seen_upto = max(st.read_upto, last_in.id if last_in else 0)
         if st.read_at:
             lines.append(f"Прочитал ленту в приложении до #{st.read_upto} ({datetime.fromisoformat(st.read_at).astimezone(core.tz):%d.%m %H:%M}).")
-        unread = [e for e in core.store.read(seen_upto) if e.kind == "message_out" and not e.payload.get("project")]
+        unread = [e for e in core.store.read(seen_upto) if e.kind == "message_out"
+                  and not e.payload.get("project") and not e.payload.get("study")]
         if unread and st.read_at:
             lines.append(f"Не видел в приложении твоих сообщений: {len(unread)} (с {unread[0].at.astimezone(core.tz):%H:%M}); "
                          "в Telegram прочтение не видно — там он мог их видеть.")
@@ -386,6 +388,16 @@ class Bot:
             self.project = saved
 
     @contextmanager
+    def in_study(self, task_id: str | None) -> Any:
+        """Разговор внутри учебной сессии (D56): сообщения помечены задачей урока, история — нить сессии."""
+        saved = self.study
+        self.study = task_id
+        try:
+            yield
+        finally:
+            self.study = saved
+
+    @contextmanager
     def via(self, channel: str, api: Any) -> Any:
         """Обработать сообщение из приложения тем же кодом, что и из Telegram: ответы идут
         в журнал (приложение их видит), а не в чат. Пауз «печатает…» в приложении нет."""
@@ -406,7 +418,7 @@ class Bot:
     def log_in(self, text: str) -> None:
         inc, self._incoming = self._incoming, None  # одно входящее — одно событие
         target = self.quoted_event(inc) if inc else None
-        event_id = self.core.message_in(text, channel=self.channel, project=self.project,
+        event_id = self.core.message_in(text, channel=self.channel, project=self.project, study=self.study,
                                         reply_to=target.id if target is not None else None,
                                         tg_id=(inc or {}).get("tg_id") if self.channel == "telegram" else None)
         self.core.store.kv_set("last_in_at", self.core.now().timestamp())
@@ -424,7 +436,7 @@ class Bot:
         body = "\n\n".join(parts) or "…"
         target, tg_reply = self.quote_target(reply_to)
         message_id = self.api.send(self.owner, fmt.strip_markup(body), keyboard=keyboard, html=fmt.to_html(body), reply_to=tg_reply)
-        self.core.message_out(body, channel=self.channel, key=key, project=self.project, reply_to=target, tg_id=self.tg_id(message_id))
+        self.core.message_out(body, channel=self.channel, key=key, project=self.project, study=self.study, reply_to=target, tg_id=self.tg_id(message_id))
         if note := voice_note_check(voice_note, text):
             self.send_voice_note(note)
 
@@ -444,7 +456,7 @@ class Bot:
             log.info("голосовое не отправлено: %s", exc)
             return
         self.core.store.kv_set("voice_notes", {"day": today, "n": sent + 1})
-        self.core.message_out("🔊 " + note, channel=self.channel, project=self.project, tg_id=self.tg_id(message_id))
+        self.core.message_out("🔊 " + note, channel=self.channel, project=self.project, study=self.study, tg_id=self.tg_id(message_id))
 
     def await_set(self, kind: str, **data: Any) -> None:
         # asked_at: сообщение, отправленное раньше вопроса (очередь после обрыва сети),
@@ -1416,6 +1428,8 @@ class Bot:
         events = [e for e in self.core.store.read(start) if e.kind in ("message_in", "message_out")]
         if self.project:  # в окне проекта — его нить: голова не путает проект с разговором о сне
             events = [e for e in events if e.payload.get("project") == self.project]
+        elif self.study:  # в учебной сессии — её нить (D56)
+            events = [e for e in events if e.payload.get("study") == self.study]
         lines: list[tuple[int, str]] = []
         shown = events[-(HISTORY + 1):]
         ids = {e.id for e in shown}
@@ -1468,7 +1482,7 @@ class Bot:
         поздний вечер — пора прощаться. Модель это не угадывает, а получает фактом."""
         now = self.core.now()
         lines = []
-        if self.first_today:
+        if self.first_today and not (self.project or self.study):  # в нити проекта или урока разговор уже идёт
             part = "Доброе утро" if 5 <= now.hour < 12 else "Добрый вечер" if now.hour >= 18 else "Привет"
             lines.append(f"Первое сообщение человека за сегодня: начни ответ с короткого приветствия первой строкой "
                          f"(«{part}» или «Привет», по-своему, без вопросов «как дела?»), дальше в том же сообщении — ответ.")
@@ -2001,19 +2015,21 @@ class Bot:
             self.send(f"⏸ «{project['title']}» на паузе. Это решение, а не провал: вернуть — во вкладке «Проекты» или словами.")
 
     def build_project_roadmap(self, goal_id: str) -> None:
-        """Роадмап проектов под цель (D44): совет в фоне — проекты ложатся идеями, ответ приходит сообщением."""
+        """Следующий проект к цели (D44 → D56): совет в фоне — один проект идеей или «проект не нужен»."""
         from arvix import project_roadmap
 
         try:
             result = project_roadmap.generate(self.core, self.brain, goal_id, system=self.analyst_system(""))
         except ArvixError as exc:
-            self.send(f"Роадмап не собрался: {exc}")
+            self.send(f"Проект к цели не предлагаю: {exc}")
             return
-        text = f"🗺 Роадмап проектов к цели «{result['goal']['title']}»\n\n{clip(result['summary'], 900)}"
+        text = f"🗺 Цель «{result['goal']['title']}»"
         if result["created"]:
-            text += "\n\nДобавил идеями по порядку: " + " → ".join(result["created"]) + ". В работу берёшь сам — во вкладке «Проекты»."
+            text += f"\n\nСледующий проект: «{result['created'][0]}».\n{clip(result['summary'], 700)}\nЛежит в «Проектах» идеей — в работу берёшь сам, не нужен — «Не нужен»."
+        elif result["not_project"]:
+            text += f"\n\nПроект здесь не нужен. {clip(result['not_project'], 600)}"
         else:
-            text += "\n\nНовых проектов не добавил: текущий роадмап уже ведёт к цели."
+            text += "\n\nНового проекта не добавил: предложенный повторял уже существующий."
         if result["path"]:
             text += f"\n📝 {result['path']}"
         self.send(text)
