@@ -1,5 +1,5 @@
 [Unit]
-Description=Arvix — бэкап журнала с сервера на ноутбук
+Description=Arvix — бэкап журнала и конфига с сервера на ноутбук
 After=network-online.target
 Wants=network-online.target
 

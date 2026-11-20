@@ -836,7 +836,7 @@ ssh -t arvix@HOST bash ~/.local/share/arvix/app/deploy/server-claude-token.sh
 arvix remote set arvix@HOST                          # проверит ssh и запишет [remote] в конфиг
 systemctl --user disable --now arvix-telegram        # два бота с одним токеном мешают друг другу
 systemctl --user enable --now arvix-vault-sync.timer # хранилище ⇄ сервер каждые 10 минут
-systemctl --user enable --now arvix-backup.timer     # копия журнала раз в сутки
+systemctl --user enable --now arvix-backup.timer     # копия журнала и конфига сервера каждый час
 ```
 Теперь команда `arvix`, MCP-сервер в Claude Code/Desktop и хук ходят на сервер по SSH;
 строка состояния кэшируется на минуту. `arvix remote show` — где журнал, `arvix remote off` —
@@ -844,11 +844,21 @@ systemctl --user enable --now arvix-backup.timer     # копия журнала
 `setup`, `init-home`, `doctor`, `desktop-mcp` всегда работают на этой машине.
 
 ### 10.4. Бэкапы
-- ноутбук: `arvix-backup.timer` раз в сутки забирает целостный снимок базы
-  (`sqlite3 .backup`) в `~/.local/share/arvix/backups/`, 14 копий; хост берётся из `[remote]`.
+- ноутбук: `arvix-backup.timer` каждый час забирает целостный снимок базы
+  (`sqlite3 .backup`) в `~/.local/share/arvix/backups/` (файл на день, 30 дней) и конфиг сервера
+  (`server-config.toml`, права 600 — ключи голоса переживут сервер); хост берётся из `[remote]`.
+  Нет свежего снимка 12 часов — уведомление на рабочем столе.
   Вручную: `bash ~/.local/share/arvix/app/deploy/arvix-backup.sh`;
 - сервер: cron в 04:30 — копия по дню недели в `~/backups/` (7 копий):
   `30 4 * * * sqlite3 ~/.local/share/arvix/arvix.db ".backup ~/backups/arvix-$(date +\%u).db"`.
+
+**Сервер пропал** (отключили, заблокировали IP, кончилась аренда) — переезд одним скриптом с ноутбука,
+подробно в docs/07-OPERATIONS.md §5.1:
+```bash
+ssh-copy-id root@НОВЫЙ_IP
+bash arvix-claude/deploy/restore-server.sh root@НОВЫЙ_IP --dry-run
+bash arvix-claude/deploy/restore-server.sh root@НОВЫЙ_IP
+```
 
 ### 10.5. Обновление
 ```bash

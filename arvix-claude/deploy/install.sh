@@ -80,6 +80,9 @@ cp "$SRC/deploy/arvix-backup.timer" "$UNIT_DIR/arvix-backup.timer"
 sed -e "s|@APP@|$APP|g" "$SRC/deploy/arvix-vault-sync.service" > "$UNIT_DIR/arvix-vault-sync.service"
 cp "$SRC/deploy/arvix-vault-sync.timer" "$UNIT_DIR/arvix-vault-sync.timer"
 systemctl --user daemon-reload 2>/dev/null || true
+for timer in arvix-backup.timer arvix-vault-sync.timer; do  # новое расписание вступает в силу только после перезапуска таймера
+  systemctl --user is-active --quiet "$timer" 2>/dev/null && systemctl --user restart "$timer" 2>/dev/null || true
+done
 BOT=stopped
 if systemctl --user is-active --quiet arvix-telegram 2>/dev/null; then
   systemctl --user restart arvix-telegram && BOT=restarted
