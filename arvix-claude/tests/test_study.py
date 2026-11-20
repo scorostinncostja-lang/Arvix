@@ -265,6 +265,50 @@ class StudyViewTest(BotCase):
         self.assertEqual(self.core.store.kv_get("lesson")["task_id"], self.phys.id)
 
 
+class StudyThreadTest(BotCase):
+    """D56: у учебной сессии своя нить. Раньше чат сессии был общим чатом с начала урока: владелец не закрыл
+    урок в 18:55 — и в окне сессии в полночь висели вечерний разбор и «ложись»."""
+
+    start = moscow(2026, 11, 2, 15, 58)
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.core.cfg.raw["schedule"]["midday"] = ""
+        self.phys = self.core.add_task("Физика: постоянный ток", sphere="learning", start="16:00", duration_min=45)
+        self.brain.answers.append(dict(PLAN))
+        self.press(f"l:{self.phys.id}:go")
+
+    def test_session_chat_is_its_own_thread(self) -> None:
+        self.brain.answers.append({"reply": "Сопротивление — как узкая труба для воды.", "actions": [{"type": "study_panel", "panel": BOARD}]})
+        web_api.study_chat(self.phys.id, "объясни сопротивление")(self.bot)
+        system = self.brain.calls[-1]["system"]
+        self.assertIn("<study>", system)
+        self.assertNotIn("приветствия первой строкой", system)  # посреди урока «Привет» не нужен
+        self.brain.answers.append({"reply": "Отбой через час, закругляйся.", "actions": []})
+        self.text("что у меня вечером?")  # общий чат, урок всё ещё идёт
+        self.assertNotIn("объясни сопротивление", self.brain.calls[-1]["prompt"])
+        session = web_api.study_view(self.core)["session"]
+        texts = [m["text"] for m in session["messages"]]
+        self.assertEqual(texts[0], "объясни сопротивление")
+        self.assertTrue(texts[1].startswith("Сопротивление — как узкая труба"))
+        self.assertIn("окно урока: доска «Парабола»", texts[1])
+        self.assertEqual(len(texts), 2)  # ни плана из общего чата, ни «отбой через час»
+        general = [m["text"] for m in web_api.messages_view(self.core)]
+        self.assertIn("что у меня вечером?", general)
+        self.assertNotIn("объясни сопротивление", general)
+
+    def test_thread_history_goes_to_the_head(self) -> None:
+        self.brain.answers.append({"reply": "Нет, I = U/R.", "actions": []})
+        web_api.study_chat(self.phys.id, "I = U·R?")(self.bot)
+        self.brain.answers.append({"reply": "Отбой в 23:00.", "actions": []})
+        self.text("когда отбой?")
+        self.brain.answers.append({"reply": "Потому что ток делится на сопротивление.", "actions": []})
+        web_api.study_chat(self.phys.id, "а почему делится?")(self.bot)
+        prompt = self.brain.calls[-1]["raw_prompt"]
+        self.assertIn("I = U·R?", prompt)
+        self.assertNotIn("когда отбой?", prompt)
+
+
 class StudyServerTest(BotCase):
     """HTTP целиком: открыть тему из очереди → блок и план фоном → ответ на тест."""
 

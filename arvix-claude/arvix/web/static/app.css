@@ -620,6 +620,9 @@ kbd { display: inline-block; font: 600 11px/1.3 ui-monospace, SFMono-Regular, Me
   color: var(--muted); text-transform: uppercase; letter-spacing: .04em; cursor: default; }
 details.pl-group > summary { cursor: pointer; list-style: none; }
 .pl-empty { padding: 4px 8px 6px; }
+.pl-item .pl-drop { flex: none; margin: -4px -4px 0 0; opacity: .55; }
+.pl-goal { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 13px; border-bottom: 1px solid var(--line); }
+.pl-idle .pl-hint { padding: 0 8px 4px; }
 .pl-item { display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px; border-radius: 12px; cursor: pointer; background: var(--card); margin-bottom: 6px; box-shadow: var(--shadow); }
 .pl-item.on { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); }
 .pl-dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 7px; flex: none; background: var(--accent); }
@@ -665,7 +668,9 @@ details.pl-group > summary { cursor: pointer; list-style: none; }
 .lr { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .lr .pill { margin-top: 6px; }
 .res-row { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; }
-.pw-welcome { max-width: 620px; margin: 6vh auto 0; display: grid; gap: 12px; }
+.pw-welcome { max-width: 620px; margin: 6vh auto 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+/* select без размера растягивался по самому длинному названию цели и выталкивал форму за край экрана */
+select.input { width: 100%; min-width: 0; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; text-overflow: ellipsis; }
 .pw-welcome h2 { margin: 0; font-size: 24px; }
 .pw-welcome textarea { width: 100%; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--card); resize: vertical; }
 @media (min-width: 900px) {
@@ -692,6 +697,7 @@ details.pl-group > summary { cursor: pointer; list-style: none; }
   :root:not([data-theme="light"]) .icon-btn:hover { filter: brightness(1.25); }
   .list-item:hover { background: var(--card-2); }
   .pl-item:hover, .pn-file:hover { background: var(--card-2); }
+  .pl-item .pl-drop:hover { opacity: 1; }
   .pw-div:hover { opacity: 1; background: var(--accent); }
   .so-hist:hover, .so-live:hover { filter: brightness(.97); }
   .sq-opt:not(.on):not(.right):not(.wrong):hover { filter: brightness(.95); }

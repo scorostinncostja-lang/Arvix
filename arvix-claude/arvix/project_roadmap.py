@@ -1,9 +1,14 @@
-"""Роадмап проектов под цель (D44): Арвикс предлагает цепочку проектов, которые ведут к цели.
+"""Следующий проект к цели (D44 → D56): Арвикс предлагает ОДИН проект — или говорит, что проект не нужен.
 
 Это совет (L2): один вызов головы в фоне, никто не ждёт ответа в чате (правило №2). Код раскладывает
-ответ в журнал — только как **идеи** с этапами (у каждого — критерий) и источниками, помеченными
+ответ в журнал — только как **идею** с этапами (у каждого — критерий) и источниками, помеченную
 «предложил Арвикс». В работу проект берёт человек сам: лимит трёх активных и «зачем» никто не обходит.
-Уже существующие проекты цели модель видит и не дублирует; дубль по названию код всё равно отбросит.
+
+Почему один, а не цепочка (D56): цепочка из 3–6 проектов на каждую цель превратила вкладку в склад —
+девять «отложенных», половина из которых не проекты (привычка «21 день по 45 минут», число цели
+«10 000 ₽ за месяц», этап соседнего проекта). Поэтому код: не спрашивает голову, пока у цели есть
+неразобранный шаг или неначатых идей уже IDEAS_MAX; отбрасывает похожие на любой проект — и на те,
+от которых человек отказался кнопкой «Не нужен».
 """
 
 from __future__ import annotations
@@ -18,12 +23,15 @@ from arvix.core import ArvixError
 
 log = logging.getLogger("arvix.project_roadmap")
 
+IDEAS_MAX = 3  # неначатых проектов на все цели: больше — склад, а не план (D56)
+
 ROADMAP_SCHEMA = {
     "type": "object",
     "properties": {
-        "summary": {"type": "string", "description": "логика роадмапа для человека: почему эти проекты и в таком порядке, до 600 символов"},
+        "summary": {"type": "string", "description": "почему именно этот следующий шаг к цели, до 500 символов"},
+        "not_project": {"type": "string", "description": "следующий шаг — не проект: что это (привычка, тема для учёбы, этап проекта) и что сделать; тогда projects пустой"},
         "projects": {
-            "type": "array", "description": "3–6 проектов по порядку: от простого к сложному, каждый опирается на предыдущий",
+            "type": "array", "maxItems": 1, "description": "0 или 1 проект — следующий шаг к цели",
             "items": {
                 "type": "object",
                 "properties": {
@@ -32,7 +40,7 @@ ROADMAP_SCHEMA = {
                     "kind": {"type": "string", "description": "тип: " + ", ".join(projects.KIND_PRESETS) + " или своё слово"},
                     "purposes": {"type": "array", "items": {"type": "string"}, "description": "из: " + ", ".join(projects.PURPOSES)},
                     "expectation": {"type": "string", "description": "проверяемый результат в конце"},
-                    "weeks": {"type": "integer", "description": "реалистичная длительность в неделях при weekly_min"},
+                    "weeks": {"type": "integer", "description": "реалистичная длительность в неделях при weekly_min, 2–6"},
                     "weekly_min": {"type": "integer"},
                     "skills": {"type": "array", "items": {"type": "string"}},
                     "milestones": {"type": "array", "items": {"type": "object", "properties": {
@@ -49,36 +57,72 @@ ROADMAP_SCHEMA = {
     "required": ["summary", "projects"],
 }
 
-TASK = """<task>Роадмап проектов к цели человека. Проект — то, что он делает руками и что остаётся результатом:
-код, сайт, ролики, исследование, мероприятие, выступление. Не курс и не «почитать».
-- 3–6 проектов по порядку: первый — маленький, на 1–3 недели, чтобы был результат быстро; дальше сложнее, каждый
-  опирается на навыки и результат предыдущего; последний прямо закрывает цель или её этап.
-- Часы в неделю — из бюджета недели и других активных проектов в контексте; не обещай больше, чем есть.
-- У каждого проекта 3–5 этапов, у каждого этапа — проверяемый критерий (ссылка, число, отзыв, оценка).
-- Источники и инструменты — только настоящие (официальная документация, известные курсы, инструменты); не
-  уверен в ссылке — оставь url пустым, название всё равно полезно. Ничего не выдумывай.
+TASK = """<task>Следующий проект к цели человека — ОДИН или ни одного.
+Проект — то, что он делает руками и что остаётся результатом, который можно показать: код, сайт, ролики,
+исследование, заявка, мероприятие, выступление. НЕ проект:
+- привычка или режим («21 день по 45 минут», «2 поста в неделю») — это блок в распорядке;
+- тема, которую надо выучить, — это «Что выучить»;
+- этап или продолжение уже идущего проекта — это его этап;
+- сама цель или её число («10 000 ₽ за месяц», «поступить») — это цель.
+Если следующий шаг к цели не проект — верни пустой projects, а в not_project одной-двумя фразами: что это и что сделать.
+- Проект на 2–6 недель при часах недели из контекста; первый видимый результат — в первую неделю.
+- Ближайшие сроки важнее мечты: экзамены и поступление этого года — раньше портфолио на будущее.
+- 3–5 этапов, у каждого — проверяемый критерий (ссылка, число, отзыв, оценка).
+- Источники и инструменты — только настоящие; не уверен в ссылке — url пустой. Ничего не выдумывай.
 - Учитывай возраст, учёбу, нагрузку и то, что человек уже умеет, — из контекста и памяти.
-- Существующие проекты этой цели — уже часть роадмапа: не повторяй их, продолжай с того места.</task>"""
+- Не повторяй и не перефразируй проекты из списков ниже — ни этой цели, ни других, ни тех, от которых он отказался.</task>"""
+
+
+def _words(title: str) -> set[str]:
+    """Слова названия без окончаний: «Портфолио EECS: сайт» и «Сайт-портфолио для EECS» — одно и то же."""
+    return {w[:5] for w in re.findall(r"[a-zа-яё0-9]+", title.lower().replace("ё", "е")) if len(w) > 2}
+
+
+def similar(a: str, b: str) -> bool:
+    wa, wb = _words(a), _words(b)
+    if not wa or not wb:
+        return a.strip().lower() == b.strip().lower()
+    return len(wa & wb) / min(len(wa), len(wb)) >= 0.6
+
+
+def blocker(core: Any, goal_id: str) -> str | None:
+    """Почему не спрашивать голову: у цели уже есть неразобранный шаг или идей и так много. None — можно."""
+    waiting = [p for p in projects.roadmap_chain(core, goal_id) if p["status"] in ("active", "paused", "idea")]
+    if waiting:
+        p = waiting[0]
+        return (f"У цели уже есть шаг — «{p['title']}» ({projects.STATUSES[p['status']]}). "
+                + ("Сначала доведи его." if p["status"] == "active" else "Сначала реши, нужен ли он: «В работу» или «Не нужен». Потом предложу следующий."))
+    ideas = [p for p in core.state.projects.values() if p["status"] == "idea"]
+    if len(ideas) >= IDEAS_MAX:
+        return (f"Неначатых проектов уже {len(ideas)}. Новые не добавляю, пока не разберёшь эти: "
+                "что не нужно — «Не нужен», что нужно — «В работу».")
+    return None
 
 
 def prompt(core: Any, goal: dict[str, Any]) -> str:
     chain = projects.roadmap_chain(core, goal["id"])
     have = "\n".join(f"- {p['title']} ({projects.STATUSES[p['status']]}): {p.get('expectation') or p.get('why', '')}" for p in chain) or "- нет"
+    others = [p for p in core.state.projects.values() if p.get("goal_id") != goal["id"] and p["status"] != "dropped"]
+    refused = [p for p in core.state.projects.values() if p["status"] == "dropped"]
     skills = sorted({s for p in core.state.projects.values() for s in p.get("skills") or []})
     return (f"ЦЕЛЬ: {goal['title']} (зачем: {goal.get('why') or '—'})" + (f", срок {goal['deadline']}" if goal.get("deadline") else "")
             + (f", метрика: {goal['metric']}" if goal.get("metric") else "")
-            + f"\nУЖЕ ЕСТЬ В РОАДМАПЕ ЭТОЙ ЦЕЛИ:\n{have}"
+            + f"\nУЖЕ ЕСТЬ У ЭТОЙ ЦЕЛИ:\n{have}"
+            + ("\nПРОЕКТЫ ДРУГИХ ЦЕЛЕЙ:\n" + "\n".join(f"- {p['title']} ({projects.STATUSES[p['status']]})" for p in others) if others else "")
+            + ("\nОТКАЗАЛСЯ ИЛИ ЗАКРЫЛ — не предлагай снова:\n" + "\n".join(f"- {p['title']}" for p in refused) if refused else "")
             + (f"\nНАВЫКИ ИЗ ПРОШЛЫХ ПРОЕКТОВ: {', '.join(skills)}" if skills else "")
             + f"\n\nКонтекст:\n{build_context(core)}")
 
 
 def apply(core: Any, goal: dict[str, Any], result: dict[str, Any], *, source: str = "l2") -> list[str]:
-    """Ответ модели → проекты-идеи в журнал. Возвращает названия созданных."""
-    existing = {p["title"].strip().lower() for p in core.state.projects.values() if p.get("goal_id") == goal["id"]}
+    """Ответ модели → проект-идея в журнал (не больше одного). Возвращает названия созданных.
+    Похожий на любой проект — на идущий, завершённый или отвергнутый «Не нужен» — отбрасывается кодом."""
+    existing = [p["title"] for p in core.state.projects.values()]
     created: list[str] = []
-    for item in (result.get("projects") or [])[:6]:
+    for item in (result.get("projects") or [])[:1]:
         title = str(item.get("title") or "").strip()
-        if not title or title.lower() in existing:
+        if not title or any(similar(title, t) for t in existing):
+            log.info("проект роадмапа отброшен как повтор: %s", title)
             continue
         purposes = [x for x in (item.get("purposes") or []) if x in projects.PURPOSES] or ["skill"]
         try:
@@ -101,7 +145,7 @@ def apply(core: Any, goal: dict[str, Any], result: dict[str, Any], *, source: st
         except ArvixError as exc:
             log.info("проект роадмапа отброшен: %s", exc)
             continue
-        existing.add(title.lower())
+        existing.append(title)
         created.append(title)
     return created
 
@@ -125,6 +169,8 @@ def generate(core: Any, brain: Any, goal_id: str, *, system: str) -> dict[str, A
     goal = core.state.goals.get(goal_id)
     if goal is None:
         raise ArvixError(f"Цели {goal_id} нет")
+    if why_not := blocker(core, goal_id):
+        raise ArvixError(why_not)  # голову не спрашиваем: решение за человеком, а не ещё одна идея
     web = bool(core.cfg.section("brain").get("web_tools", True))
     result = brain.ask(system=system + "\n\n" + TASK, prompt=prompt(core, goal), schema=ROADMAP_SCHEMA, role="analyst",
                        vault_tools=bool(core.cfg.section("brain").get("vault_tools", True)), web=web)
@@ -132,7 +178,7 @@ def generate(core: Any, brain: Any, goal_id: str, *, system: str) -> dict[str, A
         raise ArvixError("Голова сейчас недоступна — роадмап соберу позже. Проекты можно добавить и самому.")
     created = apply(core, goal, result)
     path = None
-    if core.cfg.vault:
+    if created and core.cfg.vault:
         try:
             folder = str(core.cfg.vault_paths.get("roadmaps") or "03_Resources/Роадмапы").strip("/")
             name = re.sub(r'[\\/:*?"<>|#^\[\]]', " ", goal["title"][:60]).strip() or goal["id"]
@@ -141,4 +187,5 @@ def generate(core: Any, brain: Any, goal_id: str, *, system: str) -> dict[str, A
                                     create_with=f"# Проекты — {goal['title']}\n\n", source="l2")["path"]
         except ArvixError as exc:
             log.warning("заметка роадмапа не записана: %s", exc)
-    return {"goal": goal, "summary": str(result.get("summary") or "")[:900], "created": created, "path": path}
+    return {"goal": goal, "summary": str(result.get("summary") or "")[:900], "created": created, "path": path,
+            "not_project": str(result.get("not_project") or "").strip()[:600]}

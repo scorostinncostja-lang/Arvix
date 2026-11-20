@@ -128,9 +128,9 @@ def live_buttons(core: Any, rows: list[Any]) -> list[Any]:
 def messages_view(core: Any, *, before: int | None = None, limit: int = 60) -> list[dict[str, Any]]:
     """Переписка из журнала — все каналы: Telegram, приложение, терминал."""
     start = max(0, (before or core.state.last_event_id + 1) - 3000)
-    # Нити чатов проектов живут в своих окнах (D47) — в общем чате их нет
+    # Нити чатов проектов (D47) и учебных сессий (D56) живут в своих окнах — в общем чате их нет
     events = [e for e in core.store.read(start) if e.kind in ("message_in", "message_out") and (before is None or e.id < before)
-              and not e.payload.get("project")]
+              and not e.payload.get("project") and not e.payload.get("study")]
     out = []
     near = {e.id: e for e in events}
     for event in events[-limit:]:
@@ -249,34 +249,40 @@ def obsidian_vault(core: Any) -> str:
 
 
 def projects_view(core: Any) -> dict[str, Any]:
-    """Список проектов по целям (это и есть роадмап), отложенные и завершённые. В 🟥 — без цифр (правило №5)."""
-    from arvix import projects
+    """Список проектов по целям (это и есть роадмап), отложенные и завершённые. В 🟥 — без цифр (правило №5).
+    Цели без проектов — отдельным списком: пятнадцать пустых групп с «предложить» прятали сами проекты (D56)."""
+    from arvix import project_roadmap, projects
 
     if gentle(core):
         return {"gentle": True, "groups": [], "note": "Проекты подождут. Сегодня — восстановление; если тянет к проекту, "
                                                       "сделай самое приятное в нём, без плана и цифр."}
     cards = {p["id"]: _project_card(core, p) for p in core.state.projects.values()}
-    groups = []
+    groups, idle = [], []
     for block in projects.roadmap(core):
-        items = [cards[p["id"]] for p in block["projects"] if cards[p["id"]]["group"] != "closed"]
+        # в работе — сверху, неначатые — под ними: порядок роадмапа внутри каждой части сохраняется
+        items = sorted((cards[p["id"]] for p in block["projects"] if cards[p["id"]]["group"] != "closed"),
+                       key=lambda c: c["status"] != "active")
         goal = block["goal"]
-        if goal or items:
+        if items:
             groups.append({"goal": {k: goal.get(k) for k in ("id", "title", "kind", "deadline")} if goal else None, "projects": items})
+        elif goal:  # цель без проектов — одной строкой внизу, а не пустой группой с кнопкой (D56)
+            idle.append({k: goal.get(k) for k in ("id", "title", "kind", "deadline")})
     closed = sorted((c for c in cards.values() if c["group"] == "closed"), key=lambda c: c["title"])
     active = [c for c in cards.values() if c["status"] == "active"]
     return {
-        "gentle": False, "groups": groups, "closed": closed, "count": len(cards), "max_active": projects.max_active(core),
+        "gentle": False, "groups": groups, "idle_goals": idle, "closed": closed, "count": len(cards), "max_active": projects.max_active(core),
+        "ideas": sum(1 for c in cards.values() if c["status"] == "idea"), "ideas_max": project_roadmap.IDEAS_MAX,
         "active": len(active), "load_issue": projects.load_issue(core), "vault": obsidian_vault(core),
         "goals": [{"id": g["id"], "title": g["title"]} for g in core.state.goals.values() if g.get("status", "active") == "active"],
         "log_kinds": projects.LOG_KINDS, "resource_kinds": projects.RESOURCE_KINDS, "kinds": projects.KIND_PRESETS,
     }
 
 
-def project_messages(core: Any, project_id: str, limit: int = 80) -> list[dict[str, Any]]:
-    """Нить чата проекта из общей переписки — сообщения с payload.project."""
+def project_messages(core: Any, project_id: str, limit: int = 80, *, key: str = "project") -> list[dict[str, Any]]:
+    """Нить чата из общей переписки: проекта — payload.project (D47), учебной сессии — payload.study (D56)."""
     start = max(0, core.state.last_event_id - 6000)
     out = []
-    thread = [e for e in core.store.read(start) if e.kind in ("message_in", "message_out") and e.payload.get("project") == project_id]
+    thread = [e for e in core.store.read(start) if e.kind in ("message_in", "message_out") and e.payload.get(key) == project_id]
     near = {e.id: e for e in thread}
     for event in thread[-limit:]:
         out.append({"id": event.id, "at": event.at.astimezone(core.tz).isoformat(), "who": "me" if event.kind == "message_in" else "arvix",
@@ -426,11 +432,9 @@ def session_view(core: Any, task_id: str) -> dict[str, Any]:
     waiting = core.store.kv_get(AWAIT) or {}
     check = [c["q"] for c in lesson.get("check") or []] if live and waiting.get("kind") == "lesson_check" else []
     focus = core.store.kv_get(FOCUS) or {}
-    since = row.get("at")
-    messages = []
-    if live and since:  # чат урока — те же сообщения, что в общем чате, с начала этой сессии
-        plan_head = f"📚 {task.title} ·"  # сообщение с планом урока: на столе план и так виден
-        messages = [m for m in messages_view(core, limit=120) if m["at"] >= since and not m["text"].startswith(plan_head)][-40:]
+    # Своя нить сессии (D56): раньше чат урока был общим чатом с начала урока — туда попадали вечерний
+    # разбор и «ложись», если урок не закрыли. Теперь — только то, что написано в окне сессии.
+    messages = project_messages(core, task.id, limit=60, key="study")
     item = study.learn_item_of(core, task)
     project = core.state.projects.get(task.project or "")
     return {
@@ -514,6 +518,16 @@ def study_open(task_id: str | None = None, item_id: str | None = None, minutes: 
             return {"task_id": task.id, "queued": False}  # прошлая сессия — только посмотреть
         bot.refresh_panel()
         return {"task_id": task.id, "queued": not bot.lesson_pending(task.id)}
+    return run
+
+
+def study_chat(task_id: str, text: str) -> Any:
+    """Сообщение из окна учебной сессии: ответ Арвикса — в её нить, не в общий чат (D56)."""
+    def run(bot: Any) -> None:
+        bot.core.refresh()
+        task = bot.core.resolve_task(task_id)
+        with bot.via("web", SINK), bot.in_study(task.id), bot.incoming():
+            bot.on_text(text)
     return run
 
 

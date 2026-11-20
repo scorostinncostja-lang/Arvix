@@ -1184,13 +1184,15 @@ class Core:
     # Раньше ответ резался до 600 символов — и через неделю он «забывал» собственные объяснения.
     MESSAGE_LIMIT = 16000
 
-    def message_in(self, text: str, *, channel: str = "telegram", project: str | None = None,
+    def message_in(self, text: str, *, channel: str = "telegram", project: str | None = None, study: str | None = None,
                    reply_to: int | None = None, tg_id: int | None = None) -> int:
         """reply_to — id события-сообщения, на которое человек ответил цитатой (D52);
         tg_id — номер сообщения в Telegram: по нему Арвикс отвечает цитатой там же."""
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "channel": channel}
         if project:
             payload["project"] = project  # чат проекта (D47): своя нить в общей переписке
+        if study:
+            payload["study"] = study  # чат учебной сессии (D56): нить урока, id учебной задачи
         if reply_to:
             payload["reply_to"] = int(reply_to)
         if tg_id:
@@ -1200,10 +1202,12 @@ class Core:
 
     def message_out(self, text: str, *, key: str | None = None, channel: str = "telegram",
                     buttons: list[list[tuple[str, str]]] | None = None, project: str | None = None,
-                    reply_to: int | None = None, tg_id: int | None = None) -> int:
+                    study: str | None = None, reply_to: int | None = None, tg_id: int | None = None) -> int:
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "key": key, "channel": channel}
         if project:
             payload["project"] = project
+        if study:
+            payload["study"] = study
         if buttons:  # приложение показывает те же кнопки под сообщением
             payload["buttons"] = [[[t, d] for t, d in row] for row in buttons]
         if reply_to:
