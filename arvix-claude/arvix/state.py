@@ -353,7 +353,8 @@ class State:
 
     def _on_project_set(self, ev: Event, p: dict, day: Day) -> None:
         old = self.projects.get(p["id"], {})
-        project = {**p, "started": old.get("started") or ev.local_date.isoformat(), "updated": ev.local_date.isoformat()}
+        # started в событии — дата из карточки при восстановлении из хранилища (D54); иначе — день события.
+        project = {**p, "started": old.get("started") or p.get("started") or ev.local_date.isoformat(), "updated": ev.local_date.isoformat()}
         if p.get("status") != old.get("status") and p.get("status") in ("done", "dropped"):
             project["closed"] = ev.local_date.isoformat()
         elif p.get("status") not in ("done", "dropped"):

@@ -220,9 +220,10 @@ def set_project(
     core: Any, title: str = "", *, project_id: str | None = None, why: str = "", kind: str | None = None,
     purposes: Any = None, expectation: str = "", deadline: Any = None, weekly_min: Any = None, goal_id: str | None = None,
     status: str | None = None, skills: Any = None, link: str = "", order: Any = None, weeks: Any = None,
-    reason: str = "", by: str = "", source: str = "claude", sync: bool = True, draft: bool = False,
+    reason: str = "", by: str = "", source: str = "claude", sync: bool = True, draft: bool = False, started: Any = None,
 ) -> str:
-    """Новый проект или правка. С project_id непереданные поля остаются прежними."""
+    """Новый проект или правка. С project_id непереданные поля остаются прежними.
+    started — только для нового проекта при восстановлении из хранилища (D54): дата начала из карточки."""
     st = core.state
     old = resolve(core, project_id) if project_id else {}
     if status and status not in STATUSES:
@@ -267,6 +268,8 @@ def set_project(
         payload["order"] = max(same, default=0) + 1
     if reason.strip():
         payload["reason"] = reason.strip()[:1000]
+    if started and not old:
+        payload["started"] = _date(started, "Начат")
     with core.tx():
         core.emit("project_set", payload, source=source, entity_id=payload["id"])
     if sync and payload["folder"]:
@@ -304,7 +307,7 @@ def move(core: Any, project_ref: Any, step: int, *, source: str = "web") -> None
 
 def set_milestone(
     core: Any, project_ref: Any, title: str = "", *, milestone_id: str | None = None, due: Any = None, dod: str = "",
-    status: str | None = None, source: str = "claude",
+    status: str | None = None, source: str = "claude", sync: bool = True,
 ) -> str:
     """Этап проекта. Новый этап — только с критерием готовности (П4)."""
     project = resolve(core, project_ref)
@@ -329,7 +332,8 @@ def set_milestone(
         raise ArvixError("У этапа нужен критерий готовности: как проверить, что он сделан — число, ссылка, результат")
     with core.tx():
         core.emit("milestone_set", payload, source=source, entity_id=project["id"])
-    sync_notes(core, project["id"])
+    if sync:
+        sync_notes(core, project["id"])
     return payload["id"]
 
 
@@ -352,7 +356,7 @@ def log_entry(core: Any, project_ref: Any, text: str, *, kind: str = "update", m
 
 def set_resource(
     core: Any, project_ref: Any, title: str = "", *, resource_id: str | None = None, url: str = "", kind: str | None = None,
-    note: str = "", status: str | None = None, by: str = "", source: str = "claude",
+    note: str = "", status: str | None = None, by: str = "", source: str = "claude", sync: bool = True,
 ) -> str:
     """Источник, инструмент или пример (чужой репозиторий, работа) — заполняет Арвикс по разговору.
     by="arvix" — проверь ссылку сам: модель может ошибиться."""
@@ -378,7 +382,8 @@ def set_resource(
         raise ArvixError("У источника нет названия и ссылки")
     with core.tx():
         core.emit("resource_set", payload, source=source, entity_id=project["id"])
-    sync_notes(core, project["id"])
+    if sync:
+        sync_notes(core, project["id"])
     return payload["id"]
 
 
@@ -386,7 +391,7 @@ def set_resource(
 
 def set_learn(
     core: Any, topic: str = "", *, item_id: str | None = None, project_ref: Any = None, goal_id: str | None = None,
-    why: str = "", sources: Any = None, status: str | None = None, source: str = "claude",
+    why: str = "", sources: Any = None, status: str | None = None, source: str = "claude", sync: bool = True,
 ) -> str:
     """Тема, которую надо выучить. Привязка к проекту или цели — откуда она взялась; очередь общая:
     вкладка «Обучение» будет читать те же события learn_item_set."""
@@ -410,7 +415,7 @@ def set_learn(
         raise ArvixError("Пустая тема")
     with core.tx():
         core.emit("learn_item_set", payload, source=source, entity_id=payload["project_id"])
-    if payload["project_id"]:
+    if payload["project_id"] and sync:
         sync_notes(core, payload["project_id"])
     return payload["id"]
 

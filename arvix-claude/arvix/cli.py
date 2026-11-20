@@ -669,6 +669,21 @@ def cmd_app_link(args: argparse.Namespace) -> None:
     print(f"Действует {PAIR_MINUTES} минут и срабатывает один раз; новая ссылка отменяет прежнюю.", file=sys.stderr)
 
 
+def cmd_restore_projects(args: argparse.Namespace) -> None:
+    """Проекты из хранилища обратно в журнал после потери сервера (D54, arvix/project_restore.py).
+    Без --apply — только план: что будет создано, что уже есть."""
+    from arvix.project_restore import restore
+
+    core = _core()
+    try:
+        lines = restore(core, apply=args.apply)
+    finally:
+        core.close()
+    print("\n".join(lines) or "В хранилище нет карточек проектов и роадмапов целей.")
+    if not args.apply and any(line.startswith("будет") for line in lines):
+        print("\nЭто план. Создать: arvix restore-projects --apply")
+
+
 def cmd_app_url(args: argparse.Namespace) -> None:
     url = args.url.strip().rstrip("/")
     if url and not url.startswith("https://"):
@@ -760,6 +775,8 @@ def build_parser() -> argparse.ArgumentParser:
     add("app", cmd_app, "приложение в терминале (то же, что `arvix` без аргументов)")
     add("app-token", cmd_app_token, "ключ приложения для телефона и терминала (печатает в stdout)")
     add("app-link", cmd_app_link, "одноразовая ссылка привязки приложения в браузере (15 минут)")
+    add("restore-projects", cmd_restore_projects, "проекты из хранилища в журнал после потери сервера (без --apply — план)").add_argument(
+        "--apply", action="store_true", help="создать, а не только показать")
     p = add("avatar", cmd_avatar, "поставить боту аватар (по умолчанию deploy/avatar.png)")
     p.add_argument("path", nargs="?")
     add("app-url", cmd_app_url, "адрес приложения снаружи: https://… (пишет deploy/web-setup.sh)").add_argument("url")
