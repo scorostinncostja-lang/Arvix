@@ -182,6 +182,32 @@ class Core:
     def today(self) -> date:
         return self.now().date()
 
+    def rollover(self) -> str:
+        """Смена дня «ЧЧ:ММ» (`[schedule] rollover`, 04:00): до неё вчерашний день ещё открыт.
+        Единственное место, где это считается: закрытие дня, вопросы бота, «вчера» в приложении."""
+        return parse_hhmm(self.cfg.schedule("rollover")) or "04:00"
+
+    def day_boundary(self, now: datetime | None = None) -> datetime:
+        """Последняя смена дня, не позже `now`: 01:30 → вчера 04:00, 09:00 → сегодня 04:00."""
+        now = now or self.now()
+        boundary = self.at(now.date(), self.rollover())
+        return boundary if boundary <= now else boundary - timedelta(days=1)
+
+    def open_yesterday(self) -> list[Task]:
+        """Вчерашние незакрытые задачи, пока вчера ещё не закрыто (до `rollover`, 04:00).
+
+        После полуночи «сегодня» — уже новое число, а вчерашний день закроется только в 04:00:
+        задача 23:30 или неотмеченная вечерняя ещё живая. Без этого её не видно ни в приложении,
+        ни голове, проверка «Сделано?» не приходит — и в 04:00 важная задача молча уходит в долг."""
+        now = self.now()
+        if f"{now:%H:%M}" >= self.rollover():
+            return []
+        yesterday = now.date() - timedelta(days=1)
+        day = self.state.days.get(yesterday)
+        if day and day.closed:
+            return []
+        return [t for t in self.state.tasks_on(yesterday) if t.is_open]
+
     def at(self, d: date, hhmm: str) -> datetime:
         hours, minutes = map(int, hhmm.split(":"))
         return datetime.combine(d, time(hours, minutes), tzinfo=self.tz)
@@ -285,8 +311,7 @@ class Core:
         только /mentor on."""
         if not self.state.mentor_enabled:
             raise ArvixError("Ментор выключен safety-контуром. Включить его можешь только ты сам: /mentor on")
-        rollover = parse_hhmm(self.cfg.schedule("rollover")) or "04:00"
-        until = self.at(self.today() + timedelta(days=1), rollover)
+        until = self.at(self.today() + timedelta(days=1), self.rollover())
         with self.tx():
             if self.sos_active():
                 self.emit("sos", {"on": False, "until": None, "note": "возвращение к плану"}, source=source)

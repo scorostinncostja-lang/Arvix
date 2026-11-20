@@ -98,7 +98,9 @@ class Scheduler:
 
     def reminders(self, now: datetime) -> None:
         core = self.core
-        for task in core.state.tasks_on(now.date()):
+        # Вчерашние незакрытые — тоже: задача 23:30–00:15 иначе не получала «Сделано?» и в 04:00
+        # уходила в долг без вопроса.
+        for task in core.open_yesterday() + core.state.tasks_on(now.date()):
             if not task.start or not task.is_open:
                 continue
             start = core.at(task.local_date, task.start)
@@ -112,8 +114,13 @@ class Scheduler:
                 if not self.bot.on_block_start(task, key=go):  # учебная задача — план урока вместо «Блок пошёл»
                     self.bot.send(tpl.reminder_start(task), key=go)
             check = f"remend:{task.id}"
-            if end <= now < end + CHECK_WINDOW and not core.sent(check) and not self.bot.lesson_pending(task.id):
-                self.bot.send(tpl.reminder_check(task), tpl.task_buttons_check(task.id), key=check)
+            if end <= now < end + CHECK_WINDOW and not core.sent(check):
+                if not self.bot.lesson_pending(task.id):
+                    self.bot.send(tpl.reminder_check(task), tpl.task_buttons_check(task.id), key=check)
+                elif not self.bot.lesson_running(task.id):
+                    # План урока пришёл, но ▶️ не нажимали — учился без таймера. Без этого проверка не
+                    # приходила вовсе, и в 04:00 задача уходила в долг.
+                    self.bot.send_lesson_check(key=check)
 
     def midday(self, now: datetime) -> None:
         when = self._when("midday")
@@ -142,8 +149,7 @@ class Scheduler:
         when = self._when("debrief")
         if not when:
             return
-        rollover = parse_hhmm(self.core.cfg.schedule("rollover")) or datetime.min.time()
-        until = datetime.combine(now.date() + timedelta(days=1), rollover, tzinfo=self.core.tz)
+        until = self.core.at(now.date() + timedelta(days=1), self.core.rollover())
         if when <= now < until and not self.core.sent(f"debrief:{now.date().isoformat()}"):
             self.bot.send_debrief()
 

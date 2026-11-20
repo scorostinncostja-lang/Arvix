@@ -451,7 +451,13 @@ class Bot:
         self.core.store.kv_set(AWAIT, {"kind": kind, "asked_at": self.core.now().timestamp(), **data})
 
     def await_get(self) -> dict[str, Any] | None:
-        return self.core.store.kv_get(AWAIT)
+        """Чего бот ждёт. Вопрос прошлого дня (до смены дня в `rollover`) сгорает: вечерний разбор без
+        ответа иначе съедал утреннее «доброе утро». Интервью ждёт сколько угодно — его продолжают /onboard."""
+        waiting = self.core.store.kv_get(AWAIT)
+        if waiting and waiting.get("kind") != "interview" and float(waiting.get("asked_at") or 0) < self.core.day_boundary().timestamp():
+            self.await_clear()
+            return None
+        return waiting
 
     def await_clear(self) -> None:
         self.core.store.kv_del(AWAIT)
@@ -504,6 +510,11 @@ class Bot:
             return
         if is_goodnight(text) and self.core.is_night():
             self.core.note_bedtime(source="telegram")  # отбой пишет код (D48); пожелать спокойной ночи — дело головы
+            if (self.await_get() or {}).get("kind") != "sleep":
+                # «Ложусь» — прощание, а не ответ на висящий вопрос: разбор не записывается словом «ложусь»,
+                # отчёт задачи — тоже. Вопрос остаётся до смены дня.
+                self.converse(text, voice=voice)
+                return
         waiting = self.await_get()
         if waiting and self.quotes_before(waiting.get("asked_at", 0)):
             self.converse(text, voice=voice)  # цитата старого сообщения — разговор о нём, а не ответ на вопрос (D52)
@@ -791,9 +802,11 @@ class Bot:
         elif op in ("d15", "d30"):
             moved = core.defer_task(task.id, int(op[1:]), source="telegram")
             self.send(f"⏳ «{moved.title}» → {moved.start}")
-        elif op == "yes" and self.lesson_pending(task.id):
+        elif op == "yes" and self.lesson_pending(task.id) and (core.store.kv_get(LESSON) or {}).get("check"):
             self.send_lesson_check()  # отчёт по учебному блоку — ответы на вопросы, а не «что сделано»
         elif op == "yes":
+            if self.lesson_pending(task.id):
+                core.store.kv_del(LESSON)  # план без вопросов (голова молчала): «Да» — обычный отчёт, не второй «Сделано?»
             if task.proof == "confirm":
                 result = core.complete_task(task.id, source="telegram")
                 self.send(tpl.completed(task.title, result["debt_closed"]) + tpl.warn(result["warnings"]))
@@ -1157,6 +1170,11 @@ class Bot:
 
     def is_lesson_task(self, task: Any) -> bool:
         return task.sphere == "learning" and bool(self.core.cfg.section("learning").get("auto_lesson", True))
+
+    def lesson_running(self, task_id: str) -> bool:
+        """Урок по задаче идёт на таймере: проверку пришлёт конец таймера, а не планировщик."""
+        focus = self.core.store.kv_get(FOCUS) or {}
+        return focus.get("task_id") == task_id
 
     def lesson_pending(self, task_id: str) -> bool:
         """Урок по задаче подготовлен и ещё не проверен."""

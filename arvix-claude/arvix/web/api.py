@@ -65,6 +65,7 @@ def state_view(core: Any, *, thinking: str = "") -> dict[str, Any]:
     base.update({
         "tasks": [task_view(t) for t in tasks],
         "tomorrow": [task_view(t) for t in st.tasks_on(today + timedelta(days=1))],
+        "yesterday": [task_view(t) for t in core.open_yesterday()],  # после полуночи, до 04:00 — ещё можно закрыть
         "debts": [task_view(t) for t in st.debts()],
         "sessions": sessions_view(core, today),
         "busy": [{"start": b["start"], "end": end_time(b["start"], b.get("duration", 60)), "title": b["title"]} for b in core.fixed_blocks(today)],
@@ -111,6 +112,19 @@ def quote_view(core: Any, event: Any, near: dict[int, Any]) -> dict[str, Any] | 
     return {"id": target.id, "who": "me" if target.kind == "message_in" else "arvix", "text": text[:160]}
 
 
+def live_buttons(core: Any, rows: list[Any]) -> list[Any]:
+    """Кнопки задачи, которая уже закрыта (галочкой в приложении, словами, в Telegram), в ленте не нужны:
+    нажатие дало бы только «уже выполнена». Остальные кнопки — как были."""
+    def alive(button: Any) -> bool:
+        data = str(button[1]) if isinstance(button, (list, tuple)) and len(button) > 1 else ""
+        if not data.startswith("t:"):
+            return True
+        task = core.state.tasks.get(data.split(":")[1])
+        return task is None or task.is_open or task.status == "debt"
+    out = [[b for b in row if alive(b)] for row in rows if isinstance(row, list)]
+    return [row for row in out if row]
+
+
 def messages_view(core: Any, *, before: int | None = None, limit: int = 60) -> list[dict[str, Any]]:
     """Переписка из журнала — все каналы: Telegram, приложение, терминал."""
     start = max(0, (before or core.state.last_event_id + 1) - 3000)
@@ -126,7 +140,7 @@ def messages_view(core: Any, *, before: int | None = None, limit: int = 60) -> l
         out.append({
             "id": event.id, "at": event.at.astimezone(core.tz).isoformat(), "who": "me" if event.kind == "message_in" else "arvix",
             "text": text, "channel": event.payload.get("channel") or "telegram",
-            "buttons": event.payload.get("buttons") or [], "reply_to": quote_view(core, event, near),
+            "buttons": live_buttons(core, event.payload.get("buttons") or []), "reply_to": quote_view(core, event, near),
             "reaction": (core.state.reactions.get(event.id) or {}).get("emoji", ""),
         })
     return out

@@ -37,7 +37,8 @@ def prompt_line(core) -> str:
         return line + " · без метрик и задач, человеческий тон"
     tasks = st.tasks_on(now.date())
     done = sum(1 for t in tasks if t.status == "done")
-    return line + f" · сегодня {done}/{len(tasks)}"
+    late = core.open_yesterday()  # после полуночи до 04:00 вчерашнее ещё можно закрыть (D53)
+    return line + f" · сегодня {done}/{len(tasks)}" + (f" · вчера не закрыто {len(late)} — контекст: context" if late else "")
 
 
 def _remote_configured() -> bool:
