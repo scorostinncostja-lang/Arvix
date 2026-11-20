@@ -391,16 +391,19 @@ def set_resource(
 
 def set_learn(
     core: Any, topic: str = "", *, item_id: str | None = None, project_ref: Any = None, goal_id: str | None = None,
-    why: str = "", sources: Any = None, status: str | None = None, source: str = "claude", sync: bool = True,
+    why: str = "", sources: Any = None, status: str | None = None, kind: str | None = None, source: str = "claude",
+    sync: bool = True,
 ) -> str:
     """Тема, которую надо выучить. Привязка к проекту или цели — откуда она взялась; очередь общая:
-    вкладка «Обучение» будет читать те же события learn_item_set."""
+    раздел «Обучение» (D55) читает те же события learn_item_set. kind — theory (понять) или practice (сделать руками)."""
     old = core.state.learn_items.get(item_id or "", {})
     if item_id and not old:
         raise ArvixError(f"Темы {item_id} нет")
     project = resolve(core, project_ref) if project_ref else None
     if status and status not in ("todo", "done", "dropped"):
         raise ArvixError("Статус темы: todo, done, dropped")
+    if kind and kind not in ("theory", "practice"):
+        raise ArvixError("Вид темы: theory (теория) или practice (практика)")
     payload = {
         "id": old.get("id") or new_id(),
         "topic": (str(topic).strip() or old.get("topic", ""))[:160],
@@ -409,6 +412,7 @@ def set_learn(
         "goal_id": goal_id or old.get("goal_id") or (project.get("goal_id") if project else None),
         "sources": _clean_list(sources, 6, 300) if sources is not None else list(old.get("sources") or []),
         "status": status or old.get("status") or "todo",
+        "kind": kind or old.get("kind") or "theory",
         "task_id": old.get("task_id"),
     }
     if not payload["topic"]:
@@ -430,7 +434,7 @@ def learn_items(core: Any, project_id: str | None = None) -> list[dict[str, Any]
         status = item["status"]
         if status == "todo" and task and task.status == "done":
             status = "done"
-        out.append({**item, "status": status, "task_status": task.status if task else None,
+        out.append({**item, "kind": item.get("kind") or "theory", "status": status, "task_status": task.status if task else None,
                     "task_date": task.local_date.isoformat() if task else None})
     rank = {"todo": 0, "done": 1, "dropped": 2}
     return sorted(out, key=lambda x: (rank[x["status"]], x["topic"]))
@@ -442,12 +446,16 @@ def learn_start(core: Any, item_id: str, *, minutes: int = 45, source: str = "we
     item = core.state.learn_items.get(item_id)
     if not item:
         raise ArvixError(f"Темы {item_id} нет")
+    if task_old := core.state.tasks.get(item.get("task_id") or ""):
+        if task_old.is_open:  # блок по теме уже стоит — второй не ставим (двойное нажатие, два устройства)
+            return task_old
     day, when = core.today(), free_slot(core, core.today(), minutes)
     if when is None:
         day, when = core.today() + timedelta(days=1), free_slot(core, core.today() + timedelta(days=1), minutes)
     if when is None:
         raise ArvixError("Свободного окна сегодня и завтра нет — скажи время сам")
-    task = core.add_task(f"Учить: {item['topic']}", sphere="learning", importance=3, start=when, duration_min=minutes,
+    prefix = "Практика" if item.get("kind") == "practice" else "Учить"
+    task = core.add_task(f"{prefix}: {item['topic']}", sphere="learning", importance=3, start=when, duration_min=minutes,
                          deep_work=True, day=day.isoformat(), project=item.get("project_id"), tags=[f"learn:{item_id}"], source=source)
     with core.tx():
         core.emit("learn_item_set", {**item, "task_id": task.id}, source=source, entity_id=item.get("project_id"))

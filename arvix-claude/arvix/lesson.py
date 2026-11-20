@@ -14,6 +14,7 @@ import re
 from datetime import date, datetime
 from typing import Any
 
+from arvix.study import PANEL_RULES, PANEL_SCHEMA
 from arvix.vault import render_template
 
 LESSON_SCHEMA = {
@@ -40,6 +41,7 @@ LESSON_SCHEMA = {
             "items": {"type": "object", "properties": {"q": {"type": "string"}, "a": {"type": "string", "description": "короткий эталон для оценки"}}, "required": ["q", "a"]},
         },
         "note_title": {"type": "string", "description": "название заметки-конспекта для каркаса, 2–5 слов"},
+        "panels": {"type": "array", "items": PANEL_SCHEMA, "description": "0–3 окна сессии в разделе «Обучение»: тест, доска, схема, видео"},
     },
     "required": ["topic", "why", "plan", "sources", "check"],
 }
@@ -59,7 +61,7 @@ LESSON_RULES = """<lesson_plan>
 Ты готовишь учебный блок на {minutes} минут: задача «{title}», сфера {sphere}, сегодня {date}.
 Сначала посмотри в хранилище (Read, Grep, Glob): роадмап предмета ({roadmaps}; файлы со словом «Роадмап»
 в названии, папка 02_Areas), журнал ошибок, заметки человека о методе обучения ({methods}), его конспекты по теме.
-Прошлые уроки по этому предмету: {history}.
+Прошлые уроки по этому предмету: {history}.{hint}
 Тема — следующий незакрытый узел роадмапа по этому предмету после прошлых уроков; роадмапа нет — ближайшая тема
 по цели (для ОГЭ — кодификатор и демоверсия ФИПИ) и скажи в why, что роадмапа нет.
 План — по минутам на весь блок, 4–6 шагов, по методу человека из его заметок (желательная трудность, вспоминание
@@ -73,13 +75,14 @@ sources — первоисточник первым (учебник и пара�
 (путь в хранилище). Выдуманный адрес хуже отсутствия ссылки.
 check — ровно {questions} вопроса на понимание и применение, не «перескажи параграф»; один из них — задача по теме;
 у каждого короткий эталон a — по нему будет оценка.
+{panels}
 Сам ничего не объясняй: объяснение будет, когда человек спросит внутри блока. Названия точные, всё по-русски.
 </lesson_plan>"""
 
 CHECK_RULES = """<lesson_check>
 Человек прошёл учебный блок по теме «{topic}» и ответил на вопросы проверки одним сообщением.
 Вопросы и эталоны:
-{pairs}
+{pairs}{quiz}
 Оцени каждый ответ по сути, а не по словам: верно / частично / неверно. score_pct — доля верного, 0–100.
 feedback — для человека, 2–3 коротких абзаца через пустую строку: что верно; что нет и почему, с правильной
 мыслью в одну-две фразы, не целым конспектом; что дочитать — источник и раздел, минут на десять.
@@ -130,6 +133,8 @@ def render(lesson: dict[str, Any], task: Any, note_path: str | None = None) -> s
         lines += ["", "Источники: " + " · ".join(s.strip() for s in lesson["sources"] if s.strip())]
     if note_path:
         lines.append(f"📝 Каркас заметки: {note_path}")
+    if panels := [p for p in lesson.get("panels") or [] if isinstance(p, dict) and p.get("title")]:
+        lines.append("🪟 В приложении, «Обучение»: " + " · ".join(str(p["title"]) for p in panels[:3]))
     n = len(lesson.get("check") or [])
     if n:
         lines.append(f"В конце — {n} вопроса, ответ одним сообщением (можно голосом). Это и будет отчёт.")
@@ -171,9 +176,16 @@ def skeleton(template: str | None, title: str, subject: str, today: date, questi
     return "\n".join(body) + "\n"
 
 
+QUEUE_PREFIXES = ("учить", "практика")  # projects.learn_start: «Учить: тема», «Практика: тема» — это не предмет
+
+
 def subject_of(title: str) -> str:
-    """«Физика: §44 постоянный ток» → «Физика»; «Математика ОГЭ» → «Математика ОГЭ»."""
-    head = re.split(r"[:—–-]", title, maxsplit=1)[0].strip()
+    """«Физика: §44 постоянный ток» → «Физика»; «Математика ОГЭ» → «Математика ОГЭ»;
+    «Практика: aiogram: хендлер» → «aiogram» (блок из очереди «учиться»: предмет — сама тема)."""
+    head, *rest = re.split(r"[:—–-]", title, maxsplit=1)
+    head = head.strip()
+    if head.lower() in QUEUE_PREFIXES and rest and rest[0].strip():
+        return subject_of(rest[0].strip())
     return head or title
 
 

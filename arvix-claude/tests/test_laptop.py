@@ -86,7 +86,7 @@ class LaptopLayoutTest(unittest.TestCase):
     def test_sidebar_markup(self) -> None:
         html = (STATIC / "index.html").read_text()
         self.assertIn('class="brand"', html)
-        self.assertEqual(html.count("data-tab="), 5)  # Сегодня · Арвикс · Заметки · Проекты (D43) · Прогресс
+        self.assertEqual(html.count("data-tab="), 6)  # Сегодня · Арвикс · Заметки · Проекты (D43) · Обучение (D55) · Прогресс
 
     def test_sidebar_collapses(self) -> None:
         """Панель сворачивается в полосу значков кнопкой (касание, не наведение) и Ctrl+B; выбор помнится."""
@@ -99,7 +99,23 @@ class LaptopLayoutTest(unittest.TestCase):
         self.assertIn('"arvix_side_mini"', js)
         self.assertIn('e.code === "KeyB"', js)
         # Свёрнутая панель не прячет разделы: значки остаются, подписи уходят в title
-        self.assertEqual(html.count('class="lbl"'), 5)
+        self.assertEqual(html.count('class="lbl"'), 6)
+
+
+class CssStructureTest(unittest.TestCase):
+    def test_braces_balanced_no_nested_media(self) -> None:
+        """Незакрытый блок «Проектов» (@media от 900 px) проглотил всё ниже: раскладка планшета вертикально
+        и окна «Обучения» на телефоне не применялись вовсе. Каждый @media — на верхнем уровне."""
+        import re
+
+        css = re.sub(r"/\*.*?\*/", "", (STATIC / "app.css").read_text(), flags=re.S)
+        depth = 0
+        for line in css.split("\n"):
+            if line.lstrip().startswith("@media") or line.lstrip().startswith("@container"):
+                self.assertEqual(depth, 0, f"вложенный блок: {line.strip()}")
+            depth += line.count("{") - line.count("}")
+            self.assertGreaterEqual(depth, 0)
+        self.assertEqual(depth, 0)
 
 
 class TabletLayoutTest(unittest.TestCase):
