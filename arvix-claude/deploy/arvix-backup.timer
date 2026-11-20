@@ -1,9 +1,9 @@
 [Unit]
-Description=Arvix — ежедневный бэкап журнала с сервера
+Description=Arvix — бэкап журнала и конфига сервера на ноутбук, каждый час
 
 [Timer]
-OnCalendar=daily
-RandomizedDelaySec=1h
+OnCalendar=hourly
+RandomizedDelaySec=5min
 Persistent=true
 
 [Install]

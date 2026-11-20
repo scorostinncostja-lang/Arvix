@@ -656,6 +656,24 @@ def cmd_app_token(args: argparse.Namespace) -> None:
     print(app_token(core))
 
 
+def cmd_app_link(args: argparse.Namespace) -> None:
+    """Одноразовая ссылка привязки приложения: открыть в браузере → вход без Telegram (05-INTERFACES §7.3).
+    Нужна после переезда сервера: ключ приложения браузер хранит для адреса, а адрес сменился.
+    В stdout — только ссылка (её берёт deploy/restore-server.sh), пояснение — в stderr."""
+    from arvix.web.auth import PAIR_MINUTES, pair_code
+
+    cfg = load_config()
+    url = str(cfg.section("web").get("public_url") or "").rstrip("/")
+    if not url:
+        sys.exit("Приложение снаружи не включено: deploy/web-setup.sh root@HOST")
+    core = Core(cfg)
+    try:
+        print(f"{url}/#p={pair_code(core)}")
+    finally:
+        core.close()
+    print(f"Действует {PAIR_MINUTES} минут и срабатывает один раз; новая ссылка отменяет прежнюю.", file=sys.stderr)
+
+
 def cmd_app_url(args: argparse.Namespace) -> None:
     url = args.url.strip().rstrip("/")
     if url and not url.startswith("https://"):
@@ -746,6 +764,7 @@ def build_parser() -> argparse.ArgumentParser:
     add("telegram", cmd_telegram, "запустить Telegram-бота (и приложение)")
     add("app", cmd_app, "приложение в терминале (то же, что `arvix` без аргументов)")
     add("app-token", cmd_app_token, "ключ приложения для телефона и терминала (печатает в stdout)")
+    add("app-link", cmd_app_link, "одноразовая ссылка привязки приложения в браузере (15 минут)")
     p = add("avatar", cmd_avatar, "поставить боту аватар (по умолчанию deploy/avatar.png)")
     p.add_argument("path", nargs="?")
     add("app-url", cmd_app_url, "адрес приложения снаружи: https://… (пишет deploy/web-setup.sh)").add_argument("url")
