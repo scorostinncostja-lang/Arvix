@@ -86,6 +86,7 @@ if (( DRY )); then
   6. бот: systemctl --user enable --now arvix-telegram
   7. приложение по HTTPS: Caddy, адрес https://${IP//./-}.sslip.io:8443     deploy/web-setup.sh
   8. ноутбук: [remote] host = $HOST, таймеры синхронизации и бэкапа
+  9. одноразовая ссылка привязки приложения на новом адресе                 arvix app-link
 EOF
   exit 0
 fi
@@ -164,14 +165,28 @@ systemctl --user enable --now arvix-vault-sync.timer arvix-backup.timer >/dev/nu
 systemctl --user start arvix-backup.service 2>/dev/null && echo "первый бэкап с нового сервера снят: $BACKUPS" \
   || echo "⚠ бэкап с нового сервера не снялся: journalctl --user -u arvix-backup -n 20"
 
+# Ключ приложения браузер хранит для адреса, а адрес сменился: голый новый адрес откроет пустое
+# приложение. Ссылка привязки — последней, чтобы её 15 минут не ушли на остальные шаги.
+APP_LINK=""
+[[ -n "$APP_URL" ]] && APP_LINK="$("${RUN[@]}" '~/.local/bin/arvix app-link' 2>/dev/null || true)"
+
 cat <<EOF
 
 Готово. Арвикс живёт на $HOST.
   Telegram:   тот же бот, та же переписка — напиши ему, он ответит с нового сервера.
-  Приложение: ${APP_URL:-адрес не получен — bash deploy/web-setup.sh $ROOT_HOST}
-              старый адрес умер: на телефоне и ноутбуке удали прежнее приложение и установи заново с нового адреса.
+              Кнопка «Арвикс» у поля ввода уже ведёт на новый адрес, входить не нужно.
   Журнал:     поднят по $LAST. Что было на старом сервере позже — потеряно.
+  Приложение: ${APP_URL:-адрес не получен — bash deploy/web-setup.sh $ROOT_HOST}
+              Старое приложение смотрит на умерший адрес и будет пустым — удали его (⋮ → «Удалить»).
 EOF
+if [[ -n "$APP_LINK" ]]; then
+  cat <<EOF
+              На ноутбуке открой в браузере ЭТУ ссылку (15 минут, один раз), потом ⋮ → «Установить приложение»:
+                $APP_LINK
+              Голый адрес без ссылки откроет приложение без данных. Новая ссылка: ssh $HOST '~/.local/bin/arvix app-link'
+              Телефон: кнопка «Арвикс» в Telegram → «Прогресс» → «Установить на телефон».
+EOF
+fi
 if ! grep -q 'api_key' "$BACKUPS/server-config.toml" 2>/dev/null; then
   cat <<EOF
   Голос:      ключи не сохранились — если пользовался, введи заново (ввод скрытый):
