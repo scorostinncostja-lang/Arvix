@@ -28,7 +28,8 @@ SKIP_DIRS = {".obsidian", ".trash", ".git", "node_modules", "Cache"}
 TEMPLATE_DIR_NAMES = ("templates", "template", "шаблоны")
 MAX_READ_BYTES = 200_000
 ASSET_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
-               ".svg": "image/svg+xml", ".pdf": "application/pdf", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": "video/mp4"}
+               ".svg": "image/svg+xml", ".pdf": "application/pdf", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".mp4": "video/mp4",
+               ".webm": "video/webm", ".mov": "video/quicktime", ".ogg": "audio/ogg", ".wav": "audio/wav"}  # свой ролик урока (D61)
 DEFAULT_PATHS = {
     "profile": "05_System/Профиль Arvix.md",
     "goals": "05_System/Цели",

@@ -412,7 +412,7 @@ class State:
 
     def _on_study_answer(self, ev: Event, p: dict, day: Day) -> None:
         session = self._session(p["task_id"])
-        session["answers"][p["panel_id"]] = {k: p.get(k) for k in ("answers", "results", "score_pct")} | {"at": ev.at.isoformat()}
+        session["answers"][p["panel_id"]] = {k: p.get(k) for k in ("answers", "results", "score_pct", "scores")} | {"at": ev.at.isoformat()}
 
     def _on_study_stage(self, ev: Event, p: dict, day: Day) -> None:
         self._session(p["task_id"])["stage"] = p.get("stage")
@@ -420,6 +420,15 @@ class State:
     def _on_study_fix(self, ev: Event, p: dict, day: Day) -> None:
         fixes = self._session(p["task_id"])["fixes"]
         fixes[p["key"]] = {**fixes.get(p["key"], {}), **{k: v for k, v in p.items() if k not in ("task_id", "key")}}
+
+    def _on_study_shadow(self, ev: Event, p: dict, day: Day) -> None:
+        shadows = self._session(p["task_id"]).setdefault("shadow", {})
+        key = f"{p['panel_id']}:{p['i']}"
+        shadows[key] = {"heard": p.get("heard", ""), "pct": p.get("pct"), "n": int((shadows.get(key) or {}).get("n", 0)) + 1,
+                        "best": max(int(p.get("pct") or 0), int((shadows.get(key) or {}).get("best") or 0))}
+
+    def _on_study_mine(self, ev: Event, p: dict, day: Day) -> None:
+        self._session(p["task_id"]).setdefault("mined", []).append({k: v for k, v in p.items() if k != "task_id"} | {"at": ev.at.isoformat()})
 
     def _on_review_set(self, ev: Event, p: dict, day: Day) -> None:
         old = self.reviews.get(p["id"], {})

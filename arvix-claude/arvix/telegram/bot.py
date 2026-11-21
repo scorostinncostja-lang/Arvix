@@ -1219,7 +1219,7 @@ class Bot:
             hint=("\n" + hint) if (hint := study.lesson_hint(core, task)
                                     or (f"Этот блок уже начат: тема «{prior['topic']}» — её и держи, сессия продолжается."
                                         if prior and not prior.get("checked") and prior.get("topic") else "")) else "",
-            panels=study.PANEL_RULES,
+            panels=study.PANEL_RULES, language=lesson_mod.language_rules(lang := self.lesson_language(task)),
         )
         system = "\n\n".join([
             constitution(core.state.profile, gentle=True, sections=("identity", "mission", "autonomy_rule", "honesty")),
@@ -1255,6 +1255,45 @@ class Bot:
         self.send(text, buttons, key=key)
         return lesson
 
+    def study_media(self, task: Any, data: bytes, name: str, mime: str) -> None:
+        """Свой ролик или аудио в сессии языка (D61): в хранилище; субтитры — распознаванием с отметками времени
+        на языке урока; окно плеера на разборе и диктант на практике. Голова не нужна."""
+        from arvix import files
+
+        core = self.core
+        self.log_in(f"📎 {files.safe_name(name)}")
+        try:
+            info = core.receive_file(data, name, mime, stt=None, source=self.channel)
+        except ArvixError as exc:
+            self.send(f"Файл не принял: {exc}")
+            return
+        lang = self.lesson_language(task) or "en"
+        panel = study.add_panel(core, {"type": "video", "stage": "learn", "title": info["name"], "media": info["path"], "lang": lang},
+                                task_ref=task.id, by="me", source=self.channel)
+        audio = data if info["kind"] == "audio" else files.audio_track(core.vault.resolve(info["path"]))
+        hint = "Субтитры можно вставить текстом под плеером (SRT, VTT)."
+        if not audio:
+            self.send(f"Ролик на столе, но звук из него не достался (нет ffmpeg или звука). {hint}")
+            return
+        if not self.stt.enabled:
+            self.send(f"Ролик на столе. Субтитры сам не сделал: распознавание речи не настроено. {hint}")
+            return
+        try:
+            segments = self.stt.transcribe_segments(audio, filename="audio.m4a" if info["kind"] == "video" else info["name"], language=lang)
+            video = study.add_transcript(core, panel["id"], segments=segments, task_ref=task.id, source=self.channel)
+        except (STTError, ArvixError) as exc:
+            self.send(f"Ролик на столе, но субтитры не вышли: {exc}. {hint}")
+            return
+        self.send(f"Ролик на столе: «{info['name']}», субтитры — {len(video['transcript'])} строк. Диктант — на этапе «Практика». "
+                  "Нажми на слово в субтитрах: толкование, произношение и «в предложения».")
+
+    def lesson_language(self, task: Any) -> str | None:
+        """Иностранный язык урока (D61) — по названию блока, теме очереди или предмету; иначе None."""
+        from arvix import media
+
+        item = study.learn_item_of(self.core, task)
+        return media.language_of(task.title, (item or {}).get("topic", ""), lesson_mod.subject_of(task.title))
+
     def resume_lesson(self, task: Any, prior: dict[str, Any], *, key: str | None = None) -> dict[str, Any]:
         """Урок этого блока уже готовили, потом открыли другой — вернуть его из журнала: план, вопросы проверки
         с эталонами, заметку. Окна и ответы и так в журнале. Голова не нужна."""
@@ -1288,14 +1327,19 @@ class Bot:
                 text = str(skill["explain"]) + (f"\n\n*Источник:* {skill['source']}" if skill.get("source") else "")
                 windows.append({"type": "text", "stage": "learn", "title": f"Разбор: {skill['name']}", "skill": skill["name"], "text": text})
         query = str(result.get("video_query") or result.get("topic") or task.title)
+        lang = self.lesson_language(task)
         found = []
         if core.cfg.section("learning").get("video_search", True):
             from arvix import videos
 
-            found = videos.search(query)
+            found = videos.search(query, limit=4 if lang else 3, lang="en" if lang == "en" else "ru")
         if found or result.get("video_query"):  # ни роликов, ни запроса от головы — окно-пустышку не ставим
-            windows.append({"type": "video", "stage": "learn", "title": "Видео-объяснение", "query": query, "results": found,
-                            "ask": "Что в видео объяснили иначе, чем в разборе? Одной фразой — в заметку."})
+            video: dict[str, Any] = {"type": "video", "stage": "learn", "title": "Видео-объяснение", "query": query, "results": found,
+                                     "ask": "Что в видео объяснили иначе, чем в разборе? Одной фразой — в заметку."}
+            if lang:  # язык: субтитры в плеере на языке урока, вопрос — на понимание (i+1)
+                video.update(title="Ролик на языке урока", lang=lang,
+                             ask="Сначала без субтитров, потом с ними. Понял меньше половины — попроси в чате ролик проще.")
+            windows.append(video)
         windows += [{**raw, "stage": raw.get("stage") or "learn"} for raw in extra if raw.get("type") in ("board", "diagram")][:2]
         if result.get("practice"):
             windows.append({"type": "quiz", "stage": "practice", "title": "Практика", "questions": result["practice"]})

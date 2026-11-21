@@ -82,19 +82,36 @@ class STT:
     def enabled(self) -> bool:
         return not self.problem()
 
-    def transcribe(self, audio: bytes, filename: str = "voice.ogg", *, browser: bool = False) -> str:
-        """browser=True — запись из MediaRecorder: перед отправкой всегда пересобирается ffmpeg."""
+    def transcribe(self, audio: bytes, filename: str = "voice.ogg", *, browser: bool = False, language: str = "") -> str:
+        """browser=True — запись из MediaRecorder: перед отправкой всегда пересобирается ffmpeg.
+        language — язык речи, если он не тот, что в [stt] language (shadowing на английском, D61)."""
         if not self.enabled:
             raise STTError(self.problem())
         if self.engine == "command":
             return self._command(audio, filename)
+        if language:
+            return str(self._request(audio, filename, browser=browser, language=language).get("text") or "").strip()
         return self._api(audio, filename, browser)
 
+    def transcribe_segments(self, audio: bytes, filename: str = "audio.m4a", *, language: str = "") -> list[dict[str, Any]]:
+        """Речь с отметками времени (D61): строки {start, end, text} — субтитры своего ролика для диктанта
+        и shadowing. Команда (whisper.cpp) отметок не даёт — одна строка без времени."""
+        if not self.enabled:
+            raise STTError(self.problem())
+        if self.engine == "command":
+            text = self._command(audio, filename)
+            return [{"start": 0.0, "end": 0.0, "text": text}] if text else []
+        data = self._request(audio, filename, fmt="verbose_json", language=language)
+        return [s for s in data.get("segments") or [] if isinstance(s, dict)]
+
     def _api(self, audio: bytes, filename: str, browser: bool = False) -> str:
+        return str(self._request(audio, filename, browser=browser).get("text") or "").strip()
+
+    def _request(self, audio: bytes, filename: str, *, browser: bool = False, fmt: str = "json", language: str = "") -> dict[str, Any]:
         audio, filename = normalize(audio, filename, timeout=self.timeout, force=browser)
-        fields = {"model": self.model, "response_format": "json"}
-        if self.language:
-            fields["language"] = self.language
+        fields = {"model": self.model, "response_format": fmt}
+        if language or self.language:
+            fields["language"] = language or self.language
         ext = Path(filename).suffix.lstrip(".").lower()
         body, content_type = multipart(fields, "file", filename, audio, MIME.get(ext, "application/octet-stream"))
         request = urllib.request.Request(
@@ -114,7 +131,7 @@ class STT:
             raise STTError(reason) from exc
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             raise STTError(f"сервис распознавания недоступен: {exc}") from exc
-        return str(data.get("text") or "").strip()
+        return data if isinstance(data, dict) else {}
 
     def _command(self, audio: bytes, filename: str) -> str:
         """{input} — путь к присланному файлу, {wav} — путь для промежуточного wav (например, для ffmpeg)."""

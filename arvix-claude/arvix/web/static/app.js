@@ -2282,7 +2282,7 @@ async function loadStudy() {
  * столе ничего не поменялось (поменялся только чат), обновляется только лента чата. */
 function deskKey(s) {
   if (!s) return "";
-  const { messages, ...rest } = s;
+  const { messages, mined, shadow, ...rest } = s;  // добыча и «Повтори» правят свою строку — плеер не перезапускаем
   return JSON.stringify(rest) + "|" + (studyUI.view || "");
 }
 
@@ -2292,10 +2292,11 @@ function renderStudy(opts = {}) {
   if (S.gentle) { view.innerHTML = `<div class="card note-card">${richText(S.note)}</div>`; return; }
   if (studyUI.review) { renderReview(); return; }
   const s = S.session;
-  if (!(studyUI.open && s)) { studyUI.deskKey = ""; view.innerHTML = studyOverviewHtml(S); bindStudy(); return; }
+  if (!(studyUI.open && s)) { studyUI.deskKey = ""; view.innerHTML = studyOverviewHtml(S); bindStudy(); mountPlayers(); return; }
   const key = deskKey(s);
   if (opts.live && key === studyUI.deskKey && $("#sc-thread")) { drawStudyThread(); return; }
   const keep = captureStudyComposer();
+  saveMediaState();  // ролик встанет на то же место и продолжит, если играл
   const deskEl = $(".sw-desk"), deskTop = deskEl ? deskEl.scrollTop : 0;  // правка заметки или ответ теста не уводят стол наверх
   const sameStage = studyUI.lastStage === `${s.task.id}:${shownStage(s)}`;  // другой этап — стол сверху
   studyUI.lastStage = `${s.task.id}:${shownStage(s)}`;
@@ -2309,6 +2310,7 @@ function renderStudy(opts = {}) {
       ${pane !== "chat" ? stepperHtml(s) + `<div class="sw-stage">${stageHtml(s)}</div>` : ""}</section>
     ${pane !== "desk" ? `<aside class="sw-chat">${studyChatHtml(s)}</aside>` : ""}</div>`;
   bindStudy();
+  mountPlayers();
   restoreStudyComposer(keep);
   if (sameStage && deskTop && $(".sw-desk")) $(".sw-desk").scrollTop = deskTop;
   const stp = $(".stp"), on = $(".stp-i.on");  // на телефоне полоса этапов шире экрана: текущий этап — в середину
@@ -2455,8 +2457,7 @@ function stageHtml(s) {
     const notePath = s.note || "";
     if (notePath && !s.panels.some((p) => p.type === "note" && p.path === notePath)) html += panelHtml({ id: "lesson-note", type: "note", title: "Заметка своими словами", path: notePath, by: "arvix", fixed: true }, s);
     if (s.sources.length) html += panelHtml({ id: "lesson-sources", type: "sources", title: "Источники", list: s.sources, fixed: true }, s);
-    if (s.task.open) html += `<div class="sp sp-add"><div class="muted small">Нужно ещё — спроси в чате: пример, чертёж, схему, другое видео. Свою ссылку на видео можно добавить и самому.</div>
-      <div class="pills"><button class="pill small-pill" data-sadd="video">+ Видео по ссылке</button></div></div>`;
+    if (s.lang || (s.mined || []).length) html += minedHtml(s);
   } else if (cur === "practice") {
     html += mine.map((p) => panelHtml(p, s)).join("");
     if (!mine.some((p) => p.type === "quiz")) html += `<div class="sp muted small">Задач в приложении нет — решай по плану этапа выше. Нужны задачи здесь — попроси в чате: «дай 5 задач».</div>`;
@@ -2466,6 +2467,11 @@ function stageHtml(s) {
   } else if (cur === "check") {
     html += checkHtml(s);
     html += mine.map((p) => panelHtml(p, s)).join("");
+  }
+  if (s.live && s.task.open && s.prepared) {
+    html += `<div class="sp sp-add"><div class="muted small">${s.lang ? "Ещё видео на языке урока: сцена из сериала, BBC Learning English, TED-Ed — найдёт код; свой ролик или аудио до 20 МБ — субтитры сделает распознавание." : "Нужно ещё — спроси в чате: пример, чертёж, схему. Видео можно найти или поставить по ссылке самому."}</div>
+      <div class="pills"><button class="pill small-pill" data-svideo>${icon("plus")} Видео</button>${s.lang ? `<button class="pill small-pill" data-smedia>${icon("clip")} Свой файл</button>` : ""}</div>
+      <input type="file" id="sm-file" accept="video/*,audio/*" hidden></div>`;
   }
   html += nextHtml(s, cur);
   return html;
@@ -2500,7 +2506,14 @@ function fixHtml(s) {
   if (!errs.length) return html + `<div class="sp"><b>Ошибок нет.</b> <span class="muted small">Иди к проверке — или попроси в чате задачи посложнее.</span></div>`;
   const left = errs.filter((e) => !e.closed).length;
   html += `<div class="sp small"><b>${errs.length - left} из ${errs.length} закрыто.</b> <span class="muted">Незакрытые уйдут в повторение темы — Arvix вернёт их через день.</span></div>`;
+  // Ошибки диктанта переслушивают: один плеер на ролик над списком
+  const videos = [...new Set(errs.filter((e) => e.mode === "dictation" && !e.closed && e.listen).map((e) => e.listen.panel))];
+  for (const vid of videos) {
+    const v = s.panels.find((x) => x.id === vid);
+    if (v) html += `<div class="sp"><div class="sp-h"><b>${esc(v.title)}</b><span class="muted small">— переслушать фразы с ошибками</span></div>${playerSlot("pl-f-" + vid, v, true)}${playerControls("pl-f-" + vid, v, false)}</div>`;
+  }
   return html + errs.map((e) => {
+    if (e.mode === "dictation") return dictationErrorHtml(s, e);
     const kinds = Object.entries(s.error_kinds).map(([k, label]) => `<button type="button" class="chip${e.kind === k ? " accent" : ""}" data-sfixkind="${k}" data-key="${esc(e.key)}"${s.live ? "" : " disabled"}>${esc(label)}</button>`).join("");
     let twin = "";
     if (e.twin && !e.twin.done) {
@@ -2523,6 +2536,30 @@ function fixHtml(s) {
       ${e.closed && !e.kind ? "" : `<div class="fx-kinds"><span class="muted small">Почему:</span>${kinds}</div>`}
       ${twin}${tail}</div>`;
   }).join("");
+}
+
+/* Ошибка диктанта: что не услышал (по словам), почему (не расслышал · не знал слово · орфография), и та же фраза ещё раз. */
+function dictationErrorHtml(s, e) {
+  const pl = "pl-f-" + (e.listen || {}).panel, L = e.listen || {};
+  const play = `<button type="button" class="chip" data-dplay="${esc(pl)}" data-t="${L.t}" data-d="${L.d}">▶ Переслушать</button>
+    <button type="button" class="chip" data-dslow="${esc(pl)}" data-t="${L.t}" data-d="${L.d}">🐢 0.75×</button>`;
+  const kinds = Object.entries(s.lang_kinds || {}).map(([k, label]) => `<button type="button" class="chip${e.kind === k ? " accent" : ""}" data-sfixkind="${k}" data-key="${esc(e.key)}"${s.live ? "" : " disabled"}>${esc(label)}</button>`).join("");
+  let twin = "";
+  if (e.twin && !e.twin.done && !e.closed) {
+    twin = `<div class="fx-twin"><div class="small"><b>Ещё раз — переслушай и запиши заново:</b></div>
+      <textarea class="sq-text" data-stwinin="${esc(e.key)}" rows="2" spellcheck="false" autocapitalize="off" placeholder="Слово в слово">${esc(studyUI.twin[e.key] ?? "")}</textarea>
+      ${s.live ? `<button class="pill small-pill primary" data-stwinok="${esc(e.key)}">Проверить</button>` : ""}</div>`;
+  } else if (e.twin && e.twin.done) {
+    twin = `<div class="fx-twin ${e.twin.ok ? "ok" : "bad"}"><div class="small"><b>${e.twin.ok ? "✓ Со второго раза услышал" : "✗ Со второго раза — тоже не то"}</b></div><div class="small">Твой ответ: ${esc(e.twin.given)}</div></div>`;
+  }
+  const tail = e.closed ? "" : s.live ? `<div class="pills"><button class="pill small-pill" data-sfixdone="${esc(e.key)}">Разобрался</button></div>` : "";
+  return `<div class="sp fx${e.closed ? " closed" : ""}"><div class="fx-h"><span class="chip">диктант</span><span class="grow"></span>
+      ${e.closed ? `<span class="chip green">${e.self ? "разобрался" : "закрыта"}</span>` : ""}</div>
+    <div class="fx-q">${esc(e.q)} ${e.closed ? "" : play}</div>
+    ${e.unknown ? `<div class="small fx-bad">Не разобрал</div>` : `<div class="small dict-diff">${diffHtml(e.diff)}</div>`}
+    <div class="small">Оригинал: <b class="fx-good">${esc(e.right)}</b></div>
+    ${e.closed && !e.kind ? "" : `<div class="fx-kinds"><span class="muted small">Почему:</span>${kinds}</div>`}
+    ${twin}${tail}</div>`;
 }
 
 // --- проверка: вопросы конца блока, ответ и есть отчёт ------------------------------------------
@@ -2566,29 +2603,387 @@ function panelBody(p, live) {
   return "";
 }
 
-/* Видео: ролики нашёл код (RuTube и YouTube) — список, плеер у выбранного; ссылку человека — плеером или ссылкой. */
+// --- медиа (D61): плеер YouTube через IFrame API или свой ролик, субтитры текстом, диктант, «Повтори», слова -----
+/* Плеер переживает перерисовку стола: перед ней запоминается время и «играет ли», после — плеер встаёт на то же
+ * место. Добыча слов и «Повтори» стол не перерисовывают — правят свою строку. Субтитры в самом плеере YouTube
+ * включаются на языке урока (cc_load_policy); текст субтитров для диктанта и слов — вставленный или распознанный. */
+const players = {};      // id элемента плеера → { kind: "yt" | "html" | "pending", obj }
+const mediaState = {};   // id элемента плеера → { time, playing, rate, cc, line }
+const mediaUI = { seg: null, loop: null, tick: 0, rec: null };
+const fmtT = (t) => (t == null ? "" : `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`);
+const ytIdOf = (embed) => (String(embed || "").match(/embed\/([A-Za-z0-9_-]{6,20})/) || [])[1] || "";
+
+function loadYT() {
+  if (window.YT && window.YT.Player) return Promise.resolve();
+  if (!loadYT.p) loadYT.p = new Promise((resolve) => {
+    const prev = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => { if (prev) prev(); resolve(); };
+    const s = document.createElement("script"); s.src = "https://www.youtube.com/iframe_api"; s.async = true; document.head.appendChild(s);
+  });
+  return loadYT.p;
+}
+
+/* Источник окна видео: выбранный ролик из найденных, ссылка YouTube или свой файл из хранилища. */
+function mediaSource(p) {
+  if (p.media) return { kind: "html", path: p.media, audio: /\.(m4a|mp3|ogg|wav)$/i.test(p.media) };
+  const list = p.results || [];  // выбранный ролик — в журнале (url окна), а не в памяти браузера
+  const cur = list.find((r) => r.url === p.url) || list[0] || (p.embed ? { embed: p.embed, url: p.url, site: p.site, title: p.title } : null);
+  if (cur && (cur.site === "youtube" || /youtube/.test(cur.embed || "")) && ytIdOf(cur.embed)) return { kind: "yt", vid: ytIdOf(cur.embed), cur };
+  if (cur && cur.embed) return { kind: "iframe", cur };
+  return { kind: "none", cur };
+}
+
+/* Место плеера: id — своё у каждого места (окно видео, диктант, ошибки), источник — общий. */
+function playerSlot(id, p, compact = false) {
+  const src = mediaSource(p);
+  if (src.kind === "yt") return `<div class="sp-player${compact ? " compact" : ""}"><div id="${id}" data-yt="${esc(src.vid)}" data-lang="${esc(p.lang || "")}"></div></div>`;
+  if (src.kind === "html") {
+    const tag = src.audio ? "audio" : "video";
+    return `<div class="${src.audio ? "sp-audio" : "sp-player own"}${compact ? " compact" : ""}"><${tag} id="${id}" data-media="${esc(src.path)}" playsinline controls preload="metadata"></${tag}>
+      ${src.audio ? "" : `<div class="sp-sub" id="sub-${id}"></div>`}</div>`;
+  }
+  if (src.kind === "iframe") return `<div class="sp-player"><iframe src="${esc(src.cur.embed)}" title="${esc(src.cur.title || p.title)}" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+  return "";
+}
+
+function playerControls(id, p, withLoop) {
+  const st = mediaState[id] || {};
+  const rate = st.rate || 1;
+  const yt = mediaSource(p).kind === "yt";
+  return `<div class="pl-ctl" data-pl="${esc(id)}">
+    <button type="button" class="chip" data-pl-back title="Назад на 5 секунд">⟲ 5 с</button>
+    ${[0.75, 1, 1.25].map((r) => `<button type="button" class="chip${r === rate ? " accent" : ""}" data-pl-rate="${r}">${r}×</button>`).join("")}
+    ${yt ? `<button type="button" class="chip${st.cc === false ? "" : " accent"}" data-pl-cc title="Субтитры в плеере">CC ${esc((p.lang || "авто").toUpperCase())}</button>` : ""}
+    ${withLoop ? `<button type="button" class="chip${mediaUI.loop && mediaUI.loop.id === id ? " accent" : ""}" data-pl-loop title="Крутить текущую фразу по кругу">↻ Фраза</button>` : ""}</div>`;
+}
+
 function videoBody(p) {
-  const list = p.results || [];
-  const pick = studyUI.quiz["v:" + p.id] ?? 0;
-  const cur = list[pick] || (p.embed ? { embed: p.embed, url: p.url, title: p.title } : null);
-  let body = "";
-  if (cur && cur.embed) body += `<div class="sp-player"><iframe src="${esc(cur.embed)}" title="${esc(cur.title || p.title)}" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+  const id = "pl-" + p.id, src = mediaSource(p), list = p.results || [];
+  const s = state.study && state.study.session, live = s && s.live;
+  const lines = p.transcript || [];
+  let body = playerSlot(id, p);
+  if (src.kind === "yt" || src.kind === "html") body += playerControls(id, p, lines.some((l) => l.t != null));
   else if (p.url) body += `<a class="pill small-pill" href="${esc(p.url)}" target="_blank" rel="noopener">Открыть видео</a> <span class="muted small">${esc(p.url)}</span>`;
-  if (list.length) {
+  if (p.lang && live) {
+    const name = (src.cur && src.cur.title) || p.title;
+    body += `<div class="pl-iplus"><span class="muted small">Понял на слух:</span>${[["почти всё", "почти всё — дай ролик посложнее"], ["половину", "примерно половину — нормально, иду дальше"],
+      ["мало", "меньше половины — найди ролик проще"]].map(([k, msg]) => `<button type="button" class="chip" data-sask="${esc(`Посмотрел «${name}»: понял ${msg}.`)}">${k}</button>`).join("")}</div>`;
+  }
+  if (lines.length) body += transcriptHtml(p, id);
+  else if ((src.kind === "yt" || src.kind === "html") && live) {
+    const link = src.cur && src.cur.url;
+    body += `<details class="tr-add"${p.lang ? " open" : ""}><summary class="small"><b>Субтитры текстом</b> — для диктанта, повтора фраз и слов</summary>
+      <ol class="small tr-how"><li>Открой ролик на YouTube${link ? ` (<a href="${esc(link)}" target="_blank" rel="noopener">вот он ↗</a>)` : ""} → под видео «…ещё» → «Показать текст видео».</li>
+        <li>Выдели весь текст справа (вместе со временем) и скопируй.</li><li>Вставь сюда. Подойдут и файлы .srt / .vtt — открой как текст и вставь.</li></ol>
+      <textarea class="sq-text" data-trtext="${esc(p.id)}" rows="3" placeholder="0:00&#10;Hi everyone, welcome back…"></textarea>
+      <button type="button" class="pill small-pill primary" data-trsave="${esc(p.id)}">Добавить субтитры</button></details>`;
+  }
+  if (lines.length && list.length) {
+    body += `<div class="small muted">Субтитры и диктант привязаны к этому ролику. Другой — кнопкой «＋ Видео» внизу этапа.</div>`;
+  } else if (list.length > 1 || (list.length && !p.media)) {
+    const pick = Math.max(0, list.findIndex((r) => r.url === p.url));
     body += `<div class="vd-list">${list.map((v, j) => `<button type="button" class="vd${j === pick ? " on" : ""}" data-svid="${esc(p.id)}" data-j="${j}">
       <span class="vd-site ${esc(v.site)}">${v.site === "rutube" ? "RuTube" : v.site === "youtube" ? "YouTube" : esc(v.site)}</span>
       <span class="vd-t">${esc(v.title)}</span><span class="muted small">${esc(v.channel)}${v.minutes ? " · " + v.minutes + " мин" : ""}</span></button>`).join("")}</div>
-      ${cur && cur.url ? `<a class="small muted" href="${esc(cur.url)}" target="_blank" rel="noopener">Открыть на ${cur.site === "rutube" ? "RuTube" : "YouTube"} ↗</a>` : ""}`;
-  } else if (!p.url && p.search) {
+      ${src.cur && src.cur.url ? `<a class="small muted" href="${esc(src.cur.url)}" target="_blank" rel="noopener">Открыть на ${src.cur.site === "rutube" ? "RuTube" : "YouTube"} ↗</a>` : ""}`;
+  } else if (!p.url && !p.media && !list.length && p.search) {
     body += `<a class="pill small-pill" href="${esc(p.search)}" target="_blank" rel="noopener">Найти: «${esc(p.query)}»</a><div class="muted small">Поиск сейчас не ответил — открой ссылку или пришли в чат свою, Arvix поставит видео сюда.</div>`;
   }
   return body + (p.ask ? `<div class="small sp-ask">После просмотра: <b>${richInline(plainText(p.ask))}</b></div>` : "");
 }
 
+/* Субтитры текстом: время — перейти к месту; слово (урок языка) — толкование и «в предложения»; 🎙 — повторить вслух. */
+function transcriptHtml(p, id) {
+  const s = state.study.session, shadow = (s && s.shadow) || {}, live = s && s.live;
+  const lines = p.transcript.map((l, i) => {
+    const text = p.lang ? esc(l.text).replace(/[A-Za-zÀ-ÿ]+(?:&#39;[A-Za-z]+)?/g, (w) => `<span class="w" data-w="${w.replace("&#39;", "'")}">${w}</span>`) : esc(l.text);
+    const sh = shadow[`${p.id}:${i}`];
+    return `<div class="tr-l" data-i="${i}" data-t="${l.t ?? ""}" data-d="${l.d ?? ""}">
+      <button type="button" class="tr-t" data-tseek="${esc(id)}" data-t="${l.t ?? ""}">${fmtT(l.t) || "·"}</button>
+      <span class="tr-x" data-panel="${esc(p.id)}" data-i="${i}">${text}</span>
+      ${p.lang && live && l.t != null ? `<button type="button" class="tr-sh" data-shadow="${esc(p.id)}" data-pl="${esc(id)}" data-i="${i}" title="Послушай фразу и повтори вслух — код сверит">🎙</button>` : ""}
+      <span class="tr-r small" id="sh-${esc(p.id)}-${i}">${sh ? shadowText(sh) : ""}</span></div>`;
+  }).join("");
+  return `<div class="tr-head small muted">${p.transcript.length} строк${p.lang ? " · нажми на слово — толкование и «в предложения» · 🎙 — повторить фразу вслух" : " · нажми на время — перейти"}</div>
+    <div class="tr" id="tr-${esc(id)}">${lines}</div>`;
+}
+
+const shadowText = (r) => `<span class="${r.pct >= 85 ? "fx-good" : r.pct >= 60 ? "warn" : "fx-bad"}">${r.pct}%</span>${r.best && r.best !== r.pct ? ` <span class="muted">лучшее ${r.best}%</span>` : ""}`;
+
+function diffHtml(diff) {
+  return (diff || []).map((x) => x.s === "ok" ? `<span>${esc(x.w)}</span>` : x.s === "miss" ? `<span class="df-miss" title="пропустил">${esc(x.w)}</span>`
+    : x.s === "extra" ? `<span class="df-extra" title="лишнее">${esc(x.w)}</span>` : `<span class="df-wrong" title="услышал: ${esc(x.heard || "")}">${esc(x.w)}</span>`).join(" ");
+}
+
+/* Плееры: после перерисовки — встать туда, где были; ушедшие — убрать. */
+function mountPlayers() {
+  for (const id of Object.keys(players)) {
+    if (document.getElementById(id) && players[id].kind !== "yt") continue;
+    if (players[id].kind === "yt" && document.getElementById(id) && document.getElementById(id).tagName === "IFRAME") continue;
+    try { if (players[id].kind === "yt") players[id].obj.destroy(); } catch (_) { /* уже нет */ }
+    delete players[id];
+  }
+  view.querySelectorAll("[data-yt]").forEach((el) => {
+    if (players[el.id]) return;
+    const st = mediaState[el.id] || {}, lang = el.dataset.lang, id = el.id;
+    players[id] = { kind: "pending" };
+    loadYT().then(() => {
+      if (!document.getElementById(id)) { delete players[id]; return; }
+      const obj = new YT.Player(id, {
+        videoId: el.dataset.yt, width: "100%", height: "100%",
+        playerVars: { playsinline: 1, rel: 0, start: Math.floor(st.time || 0), autoplay: st.playing ? 1 : 0, origin: location.origin,
+          ...(st.cc === false ? {} : { cc_load_policy: 1, ...(lang ? { cc_lang_pref: lang, hl: lang } : {}) }) },
+        events: { onReady: (e) => { if (st.rate && st.rate !== 1) e.target.setPlaybackRate(st.rate); } },
+      });
+      players[id] = { kind: "yt", obj };
+    });
+  });
+  view.querySelectorAll("[data-media]").forEach(async (el) => {
+    if (players[el.id] && players[el.id].obj === el) return;
+    players[el.id] = { kind: "html", obj: el };
+    const st = mediaState[el.id] || {}, path = el.dataset.media;
+    try {
+      if (!assetCache.has(path)) {
+        const res = await fetch("/api/file?path=" + encodeURIComponent(path), { headers: authHeaders() });
+        if (!res.ok) throw new Error(res.status);
+        assetCache.set(path, URL.createObjectURL(await res.blob()));
+      }
+      el.src = assetCache.get(path);
+      el.addEventListener("loadedmetadata", () => { if (st.time) el.currentTime = st.time; if (st.rate) el.playbackRate = st.rate; if (st.playing) el.play().catch(() => {}); }, { once: true });
+    } catch (_) { el.replaceWith(Object.assign(document.createElement("div"), { className: "muted small", textContent: "⚠ Файл ролика не открылся: " + path })); }
+  });
+  clearInterval(mediaUI.tick);
+  if (Object.keys(players).length) mediaUI.tick = setInterval(mediaTick, 250);
+}
+
+function playerApi(id) {
+  const P = players[id];
+  if (!P || !P.obj) return null;
+  if (P.kind === "yt") {
+    const o = P.obj;
+    if (!o.getCurrentTime) return null;
+    return { time: () => o.getCurrentTime() || 0, seek: (t) => o.seekTo(t, true), play: () => o.playVideo(), pause: () => o.pauseVideo(),
+      rate: (r) => o.setPlaybackRate(r), playing: () => !!o.getPlayerState && o.getPlayerState() === 1 };
+  }
+  const v = P.obj;
+  return { time: () => v.currentTime || 0, seek: (t) => { v.currentTime = t; }, play: () => v.play().catch(() => {}), pause: () => v.pause(),
+    rate: (r) => { v.playbackRate = r; }, playing: () => !v.paused };
+}
+
+function saveMediaState() {
+  for (const id of Object.keys(players)) {
+    const a = playerApi(id);
+    if (a) mediaState[id] = { ...(mediaState[id] || {}), time: a.time(), playing: a.playing() };
+  }
+}
+
+function playSegment(id, t, d, after) {
+  const a = playerApi(id);
+  if (!a) { toast("Плеер ещё загружается — секунду"); return false; }
+  if (mediaUI.loop && mediaUI.loop.id === id) mediaUI.loop = null;
+  a.seek(Math.max(0, t - 0.15)); a.play();
+  mediaUI.seg = { id, end: t + d + 0.3, after };
+  return true;
+}
+
+/* Раз в 250 мс: конец фразы — пауза; «↻ Фраза» — снова; текущая строка субтитров — подсветка и подпись под своим роликом. */
+function mediaTick() {
+  if (mediaUI.seg) {
+    const a = playerApi(mediaUI.seg.id);
+    if (a && a.time() >= mediaUI.seg.end) { a.pause(); const after = mediaUI.seg.after; mediaUI.seg = null; if (after) after(); }
+  }
+  if (mediaUI.loop) {
+    const a = playerApi(mediaUI.loop.id);
+    if (a && a.playing() && a.time() >= mediaUI.loop.t + mediaUI.loop.d + 0.2) a.seek(mediaUI.loop.t);
+  }
+  for (const id of Object.keys(players)) {
+    const a = playerApi(id), box = document.getElementById("tr-" + id), sub = document.getElementById("sub-" + id);
+    if (!a || (!box && !sub)) continue;
+    const now = a.time();
+    let cur = null;
+    (box ? box.querySelectorAll(".tr-l") : []).forEach((l) => {
+      const t = parseFloat(l.dataset.t), d = parseFloat(l.dataset.d);
+      const on = !isNaN(t) && now >= t && now < t + (isNaN(d) ? 4 : d);
+      l.classList.toggle("on", on);
+      if (on) cur = l;
+    });
+    if (cur && a.playing() && box) {
+      const top = cur.offsetTop - box.offsetTop;
+      if (top < box.scrollTop || top > box.scrollTop + box.clientHeight - 40) box.scrollTop = top - 40;
+    }
+    if (sub) sub.textContent = cur ? cur.querySelector(".tr-x").textContent : "";
+    if (cur) mediaState[id] = { ...(mediaState[id] || {}), line: { t: parseFloat(cur.dataset.t), d: parseFloat(cur.dataset.d) || 4 } };
+  }
+}
+
+/* «🎙 Повтори»: фраза звучит → сразу запись (длина фразы ×1.4 + 2 с) → распознавание → сверка по словам кодом.
+ * Повторять «после», а не «вместе»: без наушников микрофон услышал бы сам ролик и засчитал его. */
+async function shadowLine(btn) {
+  const s = state.study.session, pid = btn.dataset.shadow, plId = btn.dataset.pl, i = +btn.dataset.i;
+  const panel = s.panels.find((x) => x.id === pid) || {}, line = (panel.transcript || [])[i];
+  const out = document.getElementById(`sh-${pid}-${i}`);
+  if (mediaUI.rec || !line) return;
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch (err) { toast("Нет доступа к микрофону: " + err.message); return; }
+  mediaUI.rec = true; btn.classList.add("rec"); out.innerHTML = `<span class="muted">слушай…</span>`;
+  const started = playSegment(plId, line.t, line.d, () => {
+    const type = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus", "audio/mp4"].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+    const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined), chunks = [];
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    rec.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      btn.classList.remove("rec"); mediaUI.rec = null;
+      out.innerHTML = `<span class="muted">проверяю…</span>`;
+      const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
+      try {
+        const r = await api(`study/${s.task.id}/shadow`, { body: blob, headers: { "Content-Type": blob.type.split(";")[0], "X-Panel": pid, "X-Line": String(i), "X-Lang": panel.lang || "en" } });
+        const sh = r.shadow, prev = (s.shadow || {})[`${pid}:${i}`] || {};
+        s.shadow = { ...(s.shadow || {}), [`${pid}:${i}`]: { pct: sh.pct, heard: sh.heard, best: Math.max(sh.pct, prev.best || 0) } };
+        out.innerHTML = shadowText(s.shadow[`${pid}:${i}`]) + ` <span class="muted">${esc(sh.heard || "—")}</span>`;
+      } catch (err) { out.textContent = ""; toast(err.message); }
+    };
+    rec.start(); out.innerHTML = `<span class="fx-bad">● говори!</span>`;
+    setTimeout(() => rec.state === "recording" && rec.stop(), Math.max(3000, (line.d * 1.4 + 2) * 1000));
+  });
+  if (!started) { stream.getTracks().forEach((t) => t.stop()); btn.classList.remove("rec"); mediaUI.rec = null; out.textContent = ""; }
+}
+
+/* Слово в субтитрах: толкование по-английски (без перевода — метод владельца), произношение, «в предложения». */
+let wordPop = null;
+function closeWordPop() { if (wordPop) { wordPop.remove(); wordPop = null; } }
+async function wordPopup(el) {
+  closeWordPop();
+  const word = el.dataset.w, holder = el.closest(".tr-x"), pid = holder.dataset.panel, i = +holder.dataset.i;
+  wordPop = document.createElement("div");
+  wordPop.className = "msg-menu word-pop";
+  wordPop.innerHTML = `<div class="small"><b>${esc(word)}</b> <span class="muted">ищу в словаре…</span></div>`;
+  document.body.appendChild(wordPop);
+  const r = el.getBoundingClientRect();
+  const place = () => { if (!wordPop) return; wordPop.style.left = Math.max(8, Math.min(r.left, innerWidth - wordPop.offsetWidth - 8)) + "px";
+    wordPop.style.top = (r.bottom + 6 + wordPop.offsetHeight > innerHeight ? Math.max(8, r.top - wordPop.offsetHeight - 6) : r.bottom + 6) + "px"; };
+  place();
+  let entry = null;
+  try { entry = (await api("define?word=" + encodeURIComponent(word))).entry; } catch (_) { /* без словаря */ }
+  if (!wordPop) return;
+  wordPop.innerHTML = `<div class="wp-h"><b>${esc((entry && entry.word) || word)}</b> ${entry && entry.phonetic ? `<span class="muted">${esc(entry.phonetic)}</span>` : ""}
+      ${entry && entry.audio ? `<button type="button" class="chip" data-wp-audio="${esc(entry.audio)}">▶ звук</button>` : ""}</div>
+    ${entry ? entry.meanings.map((m) => `<div class="small"><i class="muted">${esc(m.pos)}</i> ${esc(m.def)}${m.example ? `<div class="muted">“${esc(m.example)}”</div>` : ""}</div>`).join("")
+      : `<div class="small muted">В словаре нет — смысл из контекста, или спроси Arvix в чате.</div>`}
+    ${state.study.session.live ? `<button type="button" class="pill small-pill primary" data-wp-mine>＋ В предложения (Anki)</button>` : ""}`;
+  place();
+  const audio = wordPop.querySelector("[data-wp-audio]");
+  if (audio) audio.onclick = () => new Audio(audio.dataset.wpAudio).play().catch(() => toast("Не проигралось"));
+  const mineBtn = wordPop.querySelector("[data-wp-mine]");
+  if (mineBtn) mineBtn.onclick = async () => {
+    mineBtn.disabled = true;
+    try {
+      const res = await api(`study/${state.study.session.task.id}/mine`, { json: { panel: pid, i, word } });
+      const m = res.mined, ss = state.study.session;
+      ss.mined = [...(ss.mined || []).filter((x) => !(x.word === m.word && x.sentence === m.sentence)), m];
+      const box = $("#mined-list"); if (box) box.outerHTML = minedHtml(ss);
+      toast(m.note ? `В предложения: ${m.word} — заметка «${m.note.split("/").pop()}»` : `В предложения: ${m.word}`);
+      closeWordPop();
+    } catch (err) { mineBtn.disabled = false; toast(err.message); }
+  };
+}
+document.addEventListener("pointerdown", (e) => { if (wordPop && !wordPop.contains(e.target) && !e.target.closest(".w")) closeWordPop(); }, true);
+
+function minedHtml(s) {
+  const m = s.mined || [];
+  if (!m.length) return `<div id="mined-list"></div>`;
+  return `<div class="sp" id="mined-list"><div class="sp-h"><b>Мои предложения · ${m.length}</b><span class="muted small">для Anki (Cloze) и повторения темы</span></div>
+    ${m.map((x) => `<div class="small mn">${esc(x.cloze).replace(/\{\{c1::([^}]+)\}\}/, "<b class=\"mn-w\">$1</b>")}</div>`).join("")}</div>`;
+}
+
+/* Диктант: свой плеер над фразами (источник — ролик урока), ▶ проигрывает ровно фразу; ответ — слово в слово. */
+function dictationPlayer(p, s) {
+  const src = (p.questions[0] || {}).listen;
+  const video = src && s.panels.find((x) => x.id === src.panel);
+  if (!video) return `<div class="muted small">Ролик этого диктанта скрыт.</div>`;
+  const id = "pl-d-" + p.id;
+  return playerSlot(id, video, true) + playerControls(id, video, false);
+}
+
+function bindMedia() {
+  const on = (sel, fn) => view.querySelectorAll(sel).forEach((el) => el.addEventListener("click", (e) => { haptic("soft"); fn(el, e); }));
+  on("[data-pl-back]", (el) => { const a = playerApi(el.closest("[data-pl]").dataset.pl); if (a) a.seek(Math.max(0, a.time() - 5)); });
+  on("[data-pl-rate]", (el) => {
+    const id = el.closest("[data-pl]").dataset.pl, r = +el.dataset.plRate, a = playerApi(id);
+    mediaState[id] = { ...(mediaState[id] || {}), rate: r };
+    if (a) a.rate(r);
+    el.parentElement.querySelectorAll("[data-pl-rate]").forEach((b) => b.classList.toggle("accent", b === el));
+  });
+  on("[data-pl-cc]", (el) => {  // субтитры в плеере YouTube — пересоздать плеер с ними или без, с того же места
+    const id = el.closest("[data-pl]").dataset.pl;
+    saveMediaState();
+    mediaState[id] = { ...(mediaState[id] || {}), cc: (mediaState[id] || {}).cc === false };
+    try { players[id].obj.destroy(); } catch (_) { /* нет */ }
+    delete players[id];
+    studyUI.deskKey = ""; renderStudy();
+  });
+  on("[data-pl-loop]", (el) => {
+    const id = el.closest("[data-pl]").dataset.pl, line = (mediaState[id] || {}).line;
+    if (mediaUI.loop && mediaUI.loop.id === id) { mediaUI.loop = null; el.classList.remove("accent"); return; }
+    if (!line) { toast("Включи ролик — повтор возьмёт фразу, которая звучит"); return; }
+    mediaUI.loop = { id, ...line }; el.classList.add("accent");
+  });
+  on("[data-tseek]", (el) => { const t = parseFloat(el.dataset.t); const a = playerApi(el.dataset.tseek); if (a && !isNaN(t)) { a.seek(t); a.play(); } });
+  on(".tr-x .w", (el) => wordPopup(el));
+  on("[data-shadow]", (el) => shadowLine(el));
+  on("[data-dplay]", (el) => playSegment(el.dataset.dplay, +el.dataset.t, +el.dataset.d));
+  on("[data-dslow]", (el) => {  // та же фраза на 0.75×, потом прежняя скорость
+    const id = el.dataset.dslow, a = playerApi(id), back = (mediaState[id] || {}).rate || 1;
+    if (a) a.rate(0.75);
+    playSegment(id, +el.dataset.t, +el.dataset.d, () => { const b = playerApi(id); if (b) b.rate(back); });
+  });
+  on("[data-trsave]", async (el) => {
+    const box = view.querySelector(`[data-trtext="${CSS.escape(el.dataset.trsave)}"]`), text = box ? box.value.trim() : "";
+    if (!text) { toast("Вставь текст субтитров"); return; }
+    el.disabled = true;
+    try { await studyOp("transcript", { panel: el.dataset.trsave, text }, (r) => `Субтитры: ${r.panel.transcript.length} строк — диктант на этапе «Практика»`); }
+    catch (err) { el.disabled = false; toast(err.message); }
+  });
+  on("[data-svideo]", () => openVideoSheet());
+  on("[data-smedia]", () => { const f = $("#sm-file"); if (f) f.click(); });
+  const f = $("#sm-file");
+  if (f) f.onchange = (e) => { const files = [...e.target.files]; e.target.value = ""; if (files.length) { toast("Ролик загружается — субтитры сделает распознавание"); studyFiles(files); } };
+}
+
+/* «＋ Видео» на любом этапе: запрос (ролики ищет код) или ссылка. На уроке языка — подсказки запросов на нём. */
+function openVideoSheet() {
+  const s = state.study.session, lang = s.lang;
+  const topic = (s.item && s.item.topic) || s.topic;
+  const presets = lang === "en" ? [["Сцена из сериала", "TV series scene English subtitles " + topic], ["BBC Learning English", "BBC Learning English " + topic],
+    ["TED-Ed", "TED-Ed " + topic], ["Произношение", "Rachel's English pronunciation " + topic]] : [];
+  openSheet(`<h2>Видео на стол</h2>
+    <div class="field"><input id="vs-q" placeholder="${lang ? "Запрос на английском или ссылка YouTube" : "Что найти или ссылка на ролик"}"></div>
+    ${presets.length ? `<div class="pills">${presets.map(([l, q]) => `<button type="button" class="chip" data-vsq="${esc(q)}">${esc(l)}</button>`).join("")}</div>` : ""}
+    <button class="btn primary" id="vs-go">Найти и поставить</button>
+    <p class="muted small">Ролики ищет код на YouTube${lang ? " (на языке урока)" : " и RuTube"}; выберешь из списка прямо в окне. Свой ролик или аудио — «＋ Свой файл»: субтитры сделает распознавание.</p>`, (root) => {
+    const input = root.querySelector("#vs-q");
+    setTimeout(() => input.focus(), 50);
+    root.querySelectorAll("[data-vsq]").forEach((b) => b.onclick = () => { input.value = b.dataset.vsq; input.focus(); });
+    const go = async () => {
+      const v = input.value.trim(); if (!v) { toast("Запрос или ссылка"); return; }
+      const btn = root.querySelector("#vs-go"); btn.disabled = true; btn.textContent = "Ищу…";
+      try {
+        const r = await api(`study/${s.task.id}/video`, { json: { ...(/^https?:\/\//.test(v) ? { url: v } : { query: v }), stage: shownStage(s), lang: lang || "" } });
+        state.study.session = r.session; closeSheet(); notify("success"); studyUI.deskKey = ""; renderStudy();
+        toast(r.panel.results && r.panel.results.length ? `Найдено ${r.panel.results.length} — выбирай в окне` : "Видео на столе");
+      } catch (err) { btn.disabled = false; btn.textContent = "Найти и поставить"; toast(err.message); }
+    };
+    root.querySelector("#vs-go").onclick = go;
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+  });
+}
+
 // --- тест: варианты и короткий ответ проверяет код, открытые — Arvix на проверке блока ------------
 function quizHtml(p, live = true) {
   const sel = studyUI.quiz[p.id] || (studyUI.quiz[p.id] = {});
+  const dict = p.questions.some((q) => q.mode === "dictation");
+  const pl = "pl-d-" + p.id;
   const qs = p.questions.map((q, i) => {
+    if (q.mode === "dictation") return dictationItem(p, q, i, sel, pl, live);
     if (p.done) {
       const mark = q.open ? "•" : q.ok ? "✓" : "✗";
       let opts;
@@ -2607,8 +3002,25 @@ function quizHtml(p, live = true) {
     return `<div class="sq${unk ? " unk" : ""}"><div>${i + 1}. ${richInline(q.q)}${meta ? ` <span class="muted small">· ${meta}</span>` : ""}</div>${body}
       <button type="button" class="chip sq-unk${unk ? " accent" : ""}" data-sunk="${esc(p.id)}" data-i="${i}">Не знаю</button></div>`;
   }).join("");
-  if (p.done) return qs + `<div class="small">${p.score_pct != null ? `<b>${p.score_pct}%</b> — проверено кодом. ` : ""}${p.questions.some((q) => q.open) ? "Открытые Arvix учтёт на проверке блока. " : ""}${p.questions.some((q) => q.ok === false) ? "Ошибки — в «Работе над ошибками»." : ""}</div>`;
-  return qs + (live ? `<button class="btn primary" data-squiz="${esc(p.id)}">Проверить</button>` : `<div class="muted small">Тест не решён.</div>`);
+  const head = dict ? dictationPlayer(p, state.study.session) + `<div class="small muted dict-how">▶ — ровно фраза; 🐢 — она же на 0.75×. Пиши слово в слово, как слышишь: сокращения (gonna, I'm) — как звучат. Не разобрал — «Не знаю», не угадывай.</div>` : "";
+  if (p.done) return head + qs + `<div class="small">${p.score_pct != null ? `<b>${p.score_pct}%</b> — проверено кодом${dict ? " по словам" : ""}. ` : ""}${p.questions.some((q) => q.open) ? "Открытые Arvix учтёт на проверке блока. " : ""}${p.questions.some((q) => q.ok === false) ? "Ошибки — в «Работе над ошибками»." : ""}</div>`;
+  return head + qs + (live ? `<button class="btn primary" data-squiz="${esc(p.id)}">Проверить</button>` : `<div class="muted small">Тест не решён.</div>`);
+}
+
+/* Фраза диктанта: ▶ и 🐢 проигрывают ровно её; после ответа — что не услышал, по словам (код). */
+function dictationItem(p, q, i, sel, pl, live) {
+  const L = q.listen || {};
+  const play = `<button type="button" class="chip" data-dplay="${esc(pl)}" data-t="${L.t}" data-d="${L.d}">▶ Фраза ${i + 1}</button>
+    <button type="button" class="chip" data-dslow="${esc(pl)}" data-t="${L.t}" data-d="${L.d}" title="Медленнее">🐢</button>`;
+  if (p.done) {
+    const body = q.unknown ? `<div class="small muted">Не разобрал</div>`
+      : `<div class="small dict-diff">${diffHtml(q.diff)}</div>${q.ok ? "" : `<div class="small">Оригинал: <b class="fx-good">${esc(q.right)}</b></div>`}`;
+    return `<div class="sq ${q.ok ? "ok" : "bad"}"><div><b>${q.ok ? "✓" : "✗"}</b> ${play} ${q.pct != null ? `<span class="muted small">${q.pct}% слов</span>` : ""}</div>${body}</div>`;
+  }
+  const unk = sel[i] === "?";
+  return `<div class="sq${unk ? " unk" : ""}"><div>${play}</div>
+    <textarea class="sq-text" data-sq="${esc(p.id)}" data-i="${i}" rows="2" placeholder="Слово в слово, как слышишь" spellcheck="false" autocapitalize="off"${unk || !live ? " disabled" : ""}>${esc(unk ? "" : sel[i] || "")}</textarea>
+    ${live ? `<button type="button" class="chip sq-unk${unk ? " accent" : ""}" data-sunk="${esc(p.id)}" data-i="${i}">Не знаю</button>` : ""}</div>`;
 }
 
 // --- доска: формулы разбирает свой парсер (без eval), рисует SVG ---------------------------------
@@ -3038,11 +3450,11 @@ function bindStudy() {
   });
   on("[data-sask]", (el) => { if (!isWide()) { studyLayout.pane = "chat"; saveStudyLayout(); studyUI.deskKey = ""; renderStudy(); } studySend(el.dataset.sask); });
   on("[data-shide]", async (el) => { try { await studyOp("hide", { panel: el.dataset.shide }); } catch (err) { toast(err.message); } });
-  on("[data-sadd]", async () => {
-    const url = (prompt("Ссылка на видео (YouTube, RuTube, Vimeo — встроится; другое — ссылкой)", "") || "").trim(); if (!url) return;
-    try { await studyOp("panel", { panel: { type: "video", url, title: "Видео", stage: "learn" } }, "Видео на столе"); } catch (err) { toast(err.message); }
+  on("[data-svid]", async (el) => {  // другой ролик из найденных — выбор в журнал, плеер с начала
+    saveMediaState(); delete mediaState["pl-" + el.dataset.svid];
+    try { await studyOp("pick", { panel: el.dataset.svid, j: +el.dataset.j }); } catch (err) { toast(err.message); }
   });
-  on("[data-svid]", (el) => { studyUI.quiz["v:" + el.dataset.svid] = +el.dataset.j; studyUI.deskKey = ""; renderStudy(); });
+  bindMedia();
   // тест: выбор, короткий ответ, «не знаю»
   view.querySelectorAll("button[data-sq]").forEach((b) => b.addEventListener("click", () => {
     haptic("soft");
@@ -3084,7 +3496,7 @@ function bindStudy() {
   on("[data-sfixkind]", async (el) => { try { await studyOp("fix", { key: el.dataset.key, kind: el.dataset.sfixkind }); } catch (err) { toast(err.message); } });
   on("[data-sfixdone]", async (el) => { try { await studyOp("fix", { key: el.dataset.sfixdone, done: true }, "Закрыто — тема всё равно вернётся в повторении"); } catch (err) { toast(err.message); } });
   on("[data-stwin]", (el) => { studyUI.twin[el.dataset.stwin] = +el.dataset.j; el.parentElement.querySelectorAll(".sq-opt").forEach((o) => o.classList.toggle("on", o === el)); });
-  view.querySelectorAll("input[data-stwinin]").forEach((t) => {
+  view.querySelectorAll("[data-stwinin]").forEach((t) => {
     t.addEventListener("input", () => { studyUI.twin[t.dataset.stwinin] = t.value; });
     t.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); const b = view.querySelector(`[data-stwinok="${CSS.escape(t.dataset.stwinin)}"]`); if (b) b.click(); } });
   });

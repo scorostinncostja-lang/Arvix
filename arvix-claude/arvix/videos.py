@@ -24,7 +24,7 @@ log = logging.getLogger("arvix.videos")
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
 TIMEOUT = 6
-MIN_SEC, MAX_SEC = 120, 75 * 60  # короче — шортс, длиннее — запись трансляции на полтора часа
+MIN_SEC, MAX_SEC = 60, 75 * 60  # короче — шортс, длиннее — запись трансляции на полтора часа
 CACHE_SEC = 24 * 3600
 
 
@@ -83,8 +83,9 @@ def _run_text(field: Any) -> str:
     return "".join(str(r.get("text") or "") for r in field.get("runs") or [] if isinstance(r, dict))
 
 
-def youtube(query: str) -> list[dict[str, Any]]:
-    html = FETCH("https://www.youtube.com/results?hl=ru&search_query=" + urllib.parse.quote(query), "text/html").decode("utf-8", "replace")
+def youtube(query: str, lang: str = "ru") -> list[dict[str, Any]]:
+    region = "&hl=en&gl=US" if lang == "en" else "&hl=ru"
+    html = FETCH("https://www.youtube.com/results?search_query=" + urllib.parse.quote(query) + region, "text/html").decode("utf-8", "replace")
     start = html.find("ytInitialData")
     brace = html.find("{", start) if start >= 0 else -1
     if brace < 0:
@@ -103,26 +104,29 @@ def youtube(query: str) -> list[dict[str, Any]]:
     return out
 
 
-def _safe(fn: Callable[[str], list[dict[str, Any]]], query: str, box: dict[str, list[dict[str, Any]]]) -> None:
+def _safe(fn: Callable[..., list[dict[str, Any]]], query: str, box: dict[str, list[dict[str, Any]]], *args: Any) -> None:
     try:
-        box[fn.__name__] = fn(query)
+        box[fn.__name__] = fn(query, *args)
     except Exception as exc:  # noqa: BLE001 — чужая площадка не должна ронять урок
         log.info("поиск видео %s: %s", fn.__name__, exc)
         box[fn.__name__] = []
 
 
-def search(query: str, limit: int = 3) -> list[dict[str, Any]]:
+def search(query: str, limit: int = 3, *, lang: str = "ru") -> list[dict[str, Any]]:
     """Лучшие ролики по запросу с обеих площадок вперемешку (порядок площадки = её релевантность).
+    lang="en" — урок иностранного языка (D61): только YouTube на английском, RuTube там почти пуст.
     Каждый: url, embed, site, title, channel, minutes."""
     query = re.sub(r"\s+", " ", str(query or "")).strip()[:160]
     if not query:
         return []
+    key = f"{lang}:{query}"
     with _lock:
-        hit = _cache.get(query)
+        hit = _cache.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SEC:
             return [dict(x) for x in hit[1][:limit]]
     box: dict[str, list[dict[str, Any]]] = {}
-    threads = [threading.Thread(target=_safe, args=(fn, query, box), daemon=True) for fn in (youtube, rutube)]
+    sources = [(youtube, (lang,))] + ([] if lang == "en" else [(rutube, ())])
+    threads = [threading.Thread(target=_safe, args=(fn, query, box, *extra), daemon=True) for fn, extra in sources]
     for t in threads:
         t.start()
     for t in threads:
@@ -139,5 +143,5 @@ def search(query: str, limit: int = 3) -> list[dict[str, Any]]:
         x["minutes"] = max(1, round(x.pop("sec") / 60))
     if merged:
         with _lock:
-            _cache[query] = (time.monotonic(), merged)
+            _cache[key] = (time.monotonic(), merged)
     return [dict(x) for x in merged[:limit]]
