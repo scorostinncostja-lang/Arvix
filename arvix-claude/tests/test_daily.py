@@ -15,7 +15,7 @@ class CloseDayTest(ArvixCase):
         return self.core.state.days[self.start.date() + timedelta(days=offset)].closed
 
     def test_unasked_tasks_fail_without_debt(self) -> None:
-        """Арвикс ни разу не спросил (бот выключен) — записывать долгом не за что."""
+        """Arvix ни разу не спросил (бот выключен) — записывать долгом не за что."""
         self.core.add_task("Важное", importance=5, start="18:00")
         self.close()
         task = next(iter(self.core.state.tasks.values()))

@@ -3,14 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0b10" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f6f9" media="(prefers-color-scheme: light)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<title>Арвикс</title>
+<title>Arvix</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&family=JetBrains+Mono:wght@400;600&display=swap">
 <link rel="stylesheet" href="app.css">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -18,7 +21,7 @@
 <div id="app">
   <header class="top">
     <div class="top-title">
-      <div id="top-day" class="top-day">Арвикс</div>
+      <div id="top-day" class="top-day">Arvix</div>
       <div id="top-sub" class="top-sub"></div>
     </div>
     <div class="top-right">
@@ -29,9 +32,9 @@
   <main id="view"></main>
 
   <nav class="tabs" id="tabs">
-    <div class="brand"><img src="icon.svg" alt="" width="28" height="28"><span class="brand-name">Арвикс</span><button id="side-toggle" class="side-toggle" aria-expanded="true" aria-label="Свернуть панель" title="Свернуть панель (Ctrl+B)"><span class="ico" data-ic="sidebar"></span></button></div>
+    <div class="brand"><img src="icon.svg" alt="" width="28" height="28"><span class="brand-name">Arvix</span><button id="side-toggle" class="side-toggle" aria-expanded="true" aria-label="Свернуть панель" title="Свернуть панель (Ctrl+B)"><span class="ico" data-ic="sidebar"></span></button></div>
     <button data-tab="today" class="active" title="Ctrl+1"><span class="ico" data-ic="today"></span><span class="lbl">Сегодня</span><kbd>1</kbd></button>
-    <button data-tab="chat" title="Ctrl+2"><span class="ico" data-ic="chat"></span><span class="lbl">Арвикс</span><kbd>2</kbd><i id="chat-dot" class="dot hidden"></i></button>
+    <button data-tab="chat" title="Ctrl+2"><span class="ico" data-ic="chat"></span><span class="lbl">Arvix</span><kbd>2</kbd><i id="chat-dot" class="dot hidden"></i></button>
     <button data-tab="notes" title="Ctrl+3"><span class="ico" data-ic="notes"></span><span class="lbl">Заметки</span><kbd>3</kbd></button>
     <button data-tab="projects" title="Ctrl+4"><span class="ico" data-ic="projects"></span><span class="lbl">Проекты</span><kbd>4</kbd></button>
     <button data-tab="study" title="Ctrl+5"><span class="ico" data-ic="study"></span><span class="lbl">Обучение</span><kbd>5</kbd></button>

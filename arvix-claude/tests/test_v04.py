@@ -397,7 +397,7 @@ class ServerTest(BotCase):
     def test_static_app_is_served(self) -> None:
         status, html = self.call("/", token=None)
         self.assertEqual(status, 200)
-        self.assertIn("<title>Арвикс</title>", html)
+        self.assertIn("<title>Arvix</title>", html)
         status, html = self.call("/some/deep/link", token=None)
         self.assertIn("app.js", html)
 

@@ -1,6 +1,6 @@
 """`arvix` в терминале — то же приложение, что в Telegram и на телефоне (05-INTERFACES §7.5).
 
-Слева — день: задачи, таймер, цифры. Справа — разговор с Арвиксом. Внизу — строка ввода:
+Слева — день: задачи, таймер, цифры. Справа — разговор с Arvix. Внизу — строка ввода:
 пишешь как в Telegram, Enter — отправить. Всё обновляется само (поток /api/stream).
 
 Подключение: бот на этой машине — 127.0.0.1:<port>; удалённый режим ([remote] host) —
@@ -235,10 +235,10 @@ class TUI:
 
     def draw_top(self, scr: Any, state: dict[str, Any], width: int) -> None:
         if not state:
-            put(scr, 0, 1, "Арвикс · подключаюсь…", curses.A_BOLD)
+            put(scr, 0, 1, "Arvix · подключаюсь…", curses.A_BOLD)
             return
         now = datetime.fromisoformat(state["now"])
-        head = f" Арвикс · {state.get('weekday', '')} {now:%d.%m} · {plain(state.get('mode_label', ''))}"
+        head = f" Arvix · {state.get('weekday', '')} {now:%d.%m} · {plain(state.get('mode_label', ''))}"
         stats = state.get("stats")
         if stats:
             head += f" · {stats['done']}/{stats['total']}" + (f" · глубокая {stats['deep_min']}м" if stats.get("deep_min") else "")
@@ -301,7 +301,7 @@ class TUI:
                 lines.append((f"── {day} ──".center(width), curses.A_DIM))
                 last_day = day
             mine = message["who"] == "me"
-            who = "ты" if mine else "Арвикс"
+            who = "ты" if mine else "Arvix"
             lines.append((f"{who} · {at:%H:%M}", curses.A_DIM | (0 if mine else curses.A_BOLD)))
             text = plain(message["text"].replace("**", ""))
             for para in text.split("\n"):
@@ -312,7 +312,7 @@ class TUI:
                 lines.append(("  [" + "] [".join(buttons) + "]", curses.A_DIM))
             lines.append(("", 0))
         if thinking:
-            lines.append((f"Арвикс {thinking}…", curses.A_DIM))
+            lines.append((f"Arvix {thinking}…", curses.A_DIM))
         self.scroll = max(0, min(self.scroll, len(lines) - height))
         visible = lines[max(0, len(lines) - height - self.scroll): len(lines) - self.scroll]
         for i, (line, attr) in enumerate(visible):

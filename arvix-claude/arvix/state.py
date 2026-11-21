@@ -96,7 +96,7 @@ class State:
     learning: list[dict[str, Any]] = field(default_factory=list)
     lessons: list[dict[str, Any]] = field(default_factory=list)  # учебные блоки: тема, задача, оценка проверки
     safety: list[dict[str, Any]] = field(default_factory=list)
-    notes: dict[str, str] = field(default_factory=dict)  # заметки Арвикса: путь → хэш последней записи
+    notes: dict[str, str] = field(default_factory=dict)  # заметки Arvix: путь → хэш последней записи
     budget: dict[str, Any] = field(default_factory=dict)
     # Проекты (D43, arvix/projects.py): карточки, этапы, журнал, деньги, каналы привлечения.
     projects: dict[str, dict[str, Any]] = field(default_factory=dict)

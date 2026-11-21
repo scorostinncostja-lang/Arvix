@@ -96,7 +96,7 @@ def main() -> None:
 
     start_offset = int(core.store.kv_get("tg_offset", 0))
     threading.Thread(target=poll, name="tg-poll", daemon=True).start()
-    log.info("Арвикс в Telegram запущен, владелец %s", tg["owner_id"])
+    log.info("Arvix в Telegram запущен, владелец %s", tg["owner_id"])
     last_tick = 0.0
     while not stopping.is_set():
         hub.run_pending(bot, timeout=1.0)

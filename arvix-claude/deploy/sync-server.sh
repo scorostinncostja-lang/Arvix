@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Залить Арвикса на сервер и установить/обновить его там.
+# Залить Arvix на сервер и установить/обновить его там.
 #
 #   deploy/sync-server.sh arvix@HOST            # обновление: код → install.sh → перезапуск бота
 #   deploy/sync-server.sh arvix@HOST --init     # первый раз: плюс конфиг сервера из ноутбучного

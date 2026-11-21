@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Разовая подготовка VPS под Арвикса. Запускается под root на сервере:
+# Разовая подготовка VPS под Arvix. Запускается под root на сервере:
 #
 #   ssh root@HOST 'PUBKEY="'"$(cat ~/.ssh/id_ed25519.pub)"'" bash -s' < arvix-claude/deploy/server-setup.sh
 #
 # Что делает: пользователь arvix с linger (его службы живут без входа), зависимости
-# (python3, rsync, sqlite3, syncthing, ffmpeg — видео Арвиксу), ключ ноутбука в authorized_keys, Claude CLI под arvix.
+# (python3, rsync, sqlite3, syncthing, ffmpeg — видео Arvix), ключ ноутбука в authorized_keys, Claude CLI под arvix.
 # Дальше с ноутбука: bash arvix-claude/deploy/sync-server.sh arvix@HOST --init
 set -euo pipefail
 USER_NAME="${ARVIX_USER:-arvix}"

@@ -18,10 +18,10 @@ from arvix.config import PACKAGE_DIR
 from arvix.context import build_context
 
 CONSTITUTION_DIR = PACKAGE_DIR / "constitution"
-SECTIONS = ("identity", "mission", "voice", "partner", "autonomy_rule", "decision_rule", "critical", "honesty", "boundaries",
-            "safety_override")
-# Разделы, которые выпадают в мягком режиме: цена «в цифрах» и разбор чужих ошибок в 🟥 неуместны.
-GENTLE_SKIP = frozenset({"decision_rule", "critical"})
+SECTIONS = ("identity", "mission", "voice", "depth", "partner", "mentor_mind", "autonomy_rule", "decision_rule", "critical",
+            "honesty", "boundaries", "safety_override")
+# Разделы, которые выпадают в мягком режиме: цена «в цифрах», разбор чужих ошибок и мнение о пропусках (D59) в 🟥 неуместны.
+GENTLE_SKIP = frozenset({"decision_rule", "critical", "mentor_mind"})
 TONE_FILES = {"normal": "tone_norm", "pressure": "tone_pressure", "yellow": "tone_yellow", "red": "tone_red"}
 HARSH_TONES = ("tone_norm", "tone_pressure", "tone_yellow")
 EMERGENCY = "112"
@@ -80,7 +80,7 @@ def fewshot(*, gentle: bool, only: str = "all") -> str:
         + (f"\nДЕЙСТВИЯ: {e['actions']}" if e.get("actions") else "")
         for e in picked
     )
-    return f"<examples>\nТак звучит Арвикс. Подражай голосу, а не словам.\n\n{body}\n</examples>"
+    return f"<examples>\nТак звучит Arvix. Подражай голосу, а не словам.\n\n{body}\n</examples>"
 
 
 def voice_prompt(core: Any, *, channel: str = "telegram", message: str = "", history: list[str] | None = None,
@@ -120,7 +120,7 @@ def hook_context(core: Any) -> str:
     st = core.state
     gentle = is_gentle(st.mode, st.mentor_enabled)
     parts = [
-        "Состояние Арвикса на начало сессии. Тон-блок выбран Burnout Guard — следуй ему.",
+        "Состояние Arvix на начало сессии. Тон-блок выбран Burnout Guard — следуй ему.",
         address_block(st.profile),
         tone_block(st.mode, st.mentor_enabled),
     ]
@@ -133,7 +133,7 @@ def hook_context(core: Any) -> str:
 
 
 def first_session_block(core: Any) -> str:
-    """Первая встреча: знакомство не начато и распорядка нет — Арвикс сам начинает
+    """Первая встреча: знакомство не начато и распорядка нет — Arvix сам начинает
     интервью, а не ждёт команды. Когда есть хоть что-то, блок не выдаётся."""
     st = core.state
     status = core.interview_status()
@@ -150,7 +150,7 @@ def first_session_block(core: Any) -> str:
 STYLE_TOOLS = """<tools_rule>
 Ты работаешь через MCP-инструменты сервера arvix. Долг, режим и нагрузку решает код —
 ты их только читаешь из инструментов и никогда не вычисляешь и не выдумываешь сам.
-Очков, здоровья, уровней и серий у Арвикса нет — не упоминай их.
+Очков, здоровья, уровней и серий у Arvix нет — не упоминай их.
 В начале разговора и после любых изменений смотри состояние инструментом context.
 Отчёт о задаче → task (complete/fail), сон → log, факт о человеке → profile (remember),
 просьба изменить план → сначала check_request, потом решение на цифрах.
@@ -173,7 +173,7 @@ def render_output_style() -> str:
     header = (
         "---\n"
         "name: Arvix\n"
-        "description: Арвикс — личный ментор. План, отчёты, разбор, сократовский режим. Голос, а не ассистент.\n"
+        "description: Arvix — личный ментор. План, отчёты, разбор, сократовский режим. Голос, а не ассистент.\n"
         "keep-coding-instructions: false\n"
         "---\n\n"
         "<!-- Файл генерируется: python3 scripts/build_assets.py. Правь arvix/constitution/*. -->\n\n"

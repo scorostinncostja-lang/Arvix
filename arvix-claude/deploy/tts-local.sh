@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Голос Арвикса (D34): Piper — локальный синтез речи с русским голосом. Бесплатно, без ключа,
+# Голос Arvix (D34): Piper — локальный синтез речи с русским голосом. Бесплатно, без ключа,
 # текст никуда не уходит. Запускать на машине, где работает бот (сервер или ноутбук):
 #
 #   bash ~/.local/share/arvix/app/deploy/tts-local.sh [irina|dmitri|denis|ruslan]
@@ -35,7 +35,7 @@ if [[ ! -f "$MODEL" ]]; then
 fi
 
 echo "Проверка:"
-echo "Привет. Я Арвикс, и теперь я умею говорить." | "$DIR/piper/piper" --model "$MODEL" --output_file "$DIR/test.wav" >/dev/null 2>&1
+echo "Привет. Я Arvix, и теперь я умею говорить." | "$DIR/piper/piper" --model "$MODEL" --output_file "$DIR/test.wav" >/dev/null 2>&1
 [[ -s "$DIR/test.wav" ]] && echo "Piper работает: $DIR/test.wav" || { echo "Piper не создал звук"; exit 1; }
 
 COMMAND="$DIR/piper/piper --model $MODEL --length_scale 0.85 --output_file {out}"  # 0.85 — на 15 % быстрее: по умолчанию Piper тянет слова
@@ -52,7 +52,7 @@ print(f"Записал [tts] в {path}")
 PY
 if systemctl --user is-active --quiet arvix-telegram 2>/dev/null; then
   systemctl --user restart arvix-telegram
-  echo "Готово: голос включён, бот перезапущен. Проверь — отправь Арвиксу голосовое."
+  echo "Готово: голос включён, бот перезапущен. Проверь — отправь Arvix голосовое."
 else
   echo "Готово: голос настроен. Бот на этой машине не запущен — включится при его старте."
 fi

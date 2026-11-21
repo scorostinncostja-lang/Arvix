@@ -1,9 +1,9 @@
 /* Оболочка приложения в кэше — открывается мгновенно и без сети; данные (/api) — всегда из сети.
- * «Поделиться → Арвикс» (share_target в манифесте): файлы кладутся в кэш SHARE, страница
+ * «Поделиться → Arvix» (share_target в манифесте): файлы кладутся в кэш SHARE, страница
  * забирает их и отправляет с ключом — у service worker ключа нет и не должно быть. */
-const CACHE = "arvix-v13";  // D56: список проектов без пустых целей, нить сессии обучения; старую оболочку — из кэша
+const CACHE = "arvix-v14";  // D57: разметка сообщений и шрифт Inter; старую оболочку — из кэша
 const SHARE = "arvix-share";
-const SHELL = ["/", "/index.html", "/app.css", "/app.js", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
+const SHELL = ["/", "/index.html", "/app.css", "/app.js", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

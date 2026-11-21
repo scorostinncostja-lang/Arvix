@@ -97,7 +97,7 @@ def close_day(core: Any, d: date) -> dict[str, Any] | None:
         hold = rules.frozen(mode=st.mode, mentor_enabled=st.mentor_enabled, silent=day.silent,
                             ignore_days=st.ignore_streak(d), reason=bool(day.reason))
 
-        # Неотмеченные задачи. Если Арвикс ни разу не спросил (бот выключен, работа только
+        # Неотмеченные задачи. Если Arvix ни разу не спросил (бот выключен, работа только
         # в Claude Code), — без долга: спрашивать за вопрос, которого не было, нечестно. В 🟥,
         # тихий день, при 3+ днях тишины и заявленной причине («заболел») долга тоже нет.
         for task in [t for t in tasks if t.is_open]:
