@@ -98,11 +98,11 @@ if (( CONFIGURED )); then
   VERSION="$("$PYTHON" -c "import sys; sys.path.insert(0, '$APP'); import arvix; print(arvix.__version__)")"
   REMOTE="$(sed -n '/^\[remote\]/,/^\[/{s/^host *= *"\(.*\)"/\1/p}' "$CONF")"
   if [[ "$BOT" == restarted ]]; then
-    step "Готово: Арвикс $VERSION, бот перезапущен на новой версии"
+    step "Готово: Arvix $VERSION, бот перезапущен на новой версии"
   elif [[ -n "$REMOTE" ]]; then
-    step "Готово: Арвикс $VERSION на этой машине. Бот и журнал — на сервере; обнови его: deploy/sync-server.sh $REMOTE"
+    step "Готово: Arvix $VERSION на этой машине. Бот и журнал — на сервере; обнови его: deploy/sync-server.sh $REMOTE"
   else
-    step "Готово: Арвикс $VERSION. Бот здесь не запущен — systemctl --user enable --now arvix-telegram"
+    step "Готово: Arvix $VERSION. Бот здесь не запущен — systemctl --user enable --now arvix-telegram"
   fi
   exit 0
 fi
@@ -113,7 +113,7 @@ cat <<'EOF'
   1. arvix setup                                   хранилище, часовой пояс, Telegram-бот
      (без вопросов: arvix setup --vault "…" --tz Europe/Moscow --no-telegram --yes)
   2. systemctl --user enable --now arvix-telegram  запустить бота
-  3. cd ~/Arvix && claude                          Арвикс в Claude Code: сам начнёт знакомство
+  3. cd ~/Arvix && claude                          Arvix в Claude Code: сам начнёт знакомство
 Проверка: arvix doctor · логи бота: journalctl --user -u arvix-telegram -f
 Сервер: deploy/server-setup.sh (на VPS под root), затем deploy/sync-server.sh user@host --init
 EOF

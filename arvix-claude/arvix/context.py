@@ -222,6 +222,10 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
     if facts:
         lines.append("ПАМЯТЬ: " + " · ".join(facts))
 
+    from arvix import initiative
+
+    if found := initiative.patterns(core, today):  # считает код (D59): голова видит, что повторяется, и в разговоре
+        lines.append("ПАТТЕРНЫ (повторяется — назови это, если к месту):\n" + "\n".join("  " + initiative.pattern_line(s) for s in found[:3]))
     issues = core.audit()
     if issues:  # код нашёл несостыковку — модель обязана её поднять (constitution/critical.md)
         lines.append("ПРОВЕРИТЬ:\n" + "\n".join(f"  ⚠️ {i}" for i in issues))

@@ -18,8 +18,8 @@ def export_all(core: Any, days: int = 60) -> list[str]:
     vault = core.vault
     written = [
         core.write_block(vault.place("profile"), "profile", render_profile(core),
-                         create_with="# Профиль Арвикса\n\nСвои заметки пиши вне блока — Арвикс их не трогает.\n")["path"],
-        core.write_block(vault.place("system", "Выводы"), "insights", render_insights(core), create_with="# Выводы Арвикса\n")["path"],
+                         create_with="# Профиль Arvix\n\nСвои заметки пиши вне блока — Arvix их не трогает.\n")["path"],
+        core.write_block(vault.place("system", "Выводы"), "insights", render_insights(core), create_with="# Выводы Arvix\n")["path"],
     ]
     today = core.today()
     for offset in range(days, -1, -1):
@@ -30,7 +30,7 @@ def export_all(core: Any, days: int = 60) -> list[str]:
                          "entity_id": ev.entity_id, "payload": ev.payload, "source": ev.source}, ensure_ascii=False)
              for ev in core.store.read(0)]
     written.append(core.write_block(vault.place("system", "Журнал событий"), "events", "```jsonl\n" + "\n".join(lines) + "\n```",
-                                    create_with="# Журнал событий Арвикса\n\nПолная история, по строке на событие.\n")["path"])
+                                    create_with="# Журнал событий Arvix\n\nПолная история, по строке на событие.\n")["path"])
     return written
 
 

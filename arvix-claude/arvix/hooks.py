@@ -1,8 +1,8 @@
 """Хуки Claude Code.
 
-SessionStart подкладывает состояние Арвикса и тон-блок текущего режима,
+SessionStart подкладывает состояние Arvix и тон-блок текущего режима,
 UserPromptSubmit — строку «сейчас / режим / день», а при смене режима посреди
-сессии — новый тон-блок. Хуки срабатывают только в доме Арвикса (маркер
+сессии — новый тон-блок. Хуки срабатывают только в доме Arvix (маркер
 .arvix-home): в обычных кодинг-сессиях они выходят до импорта ядра и не тратят
 ни токенов, ни заметного времени.
 """
@@ -32,7 +32,7 @@ def prompt_line(core) -> str:
     st = core.state
     now = core.now()
     mode = core.effective_mode()
-    line = f"Арвикс · сейчас {WEEKDAYS[now.weekday()]} {now:%d.%m %H:%M} · режим {rules.MODE_LABELS[mode]}"
+    line = f"Arvix · сейчас {WEEKDAYS[now.weekday()]} {now:%d.%m %H:%M} · режим {rules.MODE_LABELS[mode]}"
     if mode == "red":
         return line + " · без метрик и задач, человеческий тон"
     tasks = st.tasks_on(now.date())

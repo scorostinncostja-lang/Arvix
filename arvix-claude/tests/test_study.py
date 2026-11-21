@@ -1,4 +1,4 @@
-"""Раздел «Обучение» (D55): окна учебной сессии, тесты кодом, Арвикс видит сессию, очередь тем — общая с проектами."""
+"""Раздел «Обучение» (D55): окна учебной сессии, тесты кодом, Arvix видит сессию, очередь тем — общая с проектами."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ PLAN = {
     "topic": "Закон Ома для участка цепи", "why": "ОГЭ физика №8", "roadmap_node": "Постоянный ток (3/12)",
     "plan": [{"from_min": 0, "to_min": 5, "step": "Вспомни с пустого листа", "tool": "лист"},
              {"from_min": 5, "to_min": 40, "step": "Перышкин §44, задачи", "tool": "учебник"},
-             {"from_min": 40, "to_min": 45, "step": "Проверка", "tool": "Арвикс"}],
+             {"from_min": 40, "to_min": 45, "step": "Проверка", "tool": "Arvix"}],
     "sources": ["Перышкин, 8 класс, §44"],
     "check": [{"q": "I при U=12 В и R=4 Ом?", "a": "3 А"}, {"q": "Как связаны I, U, R?", "a": "I=U/R"}, {"q": "R↑ — I?", "a": "уменьшится"}],
     "note_title": "Закон Ома",
@@ -97,7 +97,7 @@ class SessionJournalTest(ArvixCase):
         result = study.answer_quiz(self.core, quiz["id"], [1, 0, "мешает току"], task_ref=self.task.id)
         self.assertEqual(result, {"results": [True, False, None], "score_pct": 50})
         with self.assertRaises(ArvixError):
-            study.answer_quiz(self.core, quiz["id"], [1, 1, ""], task_ref=self.task.id)  # второй раз — новый тест у Арвикса
+            study.answer_quiz(self.core, quiz["id"], [1, 1, ""], task_ref=self.task.id)  # второй раз — новый тест у Arvix
         shown = study.public_panel(self.core.state.study[self.task.id]["panels"][0], self.core.state.study[self.task.id]["answers"][quiz["id"]])
         self.assertEqual(shown["questions"][1]["answer"], 1)
         self.assertFalse(shown["questions"][1]["ok"])
@@ -205,7 +205,7 @@ class StudyBotTest(BotCase):
         system = self.brain.calls[-1]["system"]
         self.assertIn("<study>", system)
         self.assertIn("ошибка: «I = ?» → U·R", system)
-        self.assertIn("Сопротивление мешает току", system)  # заметку человека Арвикс читает
+        self.assertIn("Сопротивление мешает току", system)  # заметку человека Arvix читает
         self.assertIn("окно урока: доска «Парабола»", self.api.last)
         self.assertEqual([p["type"] for p in self.core.state.study[self.phys.id]["panels"]], ["quiz", "board"])
         # Проверка в конце: тесты сессии — в оценке
@@ -385,7 +385,7 @@ class StudyServerTest(BotCase):
         status, r = self.call(f"/api/study/{task_id}/panel", {"panel": {"type": "video", "url": "https://youtu.be/dQw4w9WgXcQ"}})
         self.assertEqual(r["panel"]["by"], "me")
         status, r = self.call(f"/api/study/{task_id}/panel", {"panel": QUIZ})
-        self.assertEqual(status, 400)  # тест себе не пишут — его ставит Арвикс
+        self.assertEqual(status, 400)  # тест себе не пишут — его ставит Arvix
         status, again = self.call("/api/study/open", {"item": item})
         self.assertEqual(again["task_id"], task_id)
         self.assertFalse(again["queued"])  # план уже есть — голову второй раз не зовём

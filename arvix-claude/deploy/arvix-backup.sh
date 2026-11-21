@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Бэкап сервера на ноутбук (таймер arvix-backup.timer — каждый час). Сервер арендованный:
-# его могут отключить или заблокировать, поэтому всё, без чего Арвикса не поднять заново, лежит и здесь.
+# его могут отключить или заблокировать, поэтому всё, без чего Arvix не поднять заново, лежит и здесь.
 #
 #   1. Журнал: на сервере sqlite3 .backup (целостный снимок при работающем боте) → integrity_check →
 #      ~/.local/share/arvix/backups/arvix-ГГГГ-ММ-ДД.db. За день файл обновляется каждый час,
@@ -39,7 +39,7 @@ warn_stale() {
   touch "$stamp"
   local msg="Сервер $HOST не отвечает. Последний бэкап журнала — $age ч назад. Переезд: deploy/restore-server.sh"
   echo "⚠ $msg" >&2
-  command -v notify-send >/dev/null && notify-send -u critical -a Arvix "Арвикс: нет свежего бэкапа" "$msg" 2>/dev/null || true
+  command -v notify-send >/dev/null && notify-send -u critical -a Arvix "Arvix: нет свежего бэкапа" "$msg" 2>/dev/null || true
 }
 
 fail() { rm -f "$OUT.part" "$DIR/server-config.toml.part"; warn_stale; exit 1; }

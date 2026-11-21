@@ -1,7 +1,7 @@
 """Раздел «Обучение» (06-LEARNING §10, D55): учебная сессия = урок §8 + окна.
 
 Своей модели обучения нет. Сессия — это учебная задача (сфера learning) и её урок (`lesson.py`,
-`Bot.prepare_lesson`): план по минутам, таймер, проверка. Сверху — окна, которые ставит Арвикс
+`Bot.prepare_lesson`): план по минутам, таймер, проверка. Сверху — окна, которые ставит Arvix
 (в плане урока или действием `study_panel` из чата сессии) или человек (видео по ссылке):
 
   quiz     — тест: вопросы с вариантами проверяет код сразу; открытые — голова на проверке блока
@@ -9,11 +9,11 @@
   diagram  — схема: узлы и стрелки
   video    — видео: только настоящая ссылка YouTube / RuTube / Vimeo; без ссылки — поиск по запросу
   text     — объяснение «у доски» порцией на 2–3 минуты
-  note     — заметка из хранилища (обычно каркас конспекта урока): человек пишет, Арвикс читает
+  note     — заметка из хранилища (обычно каркас конспекта урока): человек пишет, Arvix читает
   sources  — источники, первоисточник первым
 
 Окно и ответ на тест — события журнала (`study_panel`, `study_answer`), состояние — свёртка
-(`State.study`). Арвикс видит сессию блоком в промпте (`context_block`): окна, ответы, текст заметки,
+(`State.study`). Arvix видит сессию блоком в промпте (`context_block`): окна, ответы, текст заметки,
 сколько прошло. Эталоны ответов в приложение не уходят, пока человек не ответил (`public_panel`).
 
 Темы — общая очередь `learn_item_set` (projects.py): тема из проекта, теория или практика, видна и в
@@ -305,7 +305,7 @@ def answer_quiz(core: Any, panel_id: str, answers: list[Any], *, task_ref: Any =
     if panel is None:
         raise ArvixError("Такого теста в сессии нет")
     if panel_id in session.get("answers", {}):
-        raise ArvixError("На этот тест уже ответил — попроси Арвикса дать новый")
+        raise ArvixError("На этот тест уже ответил — попроси Arvix дать новый")
     questions = panel["questions"]
     clean: list[Any] = []
     for i, q in enumerate(questions):
@@ -323,7 +323,7 @@ def answer_quiz(core: Any, panel_id: str, answers: list[Any], *, task_ref: Any =
     return {"results": results, "score_pct": score}
 
 
-# --- что видит приложение и что видит Арвикс -------------------------------------------------------
+# --- что видит приложение и что видит Arvix -------------------------------------------------------
 
 def public_panel(panel: dict[str, Any], answer: dict[str, Any] | None) -> dict[str, Any]:
     """Окно для приложения: эталоны теста — только после ответа (иначе тест превращается в чтение ответов)."""
@@ -341,7 +341,7 @@ def public_panel(panel: dict[str, Any], answer: dict[str, Any] | None) -> dict[s
 
 
 def note_excerpt(core: Any, path: str | None, limit: int = 1500) -> str:
-    """Начало заметки, которую человек пишет на сессии: Арвикс видит, что уже написано своими словами."""
+    """Начало заметки, которую человек пишет на сессии: Arvix видит, что уже написано своими словами."""
     if not path or not core.cfg.vault:
         return ""
     from arvix.vault import VaultError
@@ -355,7 +355,7 @@ def note_excerpt(core: Any, path: str | None, limit: int = 1500) -> str:
 
 
 def context_block(core: Any, task_id: str, note_path: str | None = None) -> str:
-    """Сессия глазами Арвикса — в <lesson>: какие окна открыты, что человек ответил, что написал в заметке.
+    """Сессия глазами Arvix — в <lesson>: какие окна открыты, что человек ответил, что написал в заметке.
     Так он может «видеть и управлять»: добавить тест, если ошибки, скрыть лишнее, сослаться на ответ."""
     session = core.state.study.get(task_id) or {}
     lines = []

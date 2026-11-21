@@ -1,4 +1,4 @@
-"""D41: игры нет. Ни XP, ни HP, ни уровней, ни сезонов, ни серии — ни в одном лице Арвикса.
+"""D41: игры нет. Ни XP, ни HP, ни уровней, ни сезонов, ни серии — ни в одном лице Arvix.
 
 Владелец 18.11: «убрать геймификацию полностью (HP, EXP, статус и т. п.), которые могут ошибаться».
 Старые игровые события остаются в журнале (он только дополняется), но никуда не выводятся."""
@@ -64,7 +64,7 @@ class NoGameTest(BotCase):
 
     def test_model_is_told_there_is_no_game(self) -> None:
         system, _ = voice_prompt(self.core, message="сколько у меня XP?")
-        self.assertIn("Очков, здоровья, уровней и серий у Арвикса нет", " ".join(system.split()))
+        self.assertIn("Очков, здоровья, уровней и серий у Arvix нет", " ".join(system.split()))
 
     def test_cli_status_is_facts(self) -> None:
         from arvix import cli

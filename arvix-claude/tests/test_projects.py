@@ -236,7 +236,7 @@ class ProjectSurfacesTest(ProjectCase):
         self.assertEqual((p["title"], p["status"]), ("Хочу сделать бота, который напоминает про домашку", "active"))
         self.assertIn("научиться Python", p["why"])
         self.assertFalse((self.vault / "01_Projects").exists())  # черновик — папки ещё нет
-        projects.set_project(self.core, "Бот-напоминалка", project_id=pid)  # Арвикс дал имя
+        projects.set_project(self.core, "Бот-напоминалка", project_id=pid)  # Arvix дал имя
         p = self.core.state.projects[pid]
         self.assertEqual(p["folder"], "01_Projects/Бот-напоминалка")
         self.assertTrue((self.vault / "01_Projects/Бот-напоминалка/Бот-напоминалка.md").exists())
@@ -276,7 +276,7 @@ class ProjectSurfacesTest(ProjectCase):
 
 
 class ProjectStallTelegramTest(ProjectCase):
-    """Застой: Арвикс пишет сам, раз в неделю на проект, кнопки ставят блок или паузу."""
+    """Застой: Arvix пишет сам, раз в неделю на проект, кнопки ставят блок или паузу."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -379,7 +379,7 @@ class FixedBrain:
 
 
 class RoadmapGenerationTest(ProjectCase):
-    """D56: Арвикс предлагает ОДИН следующий проект — или говорит, что проект не нужен. Раньше цепочка
+    """D56: Arvix предлагает ОДИН следующий проект — или говорит, что проект не нужен. Раньше цепочка
     из 3–6 проектов на цель за два нажатия дала девять «отложенных», половина из них — не проекты."""
 
     def goal(self, title="Стать бэкенд-разработчиком"):

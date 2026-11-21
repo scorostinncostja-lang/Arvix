@@ -63,6 +63,7 @@ class Scheduler:
                 self.reminders(now)
                 self.midday(now)
                 self.projects(now)
+                self.initiative(now)
                 self.curiosity(now)
             if full or back:
                 self.bedtime(now, gentle=red)
@@ -74,8 +75,24 @@ class Scheduler:
     def _once(self, key: str, when: datetime, now: datetime, window: timedelta) -> bool:
         return when <= now < when + window and not self.core.sent(key)
 
+    def initiative(self, now: datetime) -> None:
+        """Повод написать первым (D59): блок прошёл молча, тема снова уезжает. Повод и гигиену проверяет код
+        (arvix/initiative.py), слова и решение «стоит ли» — голова. Квоты нет, есть интервал GAP_MIN."""
+        from arvix import initiative
+
+        if initiative.blocked(self.core, now):
+            return
+        keys, lines = initiative.reasons(self.core, now)
+        if not keys:
+            return
+        initiative.remember(self.core, now, keys)  # до вызова головы: упавший вызов не повторяется каждые 5 с
+        try:
+            self.bot.send_initiative(lines)
+        except TelegramError as exc:
+            log.warning("инициатива не отправлена: %s", exc)
+
     def curiosity(self, now: datetime) -> None:
-        """Раз в день Арвикс пишет первым (bot.send_curiosity). Не во время разговора и не
+        """Раз в день Arvix пишет первым (bot.send_curiosity). Не во время разговора и не
         во время фокуса; одна попытка в день — молчащая голова не дёргается каждые 20 с."""
         when = self._when("curiosity")
         key = f"curiosity:{now.date().isoformat()}"

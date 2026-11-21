@@ -1,4 +1,4 @@
-/* Арвикс — приложение: Mini App в Telegram, PWA на телефоне. Без сборки и зависимостей.
+/* Arvix — приложение: Mini App в Telegram, PWA на телефоне. Без сборки и зависимостей.
  * Данные — только через /api (arvix/web/server.py). Живые обновления — поток /api/stream. */
 "use strict";
 
@@ -9,7 +9,7 @@ const TOKEN_KEY = "arvix_token";
 const state = { tab: "today", data: null, messages: [], history: null, notesDir: "", note: null, thinking: "", seen: 0, version: "" };
 
 // --- вход --------------------------------------------------------------------------------------
-/* Привязка телефона: #p=<одноразовый код> из ссылки Арвикса (живёт 15 минут, срабатывает
+/* Привязка телефона: #p=<одноразовый код> из ссылки Arvix (живёт 15 минут, срабатывает
  * один раз) → ключ приложения. Старые ссылки #t=<ключ> тоже принимаются. */
 async function pairFromHash() {
   const t = location.hash.match(/[#&]t=([\w-]+)/), p = location.hash.match(/[#&]p=([\w-]+)/);
@@ -32,7 +32,7 @@ async function pairFromHash() {
 let installPrompt = null;
 const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
 window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; if (state.tab === "today") renderToday(); });
-window.addEventListener("appinstalled", () => { installPrompt = null; toast("Арвикс установлен — ищи иконку на экране"); });
+window.addEventListener("appinstalled", () => { installPrompt = null; toast("Arvix установлен — ищи иконку на экране"); });
 async function installApp() {
   if (!installPrompt) { toast("Меню браузера ⋮ → «Установить приложение»"); return; }
   installPrompt.prompt();
@@ -218,8 +218,9 @@ function render() {
 
 function renderLogin() {
   view.innerHTML = `<div class="login">
-    <h1>Арвикс</h1>
-    <p class="muted">Откройте приложение из Telegram — кнопка «Арвикс» слева от поля ввода в чате с ботом.</p>
+    <img src="icon.svg" alt="">
+    <h1>Arvix</h1>
+    <p class="muted">Откройте приложение из Telegram — кнопка «Arvix» слева от поля ввода в чате с ботом.</p>
     <p class="muted small">Чтобы установить на телефон: в Telegram откройте приложение → «Прогресс» → «Установить на телефон».</p>
   </div>`;
 }
@@ -230,7 +231,7 @@ function renderToday() {
   if (!d) { view.innerHTML = `<div class="empty">Загружаю…</div>`; return; }
   let html = `<div class="today-grid"><div class="today-side">`;
   if (d.gentle) {
-    html += `<div class="card note-card">${esc(d.note)}</div>`;
+    html += `<div class="card note-card">${richText(d.note)}</div>`;
   } else if (d.stats) {
     const s = d.stats;
     // Только факты дня (D41): задачи, глубокая работа, сон. Ни очков, ни здоровья, ни уровня.
@@ -243,7 +244,7 @@ function renderToday() {
     </div>`;
   }
   if (installPrompt && !TG && !standalone()) {
-    html += `<div class="card install-card"><div><b>Арвикс как приложение</b><div class="muted small">Иконка на экране, своё окно, без адресной строки</div></div>
+    html += `<div class="card install-card"><div><b>Arvix как приложение</b><div class="muted small">Иконка на экране, своё окно, без адресной строки</div></div>
       <button class="pill primary" id="install-now">Установить</button></div>`;
   }
   html += focusCard(d);
@@ -260,7 +261,7 @@ function renderToday() {
   }
   html += `<div class="section-title${d.yesterday && d.yesterday.length ? "" : " first"}"><span>План дня</span><span>${d.day_type ? esc(d.day_type) : ""}</span></div>`;
   html += items.length ? items.map((t) => (t.kind === "busy" ? busyRow(t) : taskRow(t))).join("") :
-    `<div class="empty">На сегодня задач нет.<br><span class="small">Нажми «+»${isWide() ? " (Alt+N)" : ""} или напиши Арвиксу: «добавь физику в 18:00 на час».</span></div>`;
+    `<div class="empty">На сегодня задач нет.<br><span class="small">Нажми «+»${isWide() ? " (Alt+N)" : ""} или напиши Arvix: «добавь физику в 18:00 на час».</span></div>`;
   if (d.debts && d.debts.length) {
     html += `<div class="section-title"><span>Долг</span><span>${d.debts.length}</span></div>` + d.debts.map((t) => taskRow(t, true)).join("");
   }
@@ -496,7 +497,7 @@ function openAddSheet() {
     <div class="field"><label>Важность</label>${seg("importance", [1, 2, 3, 4, 5], 3)}</div>
     <div class="field"><label>Глубокая работа</label>${seg("deep_work", ["0", "1"], "0", (v) => (v === "1" ? "да" : "нет"))}</div>
     <button class="btn primary" id="f-save">Добавить</button>
-    <p class="muted small">Без времени — оставь поле пустым, Арвикс не станет напоминать. Можно и словами в чате: «добавь физику на завтра в 18:00».</p>`,
+    <p class="muted small">Без времени — оставь поле пустым, Arvix не станет напоминать. Можно и словами в чате: «добавь физику на завтра в 18:00».</p>`,
   (root) => {
     bindSeg(root, form);
     setTimeout(() => $("#f-title").focus(), 50);
@@ -606,9 +607,9 @@ function openReportSheet(t, after = null) {
 // --- Чат ---------------------------------------------------------------------------------------
 /* Как в Telegram (D52): ответ на сообщение — свайп влево по пузырю, двойной клик или меню (долгое нажатие,
  * правый клик); цитата в пузыре ведёт к оригиналу; лента не прыгает вниз, пока читаешь старое — для этого ↓.
- * Арвикс тоже отвечает цитатой, когда без неё непонятно, на что ответ, — это решает сервер. */
+ * Arvix тоже отвечает цитатой, когда без неё непонятно, на что ответ, — это решает сервер. */
 const chatUI = { reply: null, stick: true, unread: 0, lastId: 0 };
-const WHO = { me: "Ты", arvix: "Арвикс" };
+const WHO = { me: "Ты", arvix: "Arvix" };
 const nearBottom = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 160;
 const hhmm = (d) => d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 
@@ -621,17 +622,18 @@ function dayLabel(d) {
 
 function quoteHtml(q) {
   if (!q) return "";
-  return `<button type="button" class="quote ${q.who === "me" ? "q-me" : "q-arvix"}" data-goto="${q.id}"><b>${WHO[q.who] || "Арвикс"}</b><span>${esc(q.text || "…")}</span></button>`;
+  return `<button type="button" class="quote ${q.who === "me" ? "q-me" : "q-arvix"}" data-goto="${q.id}"><b>${WHO[q.who] || "Arvix"}</b><span>${esc(plainText(q.text) || "…")}</span></button>`;
 }
 
 function msgHtml(m, prev, next, answered) {
   const at = new Date(m.at);
   const same = (o) => o && o.who === m.who && Math.abs(new Date(o.at) - at) < 5 * 60e3 && new Date(o.at).toDateString() === at.toDateString();
   const btns = (m.buttons || []).flat().filter((b) => b && b[1] && !String(b[1]).startsWith("app:"));
-  // ✓ — дошло, ✓✓ — Арвикс ответил после; часы — ещё в пути
+  // ✓ — дошло, ✓✓ — Arvix ответил после; часы — ещё в пути
   const ticks = m.who !== "me" ? "" : !m.id ? `<i class="tick wait">${icon("clock")}</i>` : `<i class="tick${answered ? " read" : ""}">${icon(answered ? "checks" : "check")}</i>`;
   const cls = ["msg", m.who === "me" ? "me" : "", same(prev) ? "cont" : "", same(next) ? "" : "tail"].filter(Boolean).join(" ");
-  return `<div class="${cls}" data-id="${m.id || ""}"><span class="swipe-ic">${icon("reply")}</span>${quoteHtml(m.reply_to)}<div class="mtext">${linkify(esc(m.text))}</div>${btns.length ? `<div class="btns">${btns.map((b) =>
+  const ava = m.who !== "me" && !same(next) ? `<img class="m-ava" src="icon.svg" alt="">` : "";  // аватар — у последнего в группе, как в мессенджере
+  return `<div class="${cls}" data-id="${m.id || ""}">${ava}<span class="swipe-ic">${icon("reply")}</span>${quoteHtml(m.reply_to)}<div class="mtext">${richText(m.text)}</div>${btns.length ? `<div class="btns">${btns.map((b) =>
     String(b[1]).startsWith("url:") ? `<a class="pill" href="${esc(String(b[1]).slice(4))}" target="_blank" rel="noopener">${esc(b[0])}</a>` :
     `<button data-btn="${esc(b[1])}">${esc(b[0])}</button>`).join("")}</div>` : ""}<div class="mfoot">${m.reaction ? `<button type="button" class="react-chip" data-unreact="${m.id}" aria-label="Убрать реакцию ${esc(m.reaction)}">${esc(m.reaction)}</button>` : ""}<time>${m.channel && m.channel !== "telegram" && m.channel !== "web" ? esc(m.channel) + " · " : ""}${hhmm(at)}${ticks}</time></div></div>`;
 }
@@ -649,7 +651,7 @@ function renderChat(opts = {}) {
     const prev = msgs[i - 1], next = msgs[i + 1];
     html += msgHtml(m, prev && dayLabel(new Date(prev.at)) === day ? prev : null, next && dayLabel(new Date(next.at)) === day ? next : null, i < lastArvix);
   });
-  if (state.thinking) html += `<div class="typing" title="${esc(state.thinking)}"><i></i><i></i><i></i></div>`;
+  if (state.thinking) html += `<div class="typing" title="${esc(state.thinking)}"><img class="m-ava" src="icon.svg" alt=""><i></i><i></i><i></i></div>`;
   if (!msgs.length && !state.thinking) html += `<div class="empty">Напиши или скажи что угодно — как в Telegram.</div>`;
   html += `</div>`;
   view.innerHTML = html;
@@ -659,7 +661,7 @@ function renderChat(opts = {}) {
     c.innerHTML = `<div class="reply-bar hidden" id="reply-bar"></div>
       <button class="round ghost" id="attach" aria-label="Прислать файл">${icon("clip")}</button>
       <input type="file" id="file" multiple hidden>
-      <textarea id="msg" rows="1" placeholder="Сообщение Арвиксу"></textarea>
+      <textarea id="msg" rows="1" placeholder="Сообщение Arvix"></textarea>
       <button class="round send" id="send" aria-label="Голосовое сообщение" data-mode="mic">${icon("mic")}</button>
       <button class="to-bottom hidden" id="to-bottom" aria-label="Вниз, к новым">${icon("chevronDown")}<b id="to-bottom-n"></b></button>`;
     document.body.appendChild(c);
@@ -668,7 +670,7 @@ function renderChat(opts = {}) {
     ta.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey && !("ontouchstart" in window)) { e.preventDefault(); sendMessage(); }
       else if (e.key === "Escape" && chatUI.reply) { e.preventDefault(); e.stopPropagation(); setReply(null); }
-      else if (e.key === "ArrowUp" && (e.ctrlKey || e.metaKey) && !ta.value) {  // Ctrl+↑ — ответить на последнее Арвикса
+      else if (e.key === "ArrowUp" && (e.ctrlKey || e.metaKey) && !ta.value) {  // Ctrl+↑ — ответить на последнее Arvix
         const last = [...state.messages].reverse().find((m) => m.who === "arvix" && m.id);
         if (last) { e.preventDefault(); setReply(last); }
       }
@@ -684,7 +686,7 @@ function renderChat(opts = {}) {
     try { await api("button", { json: { data: b.dataset.btn } }); state.thinking = "думаю"; renderChat({ bottom: true }); } catch (err) { toast(err.message); }
   }));
   bindChat($("#chat"));
-  // Новое от Арвикса, пока читаешь старое, — счётчик на ↓, а не прыжок вниз
+  // Новое от Arvix, пока читаешь старое, — счётчик на ↓, а не прыжок вниз
   const newest = msgs.reduce((a, m) => Math.max(a, m.id || 0), 0);
   if (!stick && newest > chatUI.lastId) chatUI.unread += msgs.filter((m) => m.id > chatUI.lastId && m.who === "arvix").length;
   chatUI.lastId = Math.max(chatUI.lastId, newest);
@@ -695,7 +697,7 @@ function renderChat(opts = {}) {
 
 function chatHeader() {
   if (state.tab !== "chat") return;
-  $("#top-day").textContent = "Арвикс";
+  $("#top-day").textContent = "Arvix";
   const busy = state.thinking;
   $("#top-sub").textContent = !busy ? "в сети" : /слуша/.test(busy) ? "слушает…" : /файл/.test(busy) ? "смотрит файл…" : "печатает…";
   $("#top-sub").classList.toggle("typing-sub", !!busy);
@@ -728,7 +730,7 @@ function drawReplyBar() {
   bar.classList.toggle("hidden", !r);
   if (!r) { bar.innerHTML = ""; return; }
   bar.innerHTML = `<span class="rb-ic">${icon("reply")}</span>
-    <button type="button" class="rb-body" data-goto="${r.id}"><b>В ответ ${r.who === "me" ? "себе" : "Арвиксу"}</b><span>${esc(r.text || "…")}</span></button>
+    <button type="button" class="rb-body" data-goto="${r.id}"><b>В ответ ${r.who === "me" ? "себе" : "Arvix"}</b><span>${esc(r.text || "…")}</span></button>
     <button type="button" class="rb-x" aria-label="Не отвечать на сообщение">${icon("x")}</button>`;
   bar.querySelector(".rb-x").onclick = () => setReply(null);
   bar.querySelector(".rb-body").onclick = () => gotoMsg(r.id);
@@ -753,7 +755,7 @@ async function setReaction(m, emoji) {
   } catch (err) { m.reaction = before; renderChat(); toast(err.message); }
 }
 
-/* Что Арвикс видит, как в мессенджере (D52): «в сети» — пульс раз в 30 с, пока приложение на экране;
+/* Что Arvix видит, как в мессенджере (D52): «в сети» — пульс раз в 30 с, пока приложение на экране;
  * «прочитано» — лента чата открыта и долистана до конца. Свёрнуто или другая вкладка браузера — ничего не шлём. */
 const seenState = { upto: 0, timer: 0 };
 function ping(force = false) {
@@ -776,7 +778,7 @@ function openMsgMenu(el, x, y) {
   closeMsgMenu(); haptic("medium");
   msgMenu = document.createElement("div");
   msgMenu.className = "msg-menu";
-  // Реакции — только на сообщения Арвикса: он их видит и учитывает (D52); ❓ — объяснит проще
+  // Реакции — только на сообщения Arvix: он их видит и учитывает (D52); ❓ — объяснит проще
   const row = m.who === "arvix" ? `<div class="react-row">${REACTIONS.map((e) => `<button data-react="${e}" class="${m.reaction === e ? "on" : ""}" aria-label="Реакция ${e}">${e}</button>`).join("")}</div>` : "";
   msgMenu.innerHTML = `${row}<button data-act="reply">${icon("reply")} Ответить</button><button data-act="copy">${icon("copy")} Копировать</button>`;
   document.body.appendChild(msgMenu);
@@ -789,7 +791,7 @@ function openMsgMenu(el, x, y) {
     const act = e.target.closest("[data-act]"); if (!act) return;
     closeMsgMenu();
     if (act.dataset.act === "reply") setReply(m);
-    else { try { await navigator.clipboard.writeText(m.text); toast("Скопировано"); } catch (_) { toast("Не скопировалось"); } }
+    else { try { await navigator.clipboard.writeText(plainText(m.text)); toast("Скопировано"); } catch (_) { toast("Не скопировалось"); } }
   };
 }
 document.addEventListener("pointerdown", (e) => { if (msgMenu && !msgMenu.contains(e.target)) closeMsgMenu(); }, true);
@@ -847,11 +849,69 @@ function bindChat(root, onReply = setReply, find = msgById) {
   });
 }
 
-function linkify(html) {
-  return html
-    .replace(/https?:\/\/[^\s<]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`)
-    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+/* rich:start — разметка сообщений Arvix (чат, проекты, обучение). Та же, что понимает Telegram (telegram/fmt.py):
+ * **жирный**, *курсив*, `код`, ~~зачёркнутый~~, ссылки; строки «— », «- », «1. » — список, «> » — цитата, ``` — блок кода.
+ * Сначала экранирование, потом разметка: из текста модели в страницу не попадёт ни один тег. */
+function richInline(s) {
+  const keep = [];
+  const hold = (html) => { keep.push(html); return `\u0001${keep.length - 1}\u0001`; };
+  s = esc(s)
+    .replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${c}</code>`))
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, t, u) => hold(`<a href="${u}" target="_blank" rel="noopener">${t}</a>`))
+    .replace(/https?:\/\/[^\s<]*[^\s<.,;:!?)»]/g, (u) => hold(`<a href="${u}" target="_blank" rel="noopener">${u}</a>`))
+    .replace(/\*\*(?=\S)([^\n]*?\S)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[^*\p{L}\d])\*(?=\S)([^*\n]*?\S)\*(?![*\p{L}\d])/gu, "$1<i>$2</i>")
+    .replace(/~~(?=\S)([^~\n]*?\S)~~/g, "<s>$1</s>")
+    .replace(/==(?=\S)([^=\n]*?\S)==/g, "<mark>$1</mark>");
+  return s.replace(/\u0001(\d+)\u0001/g, (_, i) => keep[+i]);
 }
+
+function richText(text) {
+  const out = [];
+  let para = [], list = null, quote = [], fence = null;
+  const flushPara = () => { if (para.length) { out.push(`<p>${para.map(richInline).join("<br>")}</p>`); para = []; } };
+  const flushList = () => {
+    if (!list) return;
+    out.push(`<${list.tag} class="m-list"${list.tag === "ol" && list.start !== 1 ? ` start="${list.start}"` : ""}>${list.items.map((li) => `<li>${richInline(li)}</li>`).join("")}</${list.tag}>`);
+    list = null;
+  };
+  const flushQuote = () => { if (quote.length) { out.push(`<blockquote>${quote.map(richInline).join("<br>")}</blockquote>`); quote = []; } };
+  const flushAll = () => { flushPara(); flushList(); flushQuote(); };
+  for (const line of String(text ?? "").replace(/\r\n?/g, "\n").split("\n")) {
+    if (fence) {
+      if (/^\s*```/.test(line)) { out.push(`<pre class="m-code"><code>${esc(fence.join("\n"))}</code></pre>`); fence = null; } else fence.push(line);
+      continue;
+    }
+    let m;
+    if (/^\s*```/.test(line)) { flushAll(); fence = []; continue; }
+    if (!line.trim()) { flushAll(); continue; }
+    if ((m = line.match(/^\s*#{1,6}\s+(.*)$/))) { flushAll(); out.push(`<p class="m-h">${richInline(m[1])}</p>`); continue; }
+    if ((m = line.match(/^\s*>\s?(.*)$/))) { flushPara(); flushList(); quote.push(m[1]); continue; }
+    flushQuote();
+    if ((m = line.match(/^\s*[-*•–—]\s+(.*)$/))) {
+      flushPara();
+      if (!list || list.tag !== "ul") { flushList(); list = { tag: "ul", items: [] }; }
+      list.items.push(m[1]); continue;
+    }
+    if ((m = line.match(/^\s*(\d{1,3})[.)]\s+(.*)$/))) {
+      flushPara();
+      if (!list || list.tag !== "ol") { flushList(); list = { tag: "ol", start: +m[1], items: [] }; }
+      list.items.push(m[2]); continue;
+    }
+    flushList();
+    para.push(line);
+  }
+  if (fence) out.push(`<pre class="m-code"><code>${esc(fence.join("\n"))}</code></pre>`);
+  flushAll();
+  return out.join("");
+}
+
+/* Без разметки — для цитаты, копирования и превью: звёздочки и обратные кавычки человеку не нужны. */
+function plainText(text) {
+  return String(text ?? "").replace(/\*\*(?=\S)([^\n]*?\S)\*\*/g, "$1").replace(/(^|[^*\p{L}\d])\*(?=\S)([^*\n]*?\S)\*(?![*\p{L}\d])/gu, "$1$2")
+    .replace(/`([^`\n]+)`/g, "$1").replace(/~~([^~\n]+)~~/g, "$1").replace(/==([^=\n]+)==/g, "$1");
+}
+/* rich:end */
 
 /* Как в Telegram: пустое поле — микрофон, есть текст — «отправить», идёт запись — стоп. */
 function composerMode() {
@@ -882,7 +942,7 @@ function takeReply() {
   return r;
 }
 
-/* Файлы Арвиксу: фото, PDF, документы, архив репозитория, аудио, видео — до 20 МБ.
+/* Файлы Arvix: фото, PDF, документы, архив репозитория, аудио, видео — до 20 МБ.
  * Подпись — текст из поля ввода (к первому файлу). Ответ придёт в ленту потоком. */
 const MAX_FILE = 20 * 1024 * 1024;
 async function sendFiles(files) {
@@ -1011,7 +1071,7 @@ function bindNotesList(root) {
   }));
 }
 
-// --- Граф заметок: как в Obsidian + подсказки связей от Арвикса (D32) ---------------------------
+// --- Граф заметок: как в Obsidian + подсказки связей от Arvix (D32) ---------------------------
 const GRAPH_COLORS = ["#8a5cf5", "#19b394", "#4f6bff", "#e8a317", "#e5484d", "#2fb7d6", "#d65db1", "#7cb342", "#ff8a3d", "#9aa3b2"];
 const graph = { data: null, nodes: [], edges: [], byId: new Map(), sel: null, hideDaily: true, query: "", local: false,
   zoom: 1, ox: 0, oy: 0, alpha: 1, raf: 0, drag: null, colors: new Map() };
@@ -1060,7 +1120,7 @@ function renderGraph() {
         <button class="pill" id="g-local">${graph.local ? "Весь граф" : "Рядом"}</button><button class="pill primary" id="g-open">Открыть</button></div>` :
         `<div class="graph-hint muted small">${d ? `${graph.nodes.length} заметок · ${graph.edges.length} связей` : "Строю граф…"} · тап — заметка, щипок — масштаб</div>`}
     </div>
-    ${sugg.length ? `<div class="card"><h3>Арвикс предлагает связать</h3>
+    ${sugg.length ? `<div class="card"><h3>Arvix предлагает связать</h3>
       <p class="muted small">Заметки говорят об одном, но ссылок между ними нет. Связь — строка «Связи: [[…]]» в конце первой.</p>
       ${sugg.map((s, i) => `<div class="sugg"><div class="grow"><button class="link" data-open="${esc(s.a)}">${esc(name(s.a))}</button> ↔
         <button class="link" data-open="${esc(s.b)}">${esc(name(s.b))}</button>
@@ -1327,7 +1387,7 @@ function bindNote(root = view) {
   hydrateAssets(root);
 }
 
-/* Галочка у строки-задачи Арвикса закрывает задачу тем же путём, что ✓ на «Сегодня». */
+/* Галочка у строки-задачи Arvix закрывает задачу тем же путём, что ✓ на «Сегодня». */
 async function closeTaskFromNote(t) {
   const reopen = () => openNote(state.note.path, { keepScroll: true });
   if (t.proof && t.proof !== "confirm") { openReportSheet(t, reopen); return; }
@@ -1423,7 +1483,7 @@ async function saveEditor() {
   } catch (err) {
     if (!(err.data && err.data.conflict)) { notify("error"); toast(err.message); return; }
     openSheet(`<h2>Заметка изменилась</h2>
-      <p class="muted small">Пока ты правил, её изменили на другом устройстве (Obsidian на ноутбуке или Арвикс). Выбери версию — вторая не пропадёт молча.</p>
+      <p class="muted small">Пока ты правил, её изменили на другом устройстве (Obsidian на ноутбуке или Arvix). Выбери версию — вторая не пропадёт молча.</p>
       <div class="field"><label>Их версия</label><pre class="conflict">${esc(err.data.text.slice(0, 1500))}</pre></div>
       <div class="sheet-actions">
         <button class="btn primary" id="c-mine">Оставить мою (их уйдёт)</button>
@@ -1662,7 +1722,7 @@ function renderProgress() {
     html += `<div class="card"><h3>Неделя</h3>
       ${weekRow("Сделано", w.productive_min, w.budget_min, "", false)}
       ${weekRow("Глубокая работа", w.deep_min, w.deep_budget_min, " deep", true)}
-      ${!w.budget_min ? `<div class="muted small" style="margin-top:6px">Нормы недели нет: распорядок дней не сохранён. Скажи Арвиксу «собери распорядок».</div>` : ""}
+      ${!w.budget_min ? `<div class="muted small" style="margin-top:6px">Нормы недели нет: распорядок дней не сохранён. Скажи Arvix «собери распорядок».</div>` : ""}
       <div class="pills" style="margin-top:10px">${w.quotas.map((q) => `<span class="chip ${q.done >= q.need ? "green" : ""}">${esc(q.label)} ${q.done}/${q.need}</span>`).join("")}</div></div>`;
     html += chartCard("Выполнение, %", h.days, (d) => d.completion, 100, "var(--accent)");
     html += chartCard("Сон, часы", h.days, (d) => (d.sleep_min == null ? null : d.sleep_min / 60), 10, "var(--accent-2)", 7.5);
@@ -1679,8 +1739,8 @@ function renderProgress() {
     html += `</div>`;
   }
   html += `<div class="card"><h3>Приложение</h3>
-    ${TG ? `<button class="btn" id="install">${icon("download")} Установить на телефон</button><p class="muted small">Откроется Chrome — там кнопка «Установить» (или ⋮ → «Установить приложение»): появится иконка Арвикса, как у обычного приложения. Ссылка одноразовая, живёт 15 минут.</p>` :
-    `${standalone() ? `<p class="muted small">Арвикс установлен как приложение.</p>` : `<button class="btn primary" id="install-pwa">${icon("download")} Установить как приложение</button>
+    ${TG ? `<button class="btn" id="install">${icon("download")} Установить на телефон</button><p class="muted small">Откроется Chrome — там кнопка «Установить» (или ⋮ → «Установить приложение»): появится иконка Arvix, как у обычного приложения. Ссылка одноразовая, живёт 15 минут.</p>` :
+    `${standalone() ? `<p class="muted small">Arvix установлен как приложение.</p>` : `<button class="btn primary" id="install-pwa">${icon("download")} Установить как приложение</button>
      <p class="muted small">Нет кнопки — меню браузера ⋮ → «Установить приложение» / «На экран Домой».</p>`}
      <button class="btn danger" id="logout">Отвязать это устройство</button>`}
     <p class="muted small">Версия ${esc((state.data && state.data.app_version) || "")}</p></div>`;
@@ -1708,7 +1768,7 @@ function chartCard(title, days, pick, max, color, target) {
 }
 
 // --- Проекты (D43, D44, D47) -------------------------------------------------------------------------
-/* Проект = чат с Арвиксом + папка в Obsidian. Человек говорит, Арвикс заполняет (D47).
+/* Проект = чат с Arvix + папка в Obsidian. Человек говорит, Arvix заполняет (D47).
  * Окна: список проектов (сгруппирован по целям — это и есть роадмап) · чат проекта · панель
  * «Заметки | План | Учиться». На ноутбуке — рядом, границу можно тянуть, окна прятать; на телефоне —
  * список, а внутри проекта вкладки. Цифры считает код (arvix/projects.py), в 🟥 вкладка без цифр. */
@@ -1733,7 +1793,7 @@ async function loadProjects() {
 function renderProjects() {
   const P = state.projects;
   if (!P) { view.innerHTML = `<div class="empty">Загружаю…</div>`; return; }
-  if (P.gentle) { view.innerHTML = `<div class="card note-card">${esc(P.note)}</div>`; return; }
+  if (P.gentle) { view.innerHTML = `<div class="card note-card">${richText(P.note)}</div>`; return; }
   const keep = captureComposer();
   if (isWide()) {
     const cols = [projLayout.list ? "var(--pl-w)" : "", "minmax(0,1fr)", projLayout.side && state.project ? "6px var(--ps-w)" : ""].filter(Boolean).join(" ");
@@ -1776,8 +1836,8 @@ function restoreComposer(keep) {
 function projListHtml(P) {
   let html = `<button class="btn primary pl-new" data-pact="new">${icon("plus")} Новый проект</button>`;
   if (P.load_issue) html += `<div class="pl-warn">⚠️ ${esc(P.load_issue)}</div>`;
-  if (P.ideas > P.ideas_max) html += `<div class="pl-warn">Неначатых проектов ${P.ideas}. Пройдись по ним: что не нужно — ✕, что нужно — открой и «В работу». Новые Арвикс не предложит, пока их больше ${P.ideas_max}.</div>`;
-  if (!P.count) html += `<p class="muted small pl-hint">Напиши, что хочешь сделать, — Арвикс сам разложит проект, заведёт папку в Obsidian и будет вести его с тобой.</p>`;
+  if (P.ideas > P.ideas_max) html += `<div class="pl-warn">Неначатых проектов ${P.ideas}. Пройдись по ним: что не нужно — ✕, что нужно — открой и «В работу». Новые Arvix не предложит, пока их больше ${P.ideas_max}.</div>`;
+  if (!P.count) html += `<p class="muted small pl-hint">Напиши, что хочешь сделать, — Arvix сам разложит проект, заведёт папку в Obsidian и будет вести его с тобой.</p>`;
   for (const g of P.groups) {
     html += `<div class="pl-group"><div class="pl-ghead"><span>${g.goal ? (g.goal.kind === "main" ? "★ " : "") + esc(g.goal.title) : "Без цели"}</span></div>
       ${g.projects.map(projItemHtml).join("")}</div>`;
@@ -1785,9 +1845,9 @@ function projListHtml(P) {
   const idle = P.idle_goals || [];
   if (idle.length) {
     html += `<details class="pl-group pl-idle"><summary class="pl-ghead"><span>Цели без проектов · ${idle.length}</span></summary>
-      <p class="muted small pl-hint">Не каждой цели нужен проект: экзамену — учёба, телу — привычка. ✨ — Арвикс предложит один следующий проект или скажет, что он не нужен.</p>
+      <p class="muted small pl-hint">Не каждой цели нужен проект: экзамену — учёба, телу — привычка. ✨ — Arvix предложит один следующий проект или скажет, что он не нужен.</p>
       ${idle.map((g) => `<div class="pl-goal"><span class="grow">${g.kind === "main" ? "★ " : ""}${esc(g.title)}</span>
-        <button class="link small" data-proadmap="${esc(g.id)}" title="Арвикс предложит один проект к этой цели">✨</button></div>`).join("")}</details>`;
+        <button class="link small" data-proadmap="${esc(g.id)}" title="Arvix предложит один проект к этой цели">✨</button></div>`).join("")}</details>`;
   }
   if (P.closed.length) html += `<details class="pl-group"><summary class="pl-ghead"><span>Завершённые · ${P.closed.length}</span></summary>${P.closed.map(projItemHtml).join("")}</details>`;
   return html;
@@ -1796,7 +1856,7 @@ function projListHtml(P) {
 function projItemHtml(p) {
   const on = state.project && state.project.id === p.id;
   const later = p.group === "later";
-  const sub = p.group === "closed" ? p.status_ru : later ? (p.status === "idea" ? "не начат" : "на паузе") + (p.by === "arvix" ? " · предложил Арвикс" : "")
+  const sub = p.group === "closed" ? p.status_ru : later ? (p.status === "idea" ? "не начат" : "на паузе") + (p.by === "arvix" ? " · предложил Arvix" : "")
     : p.idle_days >= 7 ? `<span class="warn">${p.idle_days} дн без движения</span>` : p.next ? "→ " + esc(p.next.title) : "этапов нет";
   return `<div class="pl-item${on ? " on" : ""} ${p.group}" data-proj="${esc(p.id)}" role="button" tabindex="0">
     <span class="pl-dot"></span><div class="grow"><div class="pl-title">${esc(p.title)}</div><div class="pl-sub">${sub}</div></div>
@@ -1805,9 +1865,9 @@ function projItemHtml(p) {
 
 function projWelcomeHtml(P) {
   return `<div class="pw-welcome"><h2>Что хочешь сделать?</h2>
-    <p class="muted">Опиши, как другу: что, зачем, к какому сроку. Арвикс заведёт проект, разложит на этапы, скажет, что выучить, и создаст папку в Obsidian.</p>
+    <p class="muted">Опиши, как другу: что, зачем, к какому сроку. Arvix заведёт проект, разложит на этапы, скажет, что выучить, и создаст папку в Obsidian.</p>
     <textarea id="pn-text" rows="4" placeholder="Например: хочу сделать бота, который напоминает классу про домашку. Хочу научиться Python и чтобы им пользовались хотя бы 10 человек. К Новому году."></textarea>
-    ${(P.goals || []).length ? `<select id="pn-goal" class="input"><option value="">Цель — пусть решит Арвикс</option>${P.goals.map((g) => `<option value="${esc(g.id)}">${esc(g.title)}</option>`).join("")}</select>` : ""}
+    ${(P.goals || []).length ? `<select id="pn-goal" class="input"><option value="">Цель — пусть решит Arvix</option>${P.goals.map((g) => `<option value="${esc(g.id)}">${esc(g.title)}</option>`).join("")}</select>` : ""}
     <button class="btn primary" id="pn-go">${icon("send")} Начать проект</button></div>`;
 }
 
@@ -1836,12 +1896,12 @@ function projChatHtml() {
   const p = state.project, msgs = p.messages || [];
   const thinking = state.thinking && (!msgs.length || msgs[msgs.length - 1].who === "me");
   return `<div class="pc"><div class="pc-thread" id="pc-thread">
-      ${msgs.length ? msgs.map((m) => `<div class="msg ${m.who === "me" ? "me" : ""}" data-pid="${m.id}">${quoteHtml(m.reply_to)}<div class="mtext">${linkify(esc(m.text))}</div></div>`).join("")
-        : `<div class="pc-empty muted small">Здесь разговор только про «${esc(p.title)}». Арвикс видит этапы, заметки папки, время и присланные файлы — и сам всё записывает.</div>`}
-      ${thinking ? `<div class="msg typing">Арвикс думает…</div>` : ""}</div>
+      ${msgs.length ? msgs.map((m) => `<div class="msg ${m.who === "me" ? "me" : ""}" data-pid="${m.id}">${quoteHtml(m.reply_to)}<div class="mtext">${richText(m.text)}</div></div>`).join("")
+        : `<div class="pc-empty muted small">Здесь разговор только про «${esc(p.title)}». Arvix видит этапы, заметки папки, время и присланные файлы — и сам всё записывает.</div>`}
+      ${thinking ? `<div class="msg typing">Arvix думает…</div>` : ""}</div>
     ${msgs.length < 3 ? `<div class="aw-chips">${PROJ_ASK.map((q) => `<button class="chip" data-ask="${esc(q)}">${esc(q)}</button>`).join("")}</div>` : ""}
     <div class="pc-compose"><button class="icon-btn" id="pc-file" aria-label="Прислать файл: код, скриншот, PDF">${icon("clip")}</button>
-      <textarea id="pc-text" rows="1" placeholder="Сообщение Арвиксу о проекте"></textarea>
+      <textarea id="pc-text" rows="1" placeholder="Сообщение Arvix о проекте"></textarea>
       <button class="icon-btn go" id="pc-send" aria-label="Отправить">${icon("send")}</button>
       <input type="file" id="pc-input" multiple hidden></div></div>`;
 }
@@ -1877,14 +1937,14 @@ function projNotesHtml() {
     ${files.length ? files.map((f) => `<div class="pn-file${f.main ? " main" : ""}" ${f.note ? `data-pnote="${esc(f.path)}"` : `data-pfile="${esc(f.path)}"`} role="button" tabindex="0">
       <span class="pn-ico">${f.main ? "★" : f.note ? "📝" : "📎"}</span><div class="grow"><div>${esc(f.name)}</div>
       <div class="muted small">${f.sub ? esc(f.sub) + " · " : ""}${new Date(f.modified * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}</div></div></div>`).join("")
-      : `<div class="muted small">Папка пустая. Попроси Арвикса: «заведи заметку с планом» — или пришли файл в чат.</div>`}`;
+      : `<div class="muted small">Папка пустая. Попроси Arvix: «заведи заметку с планом» — или пришли файл в чат.</div>`}`;
 }
 
 function projPlanHtml() {
   const p = state.project;
   let html = "";
-  if (p.issues.length) html += `<div class="pp-sec warn-card"><b>Арвикс видит</b>${p.issues.map((x) => `<div class="small">⚠️ ${esc(x)}</div>`).join("")}</div>`;
-  if (p.expectation) html += `<div class="pp-sec"><div class="muted small">Результат</div><div>${esc(p.expectation)}</div></div>`;
+  if (p.issues.length) html += `<div class="pp-sec warn-card"><b>Arvix видит</b>${p.issues.map((x) => `<div class="small">⚠️ ${richInline(x)}</div>`).join("")}</div>`;
+  if (p.expectation) html += `<div class="pp-sec"><div class="muted small">Результат</div><div>${richInline(p.expectation)}</div></div>`;
   html += `<div class="pp-sec"><div class="pp-h"><b>Этапы ${p.milestones_done}/${p.milestones_total}</b><button class="link small" data-pact="milestone">+ этап</button></div>
     ${p.milestones.length ? p.milestones.map((m) => `<div class="ms ${m.status}"><button class="ms-check" data-ms="${esc(m.id)}" aria-label="Отметить">${m.status === "done" ? icon("check") : ""}</button>
       <div class="ms-body"><div class="ms-title">${esc(m.title)}</div><div class="muted small">готово, когда: ${esc(m.dod)}${m.due ? ` · до ${ddmm(m.due)}` : ""}</div></div></div>`).join("")
@@ -1895,7 +1955,7 @@ function projPlanHtml() {
       : `<div class="muted small">Впереди блоков нет.</div>`}
     <div class="muted small" style="margin-top:6px">Неделя ${hm(p.week_min)}${p.weekly_min ? " из " + hm(p.weekly_min) : ""} · всего ${hm(p.minutes)}${p.forecast ? " · прогноз финиша " + ddmm(p.forecast) : ""}</div></div>`;
   html += `<div class="pp-sec"><div class="pp-h"><b>Журнал</b><button class="link small" data-pact="log">+ запись</button></div>
-    ${p.log.length ? p.log.slice(0, 12).map((x) => `<div class="log-row"><span class="log-ico">${LOG_ICON[x.kind] || "•"}</span><div class="grow small">${esc(x.text)}<div class="muted">${ddmm(x.date)}</div></div></div>`).join("")
+    ${p.log.length ? p.log.slice(0, 12).map((x) => `<div class="log-row"><span class="log-ico">${LOG_ICON[x.kind] || "•"}</span><div class="grow small">${richInline(x.text)}<div class="muted">${ddmm(x.date)}</div></div></div>`).join("")
       : `<div class="muted small">Отчёты по блокам проекта попадают сюда сами.</div>`}</div>`;
   if (p.resources.length) {
     html += `<div class="pp-sec"><b>Источники и примеры</b>${p.resources.map((r) => `<div class="small res-row"><div class="grow">${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a>` : esc(r.title)}
@@ -1909,10 +1969,10 @@ function projLearnHtml() {
   const todo = items.filter((x) => x.status === "todo"), done = items.filter((x) => x.status === "done");
   return `<div class="pp-h"><b>Что выучить для проекта</b><button class="link small" data-plearn-add>+ тема</button></div>
     ${todo.length ? todo.map((x) => `<div class="lr"><button class="ms-check" data-plearn-done="${esc(x.id)}" aria-label="Выучено"></button>
-      <div class="grow"><div class="ms-title">${esc(x.topic)} <button class="chip ${x.kind === "practice" ? "accent" : ""}" data-plearn-kind="${esc(x.id)}" title="Теория ↔ практика">${x.kind === "practice" ? "практика" : "теория"}</button></div>${x.why ? `<div class="muted small">${esc(x.why)}</div>` : ""}
+      <div class="grow"><div class="ms-title">${esc(x.topic)} <button class="chip ${x.kind === "practice" ? "accent" : ""}" data-plearn-kind="${esc(x.id)}" title="Теория ↔ практика">${x.kind === "practice" ? "практика" : "теория"}</button></div>${x.why ? `<div class="muted small">${richInline(x.why)}</div>` : ""}
         ${(x.sources || []).length ? `<div class="small">${x.sources.map((s) => /^https?:/.test(s) ? `<a href="${esc(s)}" target="_blank" rel="noopener">${esc(s)}</a>` : esc(s)).join(" · ")}</div>` : ""}
         ${x.task_status && x.task_status !== "done" ? `<button class="pill small-pill" data-plearn-open="${esc(x.task_id)}">${icon("study")} Блок ${ddmm(x.task_date)} — в «Обучение»</button>` : `<button class="pill small-pill" data-plearn-start="${esc(x.id)}">${icon("play")} Учить сейчас</button>`}</div></div>`).join("")
-      : `<div class="muted small">Тем нет. Спроси в чате: «что мне выучить для этого?» — Арвикс добавит сам.</div>`}
+      : `<div class="muted small">Тем нет. Спроси в чате: «что мне выучить для этого?» — Arvix добавит сам.</div>`}
     ${done.length ? `<details style="margin-top:8px"><summary class="muted small">Выучено · ${done.length}</summary>${done.map((x) => `<div class="small">✓ ${esc(x.topic)}</div>`).join("")}</details>` : ""}
     <p class="muted small" style="margin-top:12px">«Учить сейчас» ставит учебный блок и открывает сессию в «Обучении»: план по минутам, окна (тест, доска, схема, видео), таймер и проверка. Теория — понять, практика — сделать руками.</p>
     <button class="pill small-pill" data-plearn-tab>${icon("study")} Все темы — в «Обучении»</button>`;
@@ -1991,7 +2051,7 @@ function bindProjects() {
   on("[data-layout]", (el) => { projLayout[el.dataset.layout] = !projLayout[el.dataset.layout]; saveLayout(); renderProjects(); });
   on("[data-ask]", (el) => projectSend(el.dataset.ask));
   on("[data-proadmap]", async (el) => {
-    try { await api("projects/roadmap", { json: { goal: el.dataset.proadmap } }); toast("Арвикс думает над целью — ответ придёт в чат: один проект или «проект не нужен»"); }
+    try { await api("projects/roadmap", { json: { goal: el.dataset.proadmap } }); toast("Arvix думает над целью — ответ придёт в чат: один проект или «проект не нужен»"); }
     catch (err) { toast(err.message); }
   });
   view.querySelectorAll("[data-pdrop]").forEach((el) => el.addEventListener("click", async (e) => {
@@ -2091,7 +2151,7 @@ async function createProject(text, goal) {
     state.project = await api("project?id=" + encodeURIComponent(r.project.id));
     state.thinking = "думаю"; projLayout.pane = "chat"; projLayout.tab = "plan"; saveLayout();
     renderProjects();
-    toast(r.project.status === "active" ? "Арвикс заполняет проект…" : "В работе уже 3 проекта — этот пока отложен. Арвикс всё равно его разложит.");
+    toast(r.project.status === "active" ? "Arvix заполняет проект…" : "В работе уже 3 проекта — этот пока отложен. Arvix всё равно его разложит.");
   } catch (err) { toast(err.message); }
 }
 
@@ -2099,9 +2159,9 @@ function openNewProjectSheet() {
   const P = state.projects;
   openSheet(`<h2>Новый проект</h2>
     <div class="field"><textarea id="ns-text" rows="5" placeholder="Что хочешь сделать и зачем? К какому сроку? Например: хочу снять серию роликов про подготовку к ОГЭ, чтобы научиться монтажу и найти единомышленников. До февраля."></textarea></div>
-    ${(P.goals || []).length ? `<div class="field"><select id="ns-goal" class="input"><option value="">Цель — пусть решит Арвикс</option>${P.goals.map((g) => `<option value="${esc(g.id)}">${esc(g.title)}</option>`).join("")}</select></div>` : ""}
+    ${(P.goals || []).length ? `<div class="field"><select id="ns-goal" class="input"><option value="">Цель — пусть решит Arvix</option>${P.goals.map((g) => `<option value="${esc(g.id)}">${esc(g.title)}</option>`).join("")}</select></div>` : ""}
     <button class="btn primary" id="ns-go">${icon("send")} Начать</button>
-    <p class="muted small">Дальше Арвикс сам: название, результат, этапы, что выучить, папка в Obsidian. Поправишь словами в чате проекта.</p>`, () => {
+    <p class="muted small">Дальше Arvix сам: название, результат, этапы, что выучить, папка в Obsidian. Поправишь словами в чате проекта.</p>`, () => {
     setTimeout(() => $("#ns-text").focus(), 50);
     $("#ns-go").onclick = () => createProject($("#ns-text").value, $("#ns-goal") ? $("#ns-goal").value : "");
   });
@@ -2148,7 +2208,7 @@ function openProjectMenu() {
 }
 
 function openMilestoneSheet() {
-  openSheet(`<h2>Новый этап</h2><p class="muted small">${esc(state.project.title)} · проще — попросить Арвикса в чате</p>
+  openSheet(`<h2>Новый этап</h2><p class="muted small">${esc(state.project.title)} · проще — попросить Arvix в чате</p>
     <div class="field"><input id="ms-title" placeholder="Что сделать"></div>
     <div class="field"><label>Готово, когда…</label><textarea id="ms-dod" rows="2" placeholder="Проверяемо: ссылка, число, отзыв"></textarea></div>
     <button class="btn primary" id="ms-save">Добавить</button>`, () => {
@@ -2196,9 +2256,9 @@ function openLogSheet() {
 
 // --- Обучение (D55) ----------------------------------------------------------------------------------
 /* Учебная сессия = учебный блок + его урок (план по минутам, таймер, проверка) + окна, которые ставит
- * Арвикс: тест (варианты проверяет код), доска (графики и чертежи), схема, видео, объяснение, заметка.
+ * Arvix: тест (варианты проверяет код), доска (графики и чертежи), схема, видео, объяснение, заметка.
  * Очередь тем — общая с «Проектами»: тема проекта (теория или практика) видна здесь, выученная — там.
- * Арвикс видит сессию (ответы, текст заметки, время) — она уходит ему блоком <study> с каждым вопросом. */
+ * Arvix видит сессию (ответы, текст заметки, время) — она уходит ему блоком <study> с каждым вопросом. */
 const STUDY_LAYOUT_KEY = "arvix_studylayout";
 const studyLayout = (() => {
   try { return { pane: "desk", ...JSON.parse(localStorage.getItem(STUDY_LAYOUT_KEY) || "{}") }; } catch (_) { return { pane: "desk" }; }
@@ -2228,7 +2288,7 @@ function deskKey(s) {
 function renderStudy(opts = {}) {
   const S = state.study;
   if (!S) { view.innerHTML = `<div class="empty">Загружаю…</div>`; return; }
-  if (S.gentle) { view.innerHTML = `<div class="card note-card">${esc(S.note)}</div>`; return; }
+  if (S.gentle) { view.innerHTML = `<div class="card note-card">${richText(S.note)}</div>`; return; }
   const s = S.session;
   if (!(studyUI.open && s)) { studyUI.deskKey = ""; view.innerHTML = studyOverviewHtml(S); bindStudy(); return; }
   const key = deskKey(s);
@@ -2240,7 +2300,7 @@ function renderStudy(opts = {}) {
   const pane = !chat ? "desk" : isWide() ? "both" : studyLayout.pane;
   view.innerHTML = `<div class="sw${isWide() && chat ? " wide" : ""}">
     <section class="sw-desk">${studyHeadHtml(s)}
-      ${isWide() || !chat ? "" : `<div class="seg pm-tabs">${[["desk", "Стол"], ["chat", "Чат с Арвиксом"]].map(([k, l]) =>
+      ${isWide() || !chat ? "" : `<div class="seg pm-tabs">${[["desk", "Стол"], ["chat", "Чат с Arvix"]].map(([k, l]) =>
         `<button type="button" data-spane="${k}" class="${pane === k ? "on" : ""}">${l}</button>`).join("")}</div>`}
       ${pane !== "chat" ? `<div class="sw-panels">${studyDeskHtml(s)}</div>` : ""}</section>
     ${pane !== "desk" ? `<aside class="sw-chat">${studyChatHtml(s)}</aside>` : ""}</div>`;
@@ -2266,7 +2326,7 @@ function studyOverviewHtml(S) {
         ${t.score != null ? `<span class="chip ${t.score >= 70 ? "green" : "yellow"}">проверка ${t.score}%</span>` : t.status === "done" ? `<span class="chip green">✓</span>` : ""}
         ${t.live ? `<span class="chip accent">сессия</span>` : ""}</div></div>
       <div class="acts"><button class="pill small-pill${t.open ? " primary" : ""}" data-sopen="${esc(t.id)}">${t.open ? (t.lesson ? "Открыть" : "Начать сессию") : "Посмотреть"}</button></div></div>`).join("")
-    : `<div class="muted small so-hint">Учебных блоков сегодня нет. Возьми тему из очереди — Арвикс поставит блок в свободное окно и подготовит сессию.</div>`;
+    : `<div class="muted small so-hint">Учебных блоков сегодня нет. Возьми тему из очереди — Arvix поставит блок в свободное окно и подготовит сессию.</div>`;
   const todo = S.queue.filter((x) => x.status === "todo"), done = S.queue.filter((x) => x.status === "done");
   html += `<div class="section-title"><span>Что выучить</span><button class="link small" data-slearn-add>+ тема</button></div>`;
   if (!todo.length) html += `<div class="muted small so-hint">Очередь пустая. Темы приходят из проектов («что мне выучить для этого?») или добавь сам.</div>`;
@@ -2275,7 +2335,7 @@ function studyOverviewHtml(S) {
   for (const [g, items] of groups) {
     html += `<div class="pl-ghead">${esc(g)}</div>` + items.map((x) => `<div class="card so-item">
       <div class="grow"><div class="so-top"><b>${esc(x.topic)}</b><button class="chip ${x.kind === "practice" ? "accent" : ""}" data-skind="${esc(x.id)}" title="Теория ↔ практика">${esc(x.kind_ru)}</button></div>
-        ${x.why ? `<div class="muted small">${esc(x.why)}</div>` : ""}
+        ${x.why ? `<div class="muted small">${richInline(x.why)}</div>` : ""}
         ${(x.sources || []).length ? `<div class="small">${x.sources.map((src) => /^https?:/.test(src) ? `<a href="${esc(src)}" target="_blank" rel="noopener">${esc(src)}</a>` : esc(src)).join(" · ")}</div>` : ""}
         <div class="pills">${x.task_status && x.task_status !== "done" && x.task_id ? `<button class="pill small-pill primary" data-sopen="${esc(x.task_id)}">${icon("play")} Блок ${ddmm(x.task_date)} — открыть</button>`
           : `<button class="pill small-pill primary" data-sitem="${esc(x.id)}">${icon("play")} Учить сейчас</button>`}
@@ -2312,14 +2372,14 @@ function studyHeadHtml(s) {
 function studyDeskHtml(s) {
   let html = "";
   if (!s.prepared && s.live === false && s.task.open) {
-    html += `<div class="sp sp-wide"><div class="muted">Арвикс готовит сессию: смотрит роадмап, твои заметки о методе, прошлые уроки…</div></div>`;
+    html += `<div class="sp sp-wide"><div class="muted">Arvix готовит сессию: смотрит роадмап, твои заметки о методе, прошлые уроки…</div></div>`;
   }
   if (s.check.length) {
     html += `<div class="sp sp-wide sp-check"><div class="sp-h"><b>Проверка — ${s.check.length} вопроса</b></div>
       <ol class="small">${s.check.map((q) => `<li>${esc(q)}</li>`).join("")}</ol>
       <textarea id="sk-text" rows="4" placeholder="Ответь одним сообщением, по номерам. Не знаешь — так и напиши: это тоже ответ."></textarea>
       <button class="btn primary" data-skheck>${icon("send")} Отправить ответы</button>
-      <div class="muted small">Ответ и есть отчёт: Арвикс оценит по эталонам и закроет блок.</div></div>`;
+      <div class="muted small">Ответ и есть отчёт: Arvix оценит по эталонам и закроет блок.</div></div>`;
   }
   if (s.result) {
     html += `<div class="sp sp-wide"><div class="sp-h"><b>Итог проверки</b><span class="chip ${s.result.score >= 70 ? "green" : "yellow"}">${s.result.score != null ? s.result.score + "%" : "без оценки"}</span></div>
@@ -2338,7 +2398,7 @@ function studyDeskHtml(s) {
   if (notePath && !s.panels.some((p) => p.type === "note" && p.path === notePath)) html += panelHtml({ id: "lesson-note", type: "note", title: "Заметка своими словами", path: notePath, by: "arvix", fixed: true });
   if (s.sources.length) html += panelHtml({ id: "lesson-sources", type: "sources", title: "Источники", list: s.sources, fixed: true });
   if (s.task.open) {
-    html += `<div class="sp sp-add"><div class="muted small">Окна ставит Арвикс по ходу — попроси в чате. Сам можешь добавить видео по ссылке.</div>
+    html += `<div class="sp sp-add"><div class="muted small">Окна ставит Arvix по ходу — попроси в чате. Сам можешь добавить видео по ссылке.</div>
       <div class="pills"><button class="pill small-pill" data-sadd="video">+ Видео по ссылке</button></div></div>`;
   }
   return html;
@@ -2361,14 +2421,14 @@ function panelBody(p) {
     let body = "";
     if (p.embed) body = `<div class="sp-player"><iframe src="${esc(p.embed)}" title="${esc(p.title)}" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
     else if (p.url) body = `<a class="pill small-pill" href="${esc(p.url)}" target="_blank" rel="noopener">Открыть видео</a> <span class="muted small">${esc(p.url)}</span>`;
-    else body = `<a class="pill small-pill" href="${esc(p.search)}" target="_blank" rel="noopener">Найти: «${esc(p.query)}»</a><div class="muted small">Настоящей ссылки у Арвикса нет — выбери сам и пришли её в чат, он поставит видео сюда.</div>`;
-    return body + (p.ask ? `<div class="small sp-ask">После просмотра ответь в чате: <b>${esc(p.ask)}</b></div>` : "");
+    else body = `<a class="pill small-pill" href="${esc(p.search)}" target="_blank" rel="noopener">Найти: «${esc(p.query)}»</a><div class="muted small">Настоящей ссылки у Arvix нет — выбери сам и пришли её в чат, он поставит видео сюда.</div>`;
+    return body + (p.ask ? `<div class="small sp-ask">После просмотра ответь в чате: <b>${richInline(plainText(p.ask))}</b></div>` : "");
   }
   if (p.type === "note") return noteBody(p);
   return "";
 }
 
-// --- тест: варианты проверяет код, открытые — Арвикс на проверке блока ------------------------------
+// --- тест: варианты проверяет код, открытые — Arvix на проверке блока ------------------------------
 function quizHtml(p) {
   const sel = studyUI.quiz[p.id] || (studyUI.quiz[p.id] = {});
   const qs = p.questions.map((q, i) => {
@@ -2376,13 +2436,13 @@ function quizHtml(p) {
       const mark = q.open ? "•" : q.ok ? "✓" : "✗";
       const opts = q.open ? `<div class="small">Твой ответ: ${esc(q.given || "—")}</div><div class="small muted">Эталон: ${esc(q.a || "")}</div>`
         : `<div class="sq-opts">${q.options.map((o, j) => `<span class="sq-opt${j === q.answer ? " right" : ""}${j === q.given && j !== q.answer ? " wrong" : ""}">${esc(o)}</span>`).join("")}</div>`;
-      return `<div class="sq ${q.open ? "" : q.ok ? "ok" : "bad"}"><div><b>${mark}</b> ${esc(q.q)}</div>${opts}${q.why ? `<div class="small muted">${esc(q.why)}</div>` : ""}</div>`;
+      return `<div class="sq ${q.open ? "" : q.ok ? "ok" : "bad"}"><div><b>${mark}</b> ${richInline(q.q)}</div>${opts}${q.why ? `<div class="small muted">${richInline(q.why)}</div>` : ""}</div>`;
     }
     const body = q.open ? `<textarea class="sq-text" data-sq="${esc(p.id)}" data-i="${i}" rows="2" placeholder="Своими словами">${esc(sel[i] || "")}</textarea>`
       : `<div class="sq-opts">${q.options.map((o, j) => `<button type="button" class="sq-opt${sel[i] === j ? " on" : ""}" data-sq="${esc(p.id)}" data-i="${i}" data-j="${j}">${esc(o)}</button>`).join("")}</div>`;
     return `<div class="sq"><div>${i + 1}. ${esc(q.q)}</div>${body}</div>`;
   }).join("");
-  return qs + (p.done ? `<div class="small">${p.score_pct != null ? `<b>${p.score_pct}%</b> по вопросам с вариантами. ` : ""}Открытые Арвикс учтёт на проверке блока. Ошибся — спроси в чате «почему».</div>`
+  return qs + (p.done ? `<div class="small">${p.score_pct != null ? `<b>${p.score_pct}%</b> по вопросам с вариантами. ` : ""}Открытые Arvix учтёт на проверке блока. Ошибся — спроси в чате «почему».</div>`
     : `<button class="btn primary" data-squiz="${esc(p.id)}">Проверить</button>`);
 }
 
@@ -2512,7 +2572,7 @@ function diagramSvg(p) {
   return `<div class="dg-wrap"><svg class="diagram" viewBox="0 0 ${W} ${H}" width="${W}" role="img" aria-label="${esc(p.title)}">${g}</svg></div>`;
 }
 
-// --- заметка урока: пишет человек, Арвикс читает ---------------------------------------------
+// --- заметка урока: пишет человек, Arvix читает ---------------------------------------------
 function noteBody(p) {
   const n = studyUI.notes[p.path];
   if (!n) {
@@ -2527,7 +2587,7 @@ function noteBody(p) {
   return `<div class="pn-bar"><span class="muted small grow">${esc(n.path)}</span>${bar}</div>
     ${n.edit ? `<textarea class="pn-edit sn-edit" ${at}>${esc(n.text)}</textarea>`
       : `<div class="obs pn-view">${doc.props.length ? propsHtml(doc.props) : ""}${doc.html || `<p class="muted">Пусто — «Писать».</p>`}</div>`}
-    <div class="muted small">Своими словами, без подглядывания — Арвикс видит, что написано, и спросит по пробелам.</div>`;
+    <div class="muted small">Своими словами, без подглядывания — Arvix видит, что написано, и спросит по пробелам.</div>`;
 }
 
 const notesLoading = new Set();
@@ -2546,7 +2606,7 @@ function studyChatHtml(s) {
   const can = s.live;
   return `<div class="pc sc"><div class="pc-thread" id="sc-thread"></div>
     ${can ? `<div class="aw-chips">${s.asks.map((q) => `<button class="chip" data-sask="${esc(q)}">${esc(q)}</button>`).join("")}</div>
-    <div class="pc-compose"><textarea id="sc-text" rows="1" placeholder="Спроси Арвикса по теме — он видит этот стол"></textarea>
+    <div class="pc-compose"><textarea id="sc-text" rows="1" placeholder="Спроси Arvix по теме — он видит этот стол"></textarea>
       <button class="icon-btn go" id="sc-send" aria-label="Отправить">${icon("send")}</button></div>`
       : `<div class="muted small">Сессия закрыта — переписка сохранена здесь.</div>`}</div>`;
 }
@@ -2556,10 +2616,10 @@ function drawStudyThread() {
   if (!box || !s) return;
   const msgs = s.messages || [];
   const thinking = state.thinking && (!msgs.length || msgs[msgs.length - 1].who === "me");
-  box.innerHTML = (msgs.length ? msgs.map((m) => `<div class="msg ${m.who === "me" ? "me" : ""}">${quoteHtml(m.reply_to)}<div class="mtext">${linkify(esc(m.text))}</div>
+  box.innerHTML = (msgs.length ? msgs.map((m) => `<div class="msg ${m.who === "me" ? "me" : ""}">${quoteHtml(m.reply_to)}<div class="mtext">${richText(m.text)}</div>
       ${(m.buttons || []).length ? `<div class="btns">${m.buttons.map((row) => row.map(([label, data]) => `<button data-sbtn="${esc(data)}">${esc(label)}</button>`).join("")).join("")}</div>` : ""}</div>`).join("")
-    : `<div class="pc-empty muted small">Застрял — спроси. Арвикс объяснит у доски по шагам, нарисует график, даст тест или найдёт видео — окна появятся на столе.</div>`)
-    + (thinking ? `<div class="msg typing">Арвикс думает…</div>` : "");
+    : `<div class="pc-empty muted small">Застрял — спроси. Arvix объяснит у доски по шагам, нарисует график, даст тест или найдёт видео — окна появятся на столе.</div>`)
+    + (thinking ? `<div class="msg typing">Arvix думает…</div>` : "");
   box.scrollTop = box.scrollHeight;
   box.querySelectorAll("[data-sbtn]").forEach((b) => b.addEventListener("click", async () => {
     haptic(); try { await api("button", { json: { data: b.dataset.sbtn } }); } catch (err) { toast(err.message); }
@@ -2607,7 +2667,7 @@ async function openStudySession(body) {
   try {
     const r = await api("study/open", { json: body });
     studyUI.open = true; studyUI.task = r.task_id; studyUI.notes = {}; studyUI.deskKey = "";
-    if (r.queued) { state.thinking = "готовлю урок"; toast("Арвикс готовит сессию — план и окна появятся здесь"); }
+    if (r.queued) { state.thinking = "готовлю урок"; toast("Arvix готовит сессию — план и окна появятся здесь"); }
     if (state.tab !== "study") { setTab("study"); return; }
     await loadStudy(); renderStudy();
   } catch (err) { toast(err.message); }
@@ -2712,7 +2772,7 @@ function bindStudy() {
   on("[data-snote-save]", async (el) => {
     const n = noteOf(el), box = view.querySelector(`textarea.sn-edit[data-snote="${CSS.escape(n.path)}"]`);
     try { const r = await api("note", { json: { path: n.path, text: box.value, sha: n.sha } });
-      studyUI.notes[n.path] = { path: r.path, text: r.text, sha: r.sha, edit: false }; toast("Сохранено — Арвикс видит"); studyUI.deskKey = ""; renderStudy(); }
+      studyUI.notes[n.path] = { path: r.path, text: r.text, sha: r.sha, edit: false }; toast("Сохранено — Arvix видит"); studyUI.deskKey = ""; renderStudy(); }
     catch (err) { if (err.status === 409) { toast("Заметку изменили — открыл свежую"); delete studyUI.notes[n.path]; loadStudyNote(n.path); } else toast(err.message); }
   });
   view.querySelectorAll(".sp-text .obs, .sp-note .obs").forEach((el) => hydrateAssets(el));
@@ -2832,7 +2892,7 @@ if (TG) {
 }
 if ("serviceWorker" in navigator && !TG) navigator.serviceWorker.register("sw.js").catch(() => {});
 
-/* «Поделиться → Арвикс»: service worker сложил файлы и текст в кэш — отправляем их как из 📎. */
+/* «Поделиться → Arvix»: service worker сложил файлы и текст в кэш — отправляем их как из 📎. */
 async function sendShared() {
   if (!("caches" in window)) return;
   const cache = await caches.open("arvix-share");

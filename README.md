@@ -15,7 +15,7 @@
 bash arvix-claude/deploy/install.sh     # плагин Claude Code, CLI arvix, systemd-юниты
 arvix setup                             # хранилище, часовой пояс, дом, Telegram-бот
 systemctl --user enable --now arvix-telegram
-cd ~/Arvix && claude                    # Арвикс в Claude Code сам начнёт знакомство
+cd ~/Arvix && claude                    # Arvix в Claude Code сам начнёт знакомство
 ```
 
 Проверка — `arvix doctor`. Пошагово, с сервером и всеми командами — [arvix-claude/GUIDE.md](arvix-claude/GUIDE.md).
