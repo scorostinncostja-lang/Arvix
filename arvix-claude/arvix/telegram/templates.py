@@ -153,6 +153,23 @@ def sleep_logged(result: dict[str, Any]) -> str:
     return f"Сон {hm(result['duration_min'])}{span}. Режим: {shift}{rules.MODE_LABELS[after]}"
 
 
+def when_day(core: Any, iso: str | None) -> str:
+    """«2026-11-22» → «завтра», «через 3 дня (24.11)»: когда что-то будет, словами, а не датой."""
+    if not iso:
+        return "—"
+    from datetime import date as _date
+
+    day = _date.fromisoformat(iso)
+    n = (day - core.today()).days
+    if n <= 0:
+        return "сегодня"
+    if n == 1:
+        return "завтра"
+    if n == 2:
+        return "послезавтра"
+    return f"через {n} {'дня' if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14) else 'дней'} ({day:%d.%m})"
+
+
 def warn(lines: list[str] | tuple[str, ...] | None) -> str:
     """Сомнения кода (checks.py) — отдельными строками под ответом: их видно, их нельзя пропустить."""
     return "".join(f"\n⚠️ Проверь: {line}" for line in lines or ())
@@ -272,6 +289,10 @@ def brief(core: Any) -> str:
     from arvix import projects
 
     if line := projects.brief_line(core):
+        lines.append(line)
+    from arvix import review
+
+    if line := review.brief_line(core):
         lines.append(line)
     budget = core.budget()
     if budget["auto"] and budget["since"] == today.isoformat() and budget.get("change"):

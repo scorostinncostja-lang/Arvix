@@ -106,8 +106,12 @@ class State:
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)
     resources: dict[str, dict[str, Any]] = field(default_factory=dict)  # источники и инструменты проектов (D44)
     learn_items: dict[str, dict[str, Any]] = field(default_factory=dict)  # «учиться»: очередь тем для проектов и вкладки «Обучение» (D47)
-    # Окна учебных сессий (D55): задача → {"panels": [окно…] по порядку, "answers": {id окна → ответ на тест}}
+    # Учебные сессии (D55, D60): задача → {"panels": [окно…] по порядку, "answers": {id окна → ответ на тест},
+    # "stage": этап, "fixes": {"окно:вопрос" → работа над ошибкой}}
     study: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Повторения тем (D60, arvix/review.py): id → тема, шаг интервала, дата следующего повторения; последний тест повторения
+    reviews: dict[str, dict[str, Any]] = field(default_factory=dict)
+    review_quiz: dict[str, Any] | None = None
     repos: dict[str, dict[str, Any]] = field(default_factory=dict)  # проект → последнее, что видели в GitHub
     commits: dict[str, dict[str, Any]] = field(default_factory=dict)  # sha → коммит проекта: движение без слов
     # Как в мессенджере (D52): реакция человека на сообщение (id события → эмодзи) и до какого сообщения он прочитал
@@ -319,7 +323,8 @@ class State:
     def _on_lesson_started(self, ev: Event, p: dict, day: Day) -> None:
         self.lessons.append({"task_id": p.get("task_id"), "topic": p.get("topic", ""), "subject": p.get("subject", ""),
                              "date": ev.local_date.isoformat(), "at": ev.at.isoformat(), "score": None, "gaps": [], "checked": False,
-                             "note": p.get("note"), "roadmap_node": p.get("roadmap_node", ""), "fallback": bool(p.get("fallback"))})
+                             "note": p.get("note"), "roadmap_node": p.get("roadmap_node", ""), "fallback": bool(p.get("fallback")),
+                             "full": p.get("lesson")})
 
     def _on_lesson_checked(self, ev: Event, p: dict, day: Day) -> None:
         for lesson in reversed(self.lessons):
@@ -389,8 +394,11 @@ class State:
         old = self.learn_items.get(p["id"], {})
         self.learn_items[p["id"]] = {**p, "date": old.get("date") or ev.local_date.isoformat(), "updated": ev.local_date.isoformat()}
 
+    def _session(self, task_id: str) -> dict[str, Any]:
+        return self.study.setdefault(task_id, {"panels": [], "answers": {}, "fixes": {}})
+
     def _on_study_panel(self, ev: Event, p: dict, day: Day) -> None:
-        session = self.study.setdefault(p["task_id"], {"panels": [], "answers": {}})
+        session = self._session(p["task_id"])
         panel = {**p["panel"], "at": ev.at.isoformat()}
         panels = session["panels"]
         idx = next((i for i, x in enumerate(panels) if x["id"] == panel["id"]), None)
@@ -399,11 +407,30 @@ class State:
         else:  # тот же id — замена окна (или скрытие): старый ответ на тест к новому тесту не относится
             if panels[idx].get("questions") != panel.get("questions"):
                 session["answers"].pop(panel["id"], None)
+                session["fixes"] = {k: v for k, v in session["fixes"].items() if not k.startswith(panel["id"] + ":")}
             panels[idx] = panel
 
     def _on_study_answer(self, ev: Event, p: dict, day: Day) -> None:
-        session = self.study.setdefault(p["task_id"], {"panels": [], "answers": {}})
+        session = self._session(p["task_id"])
         session["answers"][p["panel_id"]] = {k: p.get(k) for k in ("answers", "results", "score_pct")} | {"at": ev.at.isoformat()}
+
+    def _on_study_stage(self, ev: Event, p: dict, day: Day) -> None:
+        self._session(p["task_id"])["stage"] = p.get("stage")
+
+    def _on_study_fix(self, ev: Event, p: dict, day: Day) -> None:
+        fixes = self._session(p["task_id"])["fixes"]
+        fixes[p["key"]] = {**fixes.get(p["key"], {}), **{k: v for k, v in p.items() if k not in ("task_id", "key")}}
+
+    def _on_review_set(self, ev: Event, p: dict, day: Day) -> None:
+        old = self.reviews.get(p["id"], {})
+        self.reviews[p["id"]] = {**p, "created": old.get("created") or ev.local_date.isoformat()}
+
+    def _on_review_quiz(self, ev: Event, p: dict, day: Day) -> None:
+        self.review_quiz = {**p, "date": ev.local_date.isoformat(), "answer": None}
+
+    def _on_review_answer(self, ev: Event, p: dict, day: Day) -> None:
+        if self.review_quiz and self.review_quiz.get("id") == p.get("quiz_id"):
+            self.review_quiz["answer"] = {k: p.get(k) for k in ("answers", "results", "by_review")}
 
     def _on_resource_set(self, ev: Event, p: dict, day: Day) -> None:
         self.resources[p["id"]] = {**p, "date": self.resources.get(p["id"], {}).get("date") or ev.local_date.isoformat()}

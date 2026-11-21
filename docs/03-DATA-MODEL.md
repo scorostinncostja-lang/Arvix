@@ -72,7 +72,7 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `focus_session` | `duration_min, task_id, topic?` — с задачей копится в `Task.focus_min`, без задачи (тема «физика») идёт в глубокую работу дня; сессии дня — `Day.focus` | человек |
 | `focus_noted` | `focus_event_id, date, note` — «что успел» к прошедшей сессии; сама сессия не меняется | человек |
 | `file_received` | `name, kind, size, path, read, caption` — файл от человека в хранилище (`arvix/files.py`) | человек |
-| `lesson_started` | `task_id, topic, subject, roadmap_node, minutes, plan[], sources[], questions[], note, fallback` — учебный блок подготовлен ([06-LEARNING.md §8](06-LEARNING.md#8-учебный-блок-в-telegram-)) | код + модель |
+| `lesson_started` | `task_id, topic, subject, roadmap_node, minutes, plan[], sources[], questions[], note, fallback, lesson {topic, why, plan[{stage, from_min, to_min, step, tool}], check[{q, a}], sources}` (урок целиком — вернуть сессию без головы, D60) — учебный блок подготовлен ([06-LEARNING.md §8](06-LEARNING.md#8-учебный-блок-в-telegram-)) | код + модель |
 | `lesson_checked` | `task_id, score_pct (null — голова недоступна), answers, gaps[], next_step` — проверка в конце блока; `State.lessons` (флаг `checked`: пустая оценка без головы — тоже проверка) | код + модель |
 | `expense_logged` | `amount, currency, category, impulse, note` | человек, модель |
 | `project_set` | `id, title, why, kind (подсказка или своё слово), purposes[], expectation, deadline, weekly_min, goal_id, order, weeks, status, skills[], link, folder, by, reason?, started?` — `folder` — папка в Obsidian, фиксируется первым настоящим названием (D47) — проект целиком (правка — новое событие); свёртка добавляет `started`, `closed` (D43, D44); `started` в самом событии — только у проекта, восстановленного из хранилища (дата из карточки, D54) | человек, модель, L2 (роадмап), `restore` |
@@ -82,8 +82,13 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `channel_set` | каналы привлечения 0.7–0.8; с D47 не пишутся, старые события в журнале | — |
 | `resource_set` | `id, project_id, title, url, kind (source·doc·course·video·tool·example·repo·design·note·chat·other), note, status (active·removed), by` — источник, инструмент, пример чужой работы | человек, модель, L2 |
 | `learn_item_set` | `id, topic, why, project_id, goal_id, sources[], status (todo·done·dropped), kind (theory·practice, D55), task_id` — очередь «учиться», общая у проектов и раздела «Обучение» (D47, D55); `project_id` необязателен | человек, модель |
-| `study_panel` | `task_id, panel {id, type (quiz·board·diagram·video·text·note·sources), title, by (arvix·me), hidden?, …поля вида}` — окно учебной сессии; тот же `id` — замена, `hidden` — скрыто; `State.study` (D55) | модель, человек |
-| `study_answer` | `task_id, panel_id, answers[], results[] (true·false·null — открытый), score_pct` — ответ на тест окна; варианты проверяет код (D55) | человек |
+| `study_panel` | `task_id, panel {id, type (quiz·board·diagram·video·text·note·sources), title, by (arvix·me), stage (diag·learn·practice·fix·check, D60), hidden?, …поля вида}` — окно учебной сессии; тот же `id` — замена, `hidden` — скрыто; у вопроса теста `short`/`accept` (ответ числом), `skill`, `level`, `twin` (похожая задача); у видео `results[]` — ролики, найденные кодом; `State.study` (D55, D60) | модель, человек |
+| `study_answer` | `task_id, panel_id, answers[] («?» — не знаю), results[] (true·false·null — открытый), score_pct` — ответ на тест окна; варианты и короткий ответ проверяет код (D55, D60) | человек |
+| `study_stage` | `task_id, stage` — этап сессии, где человек сейчас (D60) | человек |
+| `study_fix` | `task_id, key («окно:вопрос»), kind? (rule·calc·read·start), twin_given?, twin_ok?, closed?, self?` — работа над ошибкой: причина, похожая задача (проверяет код), «разобрался» (D60) | человек |
+| `review_set` | `id, topic, subject, learn_id, tasks[], gaps[], step (0–5), due, status (active·done·dropped), history[{date, pct, kind}]` — тема на повторении, снимок целиком; `State.reviews` (D60) | код, человек |
+| `review_quiz` | `id, reviews[], items[{review, q, short·accept │ options·answer, why}], by (head·bank)` — тест повторения на сегодня; `State.review_quiz` (D60) | код + модель |
+| `review_answer` | `quiz_id, answers[], results[], by_review {id: pct}` — ответ на повторение; за ним — `review_set` с новым интервалом (D60) | человек |
 | `repo_activity` | коммиты GitHub 0.8; с D47 не пишется, старые события в журнале | — |
 | `social_contact` | `who` | человек, модель |
 | `reason_declared` | `reason` — причина плохого дня: важное, не сделанное в этот день, не уходит в долг | человек, модель |

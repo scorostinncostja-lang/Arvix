@@ -176,10 +176,11 @@ class StudyBotTest(BotCase):
         self.bot.prepare_lesson(self.phys)
         panels = self.core.state.study[self.phys.id]["panels"]
         self.assertEqual([p["type"] for p in panels], ["quiz", "board"])
-        self.assertIn("🪟 В приложении, «Обучение»: Закон Ома: вспомнить · Парабола", self.api.last)
+        self.assertIn("🪟 В приложении, «Обучение»: диагностика (3 задачи) · чертёж", self.api.last)  # тест в panels — диагностика (D60)
+        self.assertEqual([p.get("stage") for p in panels], ["diag", "learn"])
         system = self.brain.calls[-1]["system"]
         self.assertIn("panels", json.dumps(self.brain.calls[-1]["schema"], ensure_ascii=False))
-        self.assertIn("Окна сессии", system)
+        self.assertIn("Сессия идёт по алгоритму из пяти этапов", system)
 
     def test_topic_from_project_queue_is_kept(self) -> None:
         """Старый код искал тему в роадмапе предмета и терял тему проекта: «Учить сейчас: asyncio» становился уроком про что угодно."""
@@ -212,7 +213,7 @@ class StudyBotTest(BotCase):
         self.bot.send_lesson_check()
         self.brain.answers.append({"score_pct": 60, "feedback": "Частично.", "gaps": ["I = U/R"]})
         self.text("3 А; I=U/R; уменьшится")
-        self.assertIn("Ответы на тесты в окнах сессии", self.brain.calls[-1]["system"])
+        self.assertIn("Сессия по этапам — учти в оценке", self.brain.calls[-1]["system"])
         self.assertIn("I = ? → неверно", self.brain.calls[-1]["system"])
         self.assertTrue(self.core.state.lessons[-1]["checked"])
 

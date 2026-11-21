@@ -613,8 +613,9 @@ class Bot:
                 else:  # без времени — пусть голова подберёт окно по контексту
                     self.converse(f"Добавь задачу: {text}")
             elif kind == "lesson_check":
-                self.await_clear()
-                self.grade_lesson(text)
+                # Из окна сессии — точно ответ; из общего чата или Telegram — голова сперва скажет, ответ ли это
+                if not self.grade_lesson(text, sure=bool(self.study) and self.study == waiting.get("task")):
+                    return False
             elif kind == "focus_note":
                 if text.rstrip().endswith("?") or len(text) > 500:
                     self.await_clear()
@@ -1195,54 +1196,116 @@ class Bot:
         return state.get("task_id") == task_id
 
     def prepare_lesson(self, task: Any, *, key: str | None = None) -> dict[str, Any]:
-        """Один вызов головы: роадмап, журнал ошибок и метод человека → план по минутам, источники,
-        вопросы проверки. Голова молчит — запасной план кодом, проверка — обычное «Сделано?»."""
+        """Один вызов головы: роадмап, журнал ошибок и метод человека → этапы сессии (D60): задачи
+        диагностики и практики с ответами и похожими, разбор по подтемам, запрос видео, план по минутам,
+        вопросы проверки. Голова молчит — запасной план кодом по тем же этапам, проверка — «Сделано?»."""
         core = self.core
+        prior = next((x for x in reversed(core.state.lessons) if x.get("task_id") == task.id), None)
+        if prior and not prior.get("checked") and prior.get("full"):
+            return self.resume_lesson(task, prior, key=key)  # сессию сменила другая — возвращаем её как была
         section = core.cfg.section("learning")
         questions = int(section.get("check_questions") or lesson_mod.DEFAULT_QUESTIONS)
         subject = lesson_mod.subject_of(task.title)
         paths = core.cfg.vault_paths
         methods = paths.get("notes") or "03_Resources/Обучение"
         tools = section.get("tools") or []
+        gaps = [g for x in core.state.lessons if x.get("subject", "").lower() == subject.lower() for g in x.get("gaps") or []][-6:]
         rules_text = lesson_mod.LESSON_RULES.format(
             minutes=task.duration_min, title=task.title, sphere=task.sphere, date=core.today().isoformat(),
             roadmaps=paths.get("roadmaps") or "03_Resources/Роадмапы", methods=methods,
             history="; ".join(core.lesson_history(subject)) or "нет",
+            gaps=("\nПрошлые пробелы по предмету (дай на них задачи в диагностике): " + "; ".join(gaps)) if gaps else "",
             tools=(": " + ", ".join(str(t) for t in tools)) if tools else "", questions=questions,
-            hint=("\n" + hint) if (hint := study.lesson_hint(core, task)) else "", panels=study.PANEL_RULES,
+            hint=("\n" + hint) if (hint := study.lesson_hint(core, task)
+                                    or (f"Этот блок уже начат: тема «{prior['topic']}» — её и держи, сессия продолжается."
+                                        if prior and not prior.get("checked") and prior.get("topic") else "")) else "",
+            panels=study.PANEL_RULES,
         )
         system = "\n\n".join([
             constitution(core.state.profile, gentle=True, sections=("identity", "mission", "autonomy_rule", "honesty")),
             rules_text, "<context>\n" + build_context(core) + "\n</context>",
         ])
         with self.typing_kept():
-            result = self.brain.ask(system=system, prompt=f"Подготовь учебный блок: {task.title}, {task.duration_min} минут.",
-                                    schema=lesson_mod.LESSON_SCHEMA, role="voice", vault_tools=True)
+            result = self.brain.ask(system=system, prompt=f"Подготовь учебную сессию: {task.title}, {task.duration_min} минут.",
+                                    schema=lesson_mod.LESSON_SCHEMA, role="voice", vault_tools=True,
+                                    timeout=int(section.get("prepare_timeout_sec") or 300))
         if not result or not result.get("plan"):
             item = study.learn_item_of(core, task)
             result = {"topic": item["topic"] if item else task.title, "why": (item or {}).get("why", ""), "roadmap_node": "",
                       "plan": lesson_mod.fallback_plan(task.duration_min), "sources": list((item or {}).get("sources") or []),
                       "check": [], "fallback": True}
         result["check"] = [c for c in result.get("check") or [] if c.get("q") and c.get("a")][:questions]
+        stages = study.stage_plan(result["plan"], task.duration_min)  # шаги без этапа (старый ответ) — по порядку
         note_path = core.concept_skeleton(result.get("note_title") or result["topic"], subject,
                                           [c["q"] for c in result["check"]], list(result.get("sources") or []))
         core.lesson_started(task.id, result, note_path=note_path)
-        accepted = []
-        for raw in (result.get("panels") or [])[:3]:  # окна сессии (D55): кривое окно отбрасывается, урок — нет
-            try:
-                accepted.append(study.add_panel(core, raw, task_ref=task.id, by="arvix", source=self.channel))
-            except (ArvixError, TypeError, ValueError) as exc:
-                log.info("окно урока отброшено: %s", exc)
-        result["panels"] = accepted
-        lesson = {"task_id": task.id, "topic": result["topic"], "plan": result["plan"], "check": result["check"],
+        result["windows"] = self.stage_panels(task, result)
+        lesson = {"task_id": task.id, "topic": result["topic"], "plan": result["plan"], "stages": stages, "check": result["check"],
                   "note": note_path, "sources": result.get("sources") or [], "started": None}
         core.store.kv_set(LESSON, lesson)
-        text = lesson_mod.render(result, task, note_path)
+        if self.channel == "web" and self.study == task.id:  # открыл в приложении: этапы уже на столе — в нить коротко
+            have = lesson_mod.windows_line(result["windows"])
+            text = (f"Сессия готова: {result['topic']}." + (f"\nНа столе: {have}." if have else "")
+                    + "\nНачни с этапа 1 — диагностики: задачи на столе, ответы проверяются сразу. Застрял — пиши сюда или пришли фото решения.")
+        else:
+            text = lesson_mod.render(result, task, note_path)
         if result.get("fallback"):
             text += "\n\nГолова недоступна — план общий, тема по названию задачи." + (" " + self.brain_down_hint() if self.brain_down_hint() else "")
         buttons = [[(f"▶️ Начать · {task.duration_min} мин", f"l:{task.id}:go")]] if task.status == "planned" else None
         self.send(text, buttons, key=key)
         return lesson
+
+    def resume_lesson(self, task: Any, prior: dict[str, Any], *, key: str | None = None) -> dict[str, Any]:
+        """Урок этого блока уже готовили, потом открыли другой — вернуть его из журнала: план, вопросы проверки
+        с эталонами, заметку. Окна и ответы и так в журнале. Голова не нужна."""
+        full = prior["full"]
+        lesson = {"task_id": task.id, "topic": full.get("topic") or task.title, "plan": full.get("plan") or [],
+                  "stages": study.stage_plan(full.get("plan") or [], task.duration_min), "check": full.get("check") or [],
+                  "note": prior.get("note"), "sources": full.get("sources") or [], "started": None}
+        self.core.store.kv_set(LESSON, lesson)
+        windows = [p for p in study.visible(study.session_of(self.core, task.id)) if p.get("by") == "arvix"]
+        if self.channel == "web" and self.study == task.id:
+            text = f"Сессия на месте: {lesson['topic']}. Продолжай с того этапа, где остановился."
+        else:
+            text = lesson_mod.render({**full, "windows": windows}, task, prior.get("note"))
+        buttons = [[(f"▶️ Начать · {task.duration_min} мин", f"l:{task.id}:go")]] if task.status == "planned" else None
+        self.send(text, buttons, key=key)
+        return lesson
+
+    def stage_panels(self, task: Any, result: dict[str, Any]) -> list[dict[str, Any]]:
+        """Наполнение этапов окнами (D60). Кривое окно отбрасывается, урок — нет. Видео ищет код
+        (videos.search) и без головы — по теме блока. Возвращает поставленные окна."""
+        core = self.core
+        if existing := [p for p in study.visible(study.session_of(core, task.id)) if p.get("by") == "arvix"]:
+            return existing  # сессию готовят второй раз (урок сменился и вернулся) — её задачи и ответы остаются, без дублей
+        windows: list[dict[str, Any]] = []
+        extra = [p for p in result.get("panels") or [] if isinstance(p, dict)]
+        diagnostic = result.get("diagnostic") or next((p.get("questions") for p in extra if p.get("type") == "quiz"), None)
+        if diagnostic:  # тест в panels вместо diagnostic (старый ответ головы) — тоже диагностика
+            windows.append({"type": "quiz", "stage": "diag", "title": "Диагностика: что уже умеешь", "questions": diagnostic})
+        for skill in (result.get("skills") or [])[:4]:
+            if isinstance(skill, dict) and skill.get("name") and skill.get("explain"):
+                text = str(skill["explain"]) + (f"\n\n*Источник:* {skill['source']}" if skill.get("source") else "")
+                windows.append({"type": "text", "stage": "learn", "title": f"Разбор: {skill['name']}", "skill": skill["name"], "text": text})
+        query = str(result.get("video_query") or result.get("topic") or task.title)
+        found = []
+        if core.cfg.section("learning").get("video_search", True):
+            from arvix import videos
+
+            found = videos.search(query)
+        if found or result.get("video_query"):  # ни роликов, ни запроса от головы — окно-пустышку не ставим
+            windows.append({"type": "video", "stage": "learn", "title": "Видео-объяснение", "query": query, "results": found,
+                            "ask": "Что в видео объяснили иначе, чем в разборе? Одной фразой — в заметку."})
+        windows += [{**raw, "stage": raw.get("stage") or "learn"} for raw in extra if raw.get("type") in ("board", "diagram")][:2]
+        if result.get("practice"):
+            windows.append({"type": "quiz", "stage": "practice", "title": "Практика", "questions": result["practice"]})
+        accepted: list[dict[str, Any]] = []
+        for raw in windows:
+            try:
+                accepted.append(study.add_panel(core, raw, task_ref=task.id, by="arvix", source=self.channel))
+            except (ArvixError, TypeError, ValueError) as exc:
+                log.info("окно урока отброшено: %s", exc)
+        return accepted
 
     def begin_lesson(self, task: Any) -> None:
         """▶️ у учебной задачи: план (если ещё не было) → задача запущена → таймер на всю длительность."""
@@ -1276,7 +1339,7 @@ class Bot:
         elif op == "later":
             self.send("Хорошо, блок остаётся в плане. Скажешь — начнём.")
 
-    def send_lesson_check(self, *, key: str | None = None) -> None:
+    def send_lesson_check(self, *, key: str | None = None, early: bool = False) -> None:
         lesson = self.core.store.kv_get(LESSON) or {}
         if not lesson.get("check"):
             task = self.core.resolve_task(lesson["task_id"])
@@ -1284,11 +1347,15 @@ class Bot:
             self.send(tpl.reminder_check(task), tpl.task_buttons_check(task.id), key=key)
             return
         self.await_set("lesson_check", task=lesson["task_id"])
-        self.send(lesson_mod.render_check(lesson), key=key)
+        self.send(lesson_mod.render_check(lesson, early=early), key=key)
 
-    def grade_lesson(self, answers: str) -> None:
+    def grade_lesson(self, answers: str, *, sure: bool = True) -> bool:
         """Второй вызов головы: ответы против эталонов → оценка, пробелы, что дочитать.
-        Задача закрывается кодом: done_pct по оценке, отчёт — ответы человека."""
+        Задача закрывается кодом: done_pct по оценке, отчёт — ответы человека; тема встаёт в повторения.
+        sure=False — сообщение пришло не из окна проверки: «Доброе утро, проснулся» 21.11 было принято за ответ,
+        оценено в 0 % и закрыло блок. Теперь голова сначала говорит, ответ ли это; нет — False, вопрос остаётся."""
+        from arvix import review
+
         core = self.core
         lesson = core.store.kv_get(LESSON) or {}
         task = core.resolve_task(lesson["task_id"])
@@ -1296,13 +1363,17 @@ class Bot:
         system = "\n\n".join([
             constitution(core.state.profile, gentle=True, sections=("identity", "voice", "honesty")),
             lesson_mod.CHECK_RULES.format(topic=lesson.get("topic", ""), pairs=lesson_mod.check_pairs(lesson),
-                                          quiz=("\nОтветы на тесты в окнах сессии — учти в оценке, открытые оцени сам:\n" + quiz) if quiz else ""),
+                                          quiz=("\nСессия по этапам — учти в оценке, открытые оцени сам:\n" + quiz) if quiz else "",
+                                          where=lesson_mod.CHECK_SURE if sure else lesson_mod.CHECK_MAYBE),
         ])
         try:
             self.api.typing(self.owner)
         except TelegramError:
             pass
         result = self.brain.ask(system=system, prompt=answers, schema=lesson_mod.CHECK_SCHEMA, role="voice")
+        if not sure and (result is None or result.get("is_answer") is False):
+            return False  # не ответ (или голова молчит и не скажет, ответ ли) — разговор, вопрос проверки ждёт
+        self.await_clear()
         core.store.kv_del(LESSON)
         score = None if result is None else rules.clamp(int(result.get("score_pct") or 0), 0, 100)
         gaps = list((result or {}).get("gaps") or [])
@@ -1315,6 +1386,10 @@ class Bot:
             receipt_lines += [f"⚠️ Проверь: {w}" for w in done["warnings"]]
         if gaps:
             receipt_lines.append("В карточки и журнал ошибок: " + "; ".join(gaps[:4]))
+        topic_gaps = list(dict.fromkeys([*study.open_gaps(core, task.id), *gaps]))
+        rev = review.after_lesson(core, task, topic=lesson.get("topic") or task.title, subject=lesson_mod.subject_of(task.title),
+                                  score=score, gaps=topic_gaps, source="telegram")
+        receipt_lines.append(f"🔁 Повторение темы — {tpl.when_day(core, rev['due'])}: 2 задачи в «Обучении»")
         if lesson.get("note"):
             receipt_lines.append(f"📝 Заметка своими словами: {lesson['note']}")
         if result is None:
@@ -1325,6 +1400,26 @@ class Bot:
                 feedback += f"\n\nСледующий блок: {result['next_step'].strip()}"
         self.reply(feedback, "\n".join(receipt_lines))
         self.refresh_panel()
+        return True
+
+    def prepare_review(self) -> dict[str, Any]:
+        """Повторение тем (D60): один короткий вызов головы — по две задачи с новыми числами на тему, которой пора;
+        голова молчит — задачи из банка сессий. Сегодняшний тест без ответа не пересобирается."""
+        from arvix import review
+
+        core = self.core
+        quiz = review.current(core)
+        if quiz and not quiz.get("answer"):
+            return quiz
+        rows = review.due(core)[:review.PER_QUIZ]
+        if not rows:
+            raise ArvixError("Сегодня повторять нечего — темы вернутся в свой день")
+        system = "\n\n".join([
+            constitution(core.state.profile, gentle=True, sections=("identity", "honesty")),
+            review.REVIEW_RULES.format(topics=review.topics_block(core, rows), per=review.PER_TOPIC),
+        ])
+        result = self.brain.ask(system=system, prompt="Собери повторение.", schema=review.REVIEW_SCHEMA, role="voice")
+        return review.build(core, rows, (result or {}).get("items"), source=self.channel)
 
     def lesson_context(self) -> str:
         """Блок <lesson> в промпт L1, пока идёт учебный блок: объяснение у доски вместо подсказки."""

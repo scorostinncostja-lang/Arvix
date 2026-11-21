@@ -338,9 +338,11 @@ class Brain:
         return cmd
 
     def ask(self, *, system: str, prompt: str, schema: dict[str, Any], role: str = "voice", vault_tools: bool = False,
-            web: bool = False, skills: str = "off", effort: str | None = None) -> dict[str, Any] | None:
+            web: bool = False, skills: str = "off", effort: str | None = None, timeout: int | None = None) -> dict[str, Any] | None:
         """None — голова недоступна (лимит подписки, сеть, таймаут). Вызывающий
-        отвечает шаблоном L0: напоминания и учёт от этого не ломаются."""
+        отвечает шаблоном L0: напоминания и учёт от этого не ломаются. timeout — для длинной работы
+        в фоне (сессия урока целиком), не меньше общего [brain] timeout_sec."""
+        self._timeout = max(self.timeout, int(timeout or 0))
         result = self._ask(system=system, prompt=prompt, schema=schema, role=role, vault_tools=vault_tools, web=web,
                            skills=skills, effort=effort)
         if result is None and self.effort_level(effort) and "effort" in self.last_error.lower():
@@ -361,7 +363,8 @@ class Brain:
         env = {**os.environ, "ARVIX_BRAIN": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
         started = time.monotonic()
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout, cwd=cwd, env=env, check=False)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=getattr(self, "_timeout", self.timeout), cwd=cwd,
+                                  env=env, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
             self.last_error = str(exc)
             log.warning("claude -p не ответил: %s", exc)
