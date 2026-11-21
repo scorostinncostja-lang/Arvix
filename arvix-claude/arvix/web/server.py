@@ -19,6 +19,7 @@ POST /api/upload              файл телом запроса (X-File-Name, X
 POST /api/tasks {…} · /api/tasks/<id>/<op> · /api/tasks/<id>/photo (фото отчёта телом, X-File-Name) · /api/lesson/<id>
     · /api/study/open {task | item} · /api/study/learn · /api/study/<task>/<answer|stage|fix|panel|hide|message|check|upload|voice>
     · /api/study/review · /api/study/review/<answer|drop> (D55–D60); GET /api/study?task=
+    · /api/study/<task>/<transcript|mine|pick|video|shadow> — язык через видео (D61); GET /api/define?word=
 POST /api/focus {minutes, task | topic} · /api/focus/<pause|resume|stop|cancel> · /api/focus/note {event, note}
 POST /api/capture {text}      мысль в Inbox
 POST /api/note {path, text, sha} · /api/note/new {dir, name} · /api/note/toggle {path, line, sha} · /api/note/link {a, b}
@@ -181,6 +182,10 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     self.send_json(app.read(lambda c: api.project_view(c, query.get("id") or "")))
                 elif url.path == "/api/study":
                     self.send_json(app.read(lambda c: api.study_view(c, query.get("task") or None)))
+                elif url.path == "/api/define":  # словарь (D61): сеть — в потоке HTTP, очередь не держим
+                    from arvix import media
+
+                    self.send_json({"entry": media.define(query.get("word") or "")})
                 elif url.path == "/api/notes":
                     self.send_json(self.notes_dir(query.get("dir") or ""))
                 elif url.path == "/api/note":
@@ -334,6 +339,42 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     kind = (self.headers.get("Content-Type") or "").split(";")[0]
                     app.hub.post(api.study_upload(parts[1], data, name, kind, caption), label="смотрю файл", chat=True)
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
+                elif len(parts) == 3 and parts[0] == "study" and parts[2] in ("transcript", "mine", "pick"):
+                    self.send_json(app.hub.call(api.study_media_op(parts[1], parts[2], self.body_json()), timeout=150))
+                elif len(parts) == 3 and parts[0] == "study" and parts[2] == "shadow":
+                    # Shadowing (D61): распознавание — здесь, в потоке HTTP; в очередь — только сверка и событие
+                    from arvix.stt import STT, STTError
+
+                    audio = self.body_bytes()
+                    if not audio:
+                        raise ArvixError("Пустая запись")
+                    kind = (self.headers.get("Content-Type") or "audio/webm").split(";")[0]
+                    ext = {"audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav"}.get(kind, "webm")
+                    stt = STT(app.cfg)
+                    if not stt.enabled:
+                        raise ArvixError("Распознавание речи не настроено — shadowing без него не проверить")
+                    try:
+                        heard = stt.transcribe(audio, filename=f"voice.{ext}", browser=True, language=self.headers.get("X-Lang") or "en")
+                    except STTError as exc:
+                        raise ArvixError(f"Не распознал: {exc}") from exc
+                    body = {"panel": self.headers.get("X-Panel") or "", "i": int(self.headers.get("X-Line") or -1), "heard": heard}
+                    self.send_json(app.hub.call(api.study_media_op(parts[1], "shadow", body), timeout=150))
+                elif len(parts) == 3 and parts[0] == "study" and parts[2] == "video":
+                    # Своё видео на стол (D61): поиск роликов — здесь, в потоке HTTP; ссылка — как есть
+                    from arvix import videos
+
+                    body = self.body_json()
+                    q, link = str(body.get("query") or "").strip()[:160], str(body.get("url") or "").strip()[:400]
+                    lang = body.get("lang") if body.get("lang") in ("en", "de", "fr", "es") else None
+                    stage = body.get("stage") if body.get("stage") in ("diag", "learn", "practice", "fix", "check") else "learn"
+                    raw: dict[str, Any] = {"stage": stage, "title": "Видео" if link else f"Видео: {q}"[:80], **({"lang": lang} if lang else {})}
+                    if link:
+                        raw["url"] = link
+                    elif q:
+                        raw.update(query=q, results=videos.search(q, limit=5, lang="en" if lang == "en" else "ru"))
+                    else:
+                        raise ArvixError("Нужен запрос или ссылка")
+                    self.send_json(app.hub.call(api.study_media_op(parts[1], "video", {"panel": raw}), timeout=150))
                 elif len(parts) == 3 and parts[0] == "study" and parts[2] == "voice":
                     audio = self.body_bytes()
                     if not audio:

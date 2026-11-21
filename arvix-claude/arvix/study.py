@@ -27,6 +27,7 @@ import re
 import urllib.parse
 from typing import Any
 
+from arvix import media
 from arvix.core import ArvixError, new_id
 
 LESSON = "lesson"  # ключ урока в runtime-таблице — тот же, что у Bot и web/api
@@ -55,6 +56,9 @@ STAGE_GOAL = {
     "check": "Ответь без заметок. Это и есть отчёт о блоке: Arvix оценит и назначит повторение темы.",
 }
 ERROR_KINDS = {"rule": "не знал правило", "calc": "ошибка в счёте", "read": "невнимательно прочитал", "start": "не понял, с чего начать"}
+LANG_KINDS = {"hear": "не расслышал", "word": "не знал слово", "spell": "написал с ошибкой"}  # ошибки диктанта (D61)
+ALL_KINDS = {**ERROR_KINDS, **LANG_KINDS}
+MEDIA_EXT = (".mp4", ".webm", ".mov", ".m4a", ".mp3", ".ogg", ".wav")
 UNKNOWN = "?"  # ответ «не знаю»: честнее угадывания, разбор получает точную картину
 LEVELS = {  # порог уровня по диагностике — код, а не модель
     "know": {"min": 80, "label": "Тему знаешь", "next": "practice",
@@ -239,6 +243,8 @@ def _question(q: Any, *, nested: bool = False) -> dict[str, Any] | None:
     вопрос, который нечем проверить, — не вопрос, а шум. nested — похожая задача: только то, что проверит код."""
     if not isinstance(q, dict) or not _text(q.get("q"), 600):
         return None
+    if q.get("mode") == "dictation":
+        return _dictation(q, nested=nested)
     item: dict[str, Any] = {"q": _text(q.get("q"), 600), "why": _text(q.get("why"), 600)}
     options = [_text(o, 200) for o in (q.get("options") or []) if _text(o, 200)][:6]
     answer = q.get("answer")
@@ -262,6 +268,23 @@ def _question(q: Any, *, nested: bool = False) -> dict[str, Any] | None:
         item["level"] = level
     if "a" not in item and (t := _question(q.get("twin"), nested=True)):
         item["twin"] = t
+    return item
+
+
+def _dictation(q: dict[str, Any], *, nested: bool = False) -> dict[str, Any] | None:
+    """Фраза диктанта (D61): кусок ролика по времени и что в нём сказано. Ставит только код (из транскрипта),
+    проверяет — тоже код, по словам. Похожая задача — та же фраза ещё раз: переслушать и записать заново."""
+    listen, text = q.get("listen") if isinstance(q.get("listen"), dict) else {}, _text(q.get("short"), 400)
+    try:
+        t, d = max(0.0, float(listen.get("t"))), min(30.0, max(0.5, float(listen.get("d") or 4)))
+    except (TypeError, ValueError):
+        return None
+    if not text or not (panel := _text(listen.get("panel"), 40)):
+        return None
+    item: dict[str, Any] = {"q": _text(q.get("q"), 120), "why": "", "short": text, "mode": "dictation",
+                            "listen": {"panel": panel, "t": round(t, 2), "d": round(d, 2)}}
+    if not nested:
+        item.update(skill="диктант", twin={k: v for k, v in item.items()})
     return item
 
 
@@ -328,6 +351,15 @@ def _results(raw: Any) -> list[dict[str, Any]]:
 def _video(raw: dict[str, Any]) -> dict[str, Any]:
     url, query = _text(raw.get("url"), 400), _text(raw.get("query"), 160)
     out: dict[str, Any] = {"ask": _text(raw.get("ask"), 300)}
+    if raw.get("lang") in media.LANGS:
+        out["lang"] = raw["lang"]
+    if transcript := media.clean_transcript(raw.get("transcript")):
+        out["transcript"] = transcript
+    if path := _text(raw.get("media"), 300):  # свой ролик в хранилище (D61): плеер приложения, а не чужой
+        if ".." in path.split("/") or not path.lower().endswith(MEDIA_EXT):
+            raise ArvixError("Не медиафайл хранилища")
+        out["media"] = path
+        return out
     if query:
         out["query"] = query
         out["search"] = "https://www.youtube.com/results?search_query=" + urllib.parse.quote(query)
@@ -425,11 +457,16 @@ def add_panel(core: Any, raw: Any, *, task_ref: Any = None, by: str = "arvix", s
     task = session_task(core, task_ref)
     if isinstance(raw, dict) and raw.get("hidden") and raw.get("id"):
         return hide_panel(core, raw["id"], task_ref=task.id, source=source)
+    if isinstance(raw, dict) and raw.get("type") == "video" and not raw.get("lang") and not raw.get("media"):
+        item = learn_item_of(core, task)  # урок иностранного языка (D61): субтитры и поиск — на нём
+        if lang := media.language_of(task.title, (item or {}).get("topic", "")):
+            raw = {**raw, "lang": lang}
     if isinstance(raw, dict) and raw.get("type") == "video" and not raw.get("url") and "results" not in raw and raw.get("query") \
             and core.cfg.section("learning").get("video_search", True):
         from arvix import videos
 
-        raw = {**raw, "results": videos.search(str(raw["query"]))}  # ролики ищет код: голова адресов не выдумывает
+        # ролики ищет код: голова адресов не выдумывает
+        raw = {**raw, "results": videos.search(str(raw["query"]), lang="en" if raw.get("lang") == "en" else "ru")}
     panel = clean_panel(raw, by=by)
     session = session_of(core, task.id)
     if "stage" not in panel:  # окно из чата — на этап, где человек сейчас
@@ -463,11 +500,14 @@ def set_stage(core: Any, stage: str, *, task_ref: Any = None, source: str = "web
 
 
 def grade(panel: dict[str, Any], answers: list[Any]) -> list[bool | None]:
-    """Варианты и короткий ответ — True/False кодом; открытый — None: его оценит голова на проверке блока."""
+    """Варианты и короткий ответ — True/False кодом; открытый — None: его оценит голова на проверке блока.
+    Фраза диктанта — сверка по словам: ≥ 85 % слов верно (media.accuracy)."""
     out: list[bool | None] = []
     for i, q in enumerate(panel.get("questions") or []):
         given = answers[i] if i < len(answers) else None
-        if "options" in q:
+        if q.get("mode") == "dictation":
+            out.append(given != UNKNOWN and media.dictation_ok(given, q["short"]))
+        elif "options" in q:
             out.append(isinstance(given, int) and not isinstance(given, bool) and given == q["answer"])
         elif "short" in q:
             out.append(match_short(given, q))
@@ -492,14 +532,147 @@ def answer_quiz(core: Any, panel_id: str, answers: list[Any], *, task_ref: Any =
         elif "options" in q:
             clean.append(given if isinstance(given, int) and not isinstance(given, bool) and 0 <= given < len(q["options"]) else None)
         else:
-            clean.append(_text(given, 1000 if "a" in q else 120))
+            clean.append(_text(given, 1000 if "a" in q else 400 if q.get("mode") == "dictation" else 120))
     results = grade(panel, clean)
     scored = [r for r in results if r is not None]
     score = round(100 * sum(scored) / len(scored)) if scored else None
+    questions = panel["questions"]
+    payload: dict[str, Any] = {"task_id": task.id, "panel_id": panel_id, "answers": clean, "results": results, "score_pct": score}
+    if any(q.get("mode") == "dictation" for q in questions):  # диктант: сколько слов верно в каждой фразе
+        payload["scores"] = [media.accuracy(str(a or ""), q["short"])["pct"] if q.get("mode") == "dictation" and a != UNKNOWN else None
+                             for q, a in zip(questions, clean)]
     with core.tx():
-        core.emit("study_answer", {"task_id": task.id, "panel_id": panel_id, "answers": clean, "results": results,
-                                   "score_pct": score}, source=source, entity_id=task.id)
-    return {"results": results, "score_pct": score}
+        core.emit("study_answer", payload, source=source, entity_id=task.id)
+    return {"results": results, "score_pct": score, **({"scores": payload["scores"]} if "scores" in payload else {})}
+
+
+# --- язык через видео (D61): транскрипт, диктант, shadowing, добыча предложений --------------------------
+
+def video_panel(session: dict[str, Any], panel_id: str) -> dict[str, Any]:
+    panel = next((p for p in visible(session) if p["id"] == panel_id and p["type"] == "video"), None)
+    if panel is None:
+        raise ArvixError("Такого видео в сессии нет")
+    return panel
+
+
+def video_title(panel: dict[str, Any]) -> str:
+    """Название выбранного ролика (из найденных), а не окна: «6 Minute Grammar…», а не «Ролик на языке урока»."""
+    return next((r["title"] for r in panel.get("results") or [] if r.get("url") == panel.get("url") and r.get("title")), panel.get("title", ""))
+
+
+def pick_video(core: Any, panel_id: str, j: Any, *, task_ref: Any = None, source: str = "web") -> dict[str, Any]:
+    """Выбор ролика из найденных — в журнал: диктант и ссылки предложений идут к нему же и после перезагрузки.
+    К субтитрам ролик привязан: с ними выбор не меняется (другой ролик — новым окном «＋ Видео»)."""
+    task = session_task(core, task_ref)
+    panel = video_panel(session_of(core, task.id), panel_id)
+    results = panel.get("results") or []
+    if not isinstance(j, int) or isinstance(j, bool) or not 0 <= j < len(results):
+        raise ArvixError("Такого ролика в списке нет")
+    if panel.get("transcript"):
+        raise ArvixError("К этому ролику уже привязаны субтитры и диктант — другой ролик поставь кнопкой «＋ Видео»")
+    pick = results[j]
+    updated = {**panel, "url": pick["url"], "embed": pick["embed"], "site": pick["site"]}
+    with core.tx():
+        core.emit("study_panel", {"task_id": task.id, "panel": updated}, source=source, entity_id=task.id)
+    return updated
+
+
+def add_transcript(core: Any, panel_id: str, *, text: str | None = None, segments: list[dict[str, Any]] | None = None,
+                   task_ref: Any = None, source: str = "web") -> dict[str, Any]:
+    """Субтитры текстом к видео сессии: вставленные (YouTube «Показать текст видео», SRT, VTT) или из распознавания
+    своего ролика. Тот же id окна — замена; из строк с временем код сразу собирает диктант на этап практики."""
+    task = session_task(core, task_ref)
+    panel = video_panel(session_of(core, task.id), panel_id)
+    transcript = media.parse_transcript(text) if text is not None else media.from_segments(segments or [])
+    if len(transcript) < 2:
+        raise ArvixError("Не разобрал субтитры. Нужен текст с отметками времени: на YouTube под видео «…» → «Показать текст "
+                         "видео» → выдели всё и скопируй; подойдут и файлы .srt и .vtt")
+    updated = {**panel, "transcript": transcript}
+    with core.tx():
+        core.emit("study_panel", {"task_id": task.id, "panel": updated}, source=source, entity_id=task.id)
+    ensure_dictation(core, task, updated, source=source)
+    return updated
+
+
+def ensure_dictation(core: Any, task: Any, video: dict[str, Any], *, source: str = "web") -> dict[str, Any] | None:
+    """Диктант по ролику — один на ролик: 5 фраз по 5–14 слов со всего ролика. Строк с временем нет — диктанта нет."""
+    session = session_of(core, task.id)
+    if any(q.get("listen", {}).get("panel") == video["id"] for p in visible(session) if p["type"] == "quiz" for q in p["questions"]):
+        return None
+    lines = video.get("transcript") or []
+    picks = media.pick_dictation(lines)
+    if not picks:
+        return None
+    questions = [{"q": f"Фраза {k}", "mode": "dictation", "short": lines[i]["text"],
+                  "listen": {"panel": video["id"], "t": lines[i]["t"], "d": lines[i]["d"]}} for k, i in enumerate(picks, 1)]
+    return add_panel(core, {"type": "quiz", "stage": "practice", "title": "Диктант: запиши слово в слово", "questions": questions},
+                     task_ref=task.id, by="arvix", source=source)
+
+
+def _line(core: Any, task: Any, panel_id: str, i: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    panel = video_panel(session_of(core, task.id), panel_id)
+    lines = panel.get("transcript") or []
+    if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < len(lines):
+        raise ArvixError("Такой строки в субтитрах нет")
+    return panel, lines[i]
+
+
+def shadow(core: Any, panel_id: str, i: Any, heard: str, *, task_ref: Any = None, source: str = "web") -> dict[str, Any]:
+    """Shadowing: человек повторил фразу вслух, распознавание дало текст — код сверяет по словам."""
+    task = session_task(core, task_ref)
+    _, line = _line(core, task, panel_id, i)
+    result = media.accuracy(heard, line["text"])
+    with core.tx():
+        core.emit("study_shadow", {"task_id": task.id, "panel_id": panel_id, "i": i, "heard": _text(heard, 400),
+                                   "pct": result["pct"]}, source=source, entity_id=task.id)
+    return {**result, "heard": _text(heard, 400), "text": line["text"]}
+
+
+def mine(core: Any, panel_id: str, i: Any, word: str, *, task_ref: Any = None, source: str = "web") -> dict[str, Any]:
+    """Добыча (метод владельца): слово — только вместе с предложением целиком, с пропуском для Anki (cloze).
+    В журнал и в заметку хранилища «Предложения из видео» (папка английского или [learning] english_dir)."""
+    task = session_task(core, task_ref)
+    panel, line = _line(core, task, panel_id, i)
+    word = _text(word, 40)
+    if not word or word.lower() not in media.words(line["text"]):
+        raise ArvixError("Этого слова нет в строке")
+    entry = {"word": word, "sentence": line["text"], "cloze": media.cloze(line["text"], word), "t": line.get("t"),
+             "url": panel.get("url") or "", "media": panel.get("media") or "", "title": video_title(panel),
+             "lang": panel.get("lang") or "en"}
+    if any(m["word"].lower() == word.lower() and m["sentence"] == line["text"] for m in session_of(core, task.id).get("mined", [])):
+        return entry
+    with core.tx():
+        core.emit("study_mine", {"task_id": task.id, **entry}, source=source, entity_id=task.id)
+    try:
+        entry["note"] = write_mined(core, task)
+    except ArvixError as exc:
+        entry["note_error"] = str(exc)
+    return entry
+
+
+def mining_dir(core: Any) -> str:
+    """Папка для предложений: [learning] english_dir; иначе папка в корне хранилища со словом English; иначе «English»."""
+    if configured := str(core.cfg.section("learning").get("english_dir") or "").strip():
+        return configured.strip("/")
+    root = core.vault.root
+    found = next((p.name for p in sorted(root.iterdir()) if p.is_dir() and "english" in p.name.lower()), None)
+    return found or "English"
+
+
+def write_mined(core: Any, task: Any) -> str:
+    """Блок сессии в заметке «Предложения из видео»: строки в формате Cloze — импорт в Anki как есть."""
+    if not core.cfg.vault:
+        raise ArvixError("Хранилище не настроено")
+    rows = []
+    for m in session_of(core, task.id).get("mined", []):
+        at = f" {int(m['t']) // 60}:{int(m['t']) % 60:02d}" if m.get("t") is not None else ""
+        link = f"{m['url']}{'&' if '?' in m['url'] else '?'}t={int(m['t'])}" if m.get("url") and m.get("t") is not None else m.get("url") or m.get("media")
+        rows.append(f"- {m['cloze']} — *{m['title'] or 'видео'}{at}*" + (f" ({link})" if link else ""))
+    path = f"{mining_dir(core)}/Предложения из видео.md"
+    core.write_block(path, f"видео {task.id}", f"**{core.today():%d.%m.%Y} · {task.title}**\n" + "\n".join(rows),
+                     create_with="# Предложения из видео\n\nЦелые предложения с пропуском — для Anki (тип Cloze). "
+                                 "Пишет Arvix из раздела «Обучение», по одному блоку на сессию.\n\n", source="web")
+    return path
 
 
 # --- уровень, ошибки, работа над ошибками ----------------------------------------------------------
@@ -577,7 +750,7 @@ def fix_error(core: Any, key: str, *, task_ref: Any = None, kind: str | None = N
         raise ArvixError("Такой ошибки в сессии нет")
     payload: dict[str, Any] = {"task_id": task.id, "key": key}
     if kind:
-        if kind not in ERROR_KINDS:
+        if kind not in ERROR_KINDS and kind not in LANG_KINDS:
             raise ArvixError("Неизвестная причина ошибки")
         payload["kind"] = kind
     if twin is not None:
@@ -586,7 +759,10 @@ def fix_error(core: Any, key: str, *, task_ref: Any = None, kind: str | None = N
             raise ArvixError("У этой ошибки нет похожей задачи — попроси Arvix в чате")
         if err["twin_given"] is not None:
             raise ArvixError("Похожую уже решал — попроси Arvix дать ещё одну")
-        if "options" in q:
+        if q.get("mode") == "dictation":
+            given = _text(twin, 400) or UNKNOWN
+            ok = given != UNKNOWN and media.dictation_ok(given, q["short"])
+        elif "options" in q:
             given = twin if isinstance(twin, int) and not isinstance(twin, bool) and 0 <= twin < len(q["options"]) else UNKNOWN
             ok = given == q["answer"]
         else:
@@ -607,8 +783,11 @@ def fix_error(core: Any, key: str, *, task_ref: Any = None, kind: str | None = N
 # --- что видит приложение и что видит Arvix -------------------------------------------------------
 
 def _public_question(q: dict[str, Any]) -> dict[str, Any]:
-    return {"q": q["q"], "options": q.get("options"), "open": "a" in q, "short": "short" in q, "skill": q.get("skill"),
-            "level": q.get("level")}
+    out = {"q": q["q"], "options": q.get("options"), "open": "a" in q, "short": "short" in q, "skill": q.get("skill"),
+           "level": q.get("level")}
+    if q.get("mode") == "dictation":
+        out.update(mode="dictation", listen=q["listen"])  # текст фразы — только после ответа
+    return out
 
 
 def public_panel(panel: dict[str, Any], answer: dict[str, Any] | None) -> dict[str, Any]:
@@ -623,6 +802,8 @@ def public_panel(panel: dict[str, Any], answer: dict[str, Any] | None) -> dict[s
             item.update(answer=q.get("answer"), right=right_text(q), a=q.get("a"), why=q.get("why"), given=given,
                         given_text=_given_text(q, given), unknown=given == UNKNOWN,
                         ok=answer["results"][i] if i < len(answer["results"]) else None)
+            if q.get("mode") == "dictation" and given != UNKNOWN:
+                item.update(media.accuracy(str(given or ""), q["short"]))
         questions.append(item)
     return {**{k: v for k, v in panel.items() if k != "questions"}, "questions": questions, "done": answer is not None,
             "score_pct": answer.get("score_pct") if answer else None}
@@ -635,9 +816,15 @@ def public_errors(session: dict[str, Any]) -> list[dict[str, Any]]:
         q, twin = e["q"], e["q"].get("twin")
         item = {"key": e["key"], "stage": e["stage"], "q": q["q"], "skill": q.get("skill"), "given": _given_text(q, e["given"]),
                 "unknown": e["unknown"], "right": right_text(q), "why": q.get("why", ""), "kind": e["kind"],
-                "closed": e["closed"], "self": e["self"], "twin": None}
+                "closed": e["closed"], "self": e["self"], "twin": None, "mode": q.get("mode")}
+        if q.get("mode") == "dictation":
+            item["listen"] = q["listen"]
+            if not e["unknown"]:
+                item["diff"] = media.accuracy(str(e["given"] or ""), q["short"])["diff"]
         if twin:
             item["twin"] = {"q": twin["q"], "options": twin.get("options"), "short": "short" in twin, "done": e["twin_given"] is not None}
+            if twin.get("mode") == "dictation":  # похожая на диктанте — та же фраза: переслушать и записать заново
+                item["twin"].update(mode="dictation", listen=twin["listen"])
             if e["twin_given"] is not None:
                 item["twin"].update(ok=e["twin_ok"], given=_given_text(twin, e["twin_given"]), right=right_text(twin), why=twin.get("why", ""))
         out.append(item)
@@ -711,7 +898,7 @@ def context_block(core: Any, task_id: str, note_path: str | None = None) -> str:
         closed = sum(e["closed"] for e in errs)
         lines.append(f"Ошибки: {len(errs)}, закрыто {closed}:" + "".join(
             f"\n    {'✓' if e['closed'] else '·'} «{e['q']['q'][:90]}» → {_given_text(e['q'], e['given'])} (верно: {right_text(e['q'])[:40]})"
-            + (f" — причина: {ERROR_KINDS[e['kind']]}" if e.get("kind") else "") for e in errs[:8]))
+            + (f" — причина: {ALL_KINDS[e['kind']]}" if e.get("kind") else "") for e in errs[:8]))
     for p in visible(session):
         head = (f"[{p['id']}] {STAGE_RU[panel_stage(p, session)]} · {PANEL_RU[p['type']]} «{p['title']}»"
                 + (" (поставил человек)" if p.get("by") == "me" else ""))
@@ -723,18 +910,30 @@ def context_block(core: Any, task_id: str, note_path: str | None = None) -> str:
                 head += f" — ответил, {ans['score_pct']}%" if ans.get("score_pct") is not None else " — ответил"
                 head += "".join(f"\n    {m}" for m in _quiz_marks(session, p, ans))
         elif p["type"] == "video":
-            head += f" — {p.get('url') or 'поиск: ' + p.get('query', '')}"
+            head += f" — {p.get('url') or p.get('media') or 'поиск: ' + p.get('query', '')}"
+            if p.get("transcript"):
+                head += f"; субтитры текстом: {len(p['transcript'])} строк" + (f" ({media.LANGS.get(p.get('lang', ''), '')})" if p.get("lang") else "")
+                shadows = [(int(k.split(':')[1]), v) for k, v in (session.get("shadow") or {}).items() if k.startswith(p["id"] + ":")]
+                if shadows:
+                    head += "; shadowing: " + ", ".join(f"строка {i + 1} — {v['pct']}%" for i, v in sorted(shadows)[:6])
         elif p["type"] == "note":
             head += f" — {p['path']}"
         lines.append(head)
+    if mined := session.get("mined"):
+        lines.append("Добыл предложения: " + "; ".join(f"«{m['word']}» — {m['sentence'][:80]}" for m in mined[-6:]))
     out = "<study>\nУчебная сессия по этапам в разделе «Обучение» (её видит человек):\n" + "\n".join(lines)
     if excerpt := note_excerpt(core, note_path):
         out += f"\nЗаметка урока {note_path} — что он уже написал сам:\n{excerpt}"
     out += ("\nМожешь добавить окно действием study_panel (поле panel) на текущий этап: ошибка → разбор и похожая задача "
             "(quiz с short и why); «покажи график» → board; «найди видео» → video с query, ролики найдёт код. Тот же id — "
             "заменить окно, hidden=true — скрыть. Прислал фото решения — проверь по шагам, где ошибка. Заметку за него "
-            "не пиши: он пишет своими словами.\n</study>")
-    return out
+            "не пиши: он пишет своими словами.")
+    task = core.state.tasks.get(task_id)
+    if task is not None and media.language_of(task.title, (learn_item_of(core, task) or {}).get("topic", "")):
+        out += ("\nЭто урок иностранного языка: «найди проще / сложнее» → video с query на языке урока под уровень (i+1: понятно "
+                "80–90 %), код найдёт на YouTube и включит субтитры. Отвечай по-английски простыми словами, русский — одной "
+                "строкой, если без него не понять. Пересказ и ответы голосом — оценивай по смыслу и паттернам, ошибки называй.")
+    return out + "\n</study>"
 
 
 def quiz_summary(core: Any, task_id: str) -> str:
@@ -756,18 +955,20 @@ def quiz_summary(core: Any, task_id: str) -> str:
     errs = errors(session)
     if errs:
         rows.append(f"Работа над ошибками: закрыто {sum(e['closed'] for e in errs)} из {len(errs)}"
-                    + "".join(f"; «{e['q']['q'][:60]}» — {ERROR_KINDS[e['kind']]}" for e in errs if e.get("kind")))
+                    + "".join(f"; «{e['q']['q'][:60]}» — {ALL_KINDS[e['kind']]}" for e in errs if e.get("kind")))
     return "\n".join(rows)
 
 
 def open_gaps(core: Any, task_id: str) -> list[str]:
-    """Незакрытые ошибки — подтемы для повторения (review.py)."""
+    """Незакрытые ошибки и добытые предложения — пробелы темы для повторения (review.py)."""
     out: list[str] = []
-    for e in errors(session_of(core, task_id)):
+    session = session_of(core, task_id)
+    for e in errors(session):
         if not e["closed"]:
-            label = e["q"].get("skill") or e["q"]["q"][:80]
+            label = f"диктант: «{e['q']['short'][:80]}»" if e["q"].get("mode") == "dictation" else e["q"].get("skill") or e["q"]["q"][:80]
             if label not in out:
                 out.append(label)
+    out += [f"слово «{m['word']}» в предложении «{m['sentence'][:100]}»" for m in session.get("mined", [])][:6]
     return out
 
 

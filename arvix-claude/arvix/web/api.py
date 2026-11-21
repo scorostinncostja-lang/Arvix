@@ -416,6 +416,13 @@ STUDY_ASK = {  # подсказки чата — под этап: что обы�
     "fix": ["Почему мой ответ неверный?", "Дай ещё похожую задачу", "Где я обычно ошибаюсь?"],
     "check": ["Что повторить перед проверкой?"],
 }
+LANG_ASK = {  # урок иностранного языка (D61): про звук, фразы и ролики, а не чертежи
+    "diag": ["Explain the task more simply", "Что значит эта фраза?"],
+    "learn": ["Explain it more simply, in English", "Дай ещё 3 примера из жизни", "Найди ролик проще", "Найди сцену из сериала на эту тему"],
+    "practice": ["Дай подсказку, не ответ", "Ещё 5 заданий на этот паттерн", "Дай 3 фразы для shadowing"],
+    "fix": ["Почему я не расслышал эту фразу?", "Как это звучит в быстрой речи?", "Дай ещё похожую"],
+    "check": ["Проверь мой пересказ — пришлю голосом"],
+}
 
 
 def _lesson_row(core: Any, task_id: str) -> dict[str, Any] | None:
@@ -466,14 +473,26 @@ def session_view(core: Any, task_id: str) -> dict[str, Any]:
         "focus": focus_view(core, focus) if focus.get("task_id") == task.id else None,
         "check": check, "result": {k: row.get(k) for k in ("score", "gaps", "next_step")} if row.get("checked") else None,
         "roadmap_node": row.get("roadmap_node", ""), "fallback": row.get("fallback", False),
-        "panels": panels, "messages": messages, "asks": STUDY_ASK.get(stage, STUDY_ASK["learn"]),
+        "panels": panels, "messages": messages,
+        "asks": (LANG_ASK if bot_language(core, task) else STUDY_ASK).get(stage, STUDY_ASK["learn"]),
         "item": {"id": item["id"], "topic": item["topic"], "kind": item.get("kind") or "theory"} if item else None,
         "project": {"id": project["id"], "title": project["title"]} if project else None,
         "stage": stage, "stages": stages, "route": study.route(data), "errors": errs, "error_kinds": study.ERROR_KINDS,
         "check_asked": bool(check), "subject": lesson_mod.subject_of(task.title),
         "note_own": study.note_own(core, (lesson.get("note") if live else row.get("note")) or None),
+        "lang": bot_language(core, task), "mined": data.get("mined") or [], "shadow": data.get("shadow") or {},
+        "lang_kinds": study.LANG_KINDS,
         "review": {"due": rev.get("due"), "step": rev.get("step"), "status": rev.get("status")} if rev else None,
     }
+
+
+def bot_language(core: Any, task: Any) -> str | None:
+    """Язык урока для приложения — то же правило, что у бота (Bot.lesson_language)."""
+    from arvix import lesson as lesson_mod
+    from arvix import media, study
+
+    item = study.learn_item_of(core, task)
+    return media.language_of(task.title, (item or {}).get("topic", ""), lesson_mod.subject_of(task.title))
 
 
 def study_view(core: Any, task_id: str | None = None) -> dict[str, Any]:
@@ -535,15 +554,26 @@ def study_open(task_id: str | None = None, item_id: str | None = None, minutes: 
         from arvix import projects
 
         core = bot.core
-        task = projects.learn_start(core, item_id, minutes=minutes, source="web") if item_id else core.resolve_task(task_id)
+        lesson = core.store.kv_get(LESSON) or {}
+        busy = lesson.get("task_id") if lesson.get("started") or (core.store.kv_get(AWAIT) or {}).get("kind") == "lesson_check" else None
+
+        def refuse() -> None:
+            other = core.state.tasks.get(busy)
+            raise ArvixError(f"Сейчас идёт урок «{other.title if other else lesson.get('topic')}» — сначала закончи его: "
+                             "открой его здесь и ответь на проверку")
+        if item_id:
+            item = core.state.learn_items.get(item_id) or {}
+            if busy and item.get("task_id") != busy:
+                refuse()  # до learn_start: раньше блок вставал в план, а сессия не открывалась (D61, стенд)
+            task = projects.learn_start(core, item_id, minutes=minutes, source="web")
+        else:
+            task = core.resolve_task(task_id)
         if task.sphere != "learning":
             raise ArvixError("Сессия бывает только у учебного блока")
-        lesson = core.store.kv_get(LESSON) or {}
-        if lesson.get("task_id") and lesson["task_id"] != task.id and (lesson.get("started") or (core.store.kv_get(AWAIT) or {}).get("kind") == "lesson_check"):
-            other = core.state.tasks.get(lesson["task_id"])
-            raise ArvixError(f"Сейчас идёт урок «{other.title if other else lesson.get('topic')}» — сначала закончи его")
         if not task.is_open and not (lesson.get("task_id") == task.id):
-            return {"task_id": task.id, "queued": False}  # прошлая сессия — только посмотреть
+            return {"task_id": task.id, "queued": False}  # прошлая сессия — только посмотреть, даже когда идёт другой урок
+        if busy and busy != task.id:
+            refuse()
         bot.refresh_panel()
         return {"task_id": task.id, "queued": not bot.lesson_pending(task.id)}
     return run
@@ -625,12 +655,46 @@ def study_check(task_id: str) -> Any:
 
 
 def study_upload(task_id: str, data: bytes, name: str, mime: str, caption: str) -> Any:
-    """Файл в чат сессии — фото решения из тетради, скриншот, PDF: Arvix смотрит его с блоком <study>."""
+    """Файл в чат сессии — фото решения из тетради, скриншот, PDF: Arvix смотрит его с блоком <study>.
+    Ролик или аудио на уроке языка (D61) — в плеер на стол, с субтитрами из распознавания и диктантом."""
     def run(bot: Any) -> None:
+        from arvix import files
+
         bot.core.refresh()
         task = bot.core.resolve_task(task_id)
         with bot.via("web", SINK), bot.in_study(task.id), bot.incoming():
-            bot.on_file({"file_name": name, "mime_type": mime}, caption=caption, data=data)
+            if files.classify(name, mime) in ("audio", "video") and bot.lesson_language(task):
+                bot.study_media(task, data, name, mime)
+            else:
+                bot.on_file({"file_name": name, "mime_type": mime}, caption=caption, data=data)
+    return run
+
+
+def study_media_op(task_id: str, op: str, body: dict[str, Any]) -> Any:
+    """Язык через видео (D61): transcript {panel, text} · mine {panel, i, word} · shadow {panel, i, heard}
+    (распознавание уже сделано в потоке HTTP) · video {panel} (ролики уже найдены там же)."""
+    def run(bot: Any) -> dict[str, Any]:
+        from arvix import study
+
+        core = bot.core
+        task = core.resolve_task(task_id)
+        panel, i = str(body.get("panel") or ""), body.get("i")
+        if op == "transcript":
+            out: dict[str, Any] = {"panel": study.add_transcript(core, panel, text=str(body.get("text") or "")[:300_000], task_ref=task.id)}
+        elif op == "mine":
+            out = {"mined": study.mine(core, panel, i, str(body.get("word") or ""), task_ref=task.id)}
+        elif op == "shadow":
+            out = {"shadow": study.shadow(core, panel, i, str(body.get("heard") or ""), task_ref=task.id)}
+        elif op == "pick":
+            out = {"panel": study.pick_video(core, panel, body.get("j"), task_ref=task.id)}
+        elif op == "video":
+            raw = body.get("panel")
+            if not isinstance(raw, dict):
+                raise ArvixError("Нет видео")
+            out = {"panel": study.add_panel(core, {**raw, "type": "video"}, task_ref=task.id, by="me", source="web")}
+        else:
+            raise ArvixError(f"Неизвестное действие: {op}")
+        return {**out, "session": session_view(core, task.id)}
     return run
 
 
