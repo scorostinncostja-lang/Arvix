@@ -132,6 +132,8 @@ def search(query: str, limit: int = 3, *, lang: str = "ru") -> list[dict[str, An
     for t in threads:
         t.join(TIMEOUT + 2)
     lists = [[x for x in box.get(name) or [] if MIN_SEC <= x["sec"] <= MAX_SEC and x["title"]] for name in ("youtube", "rutube")]
+    if lang == "en":  # урок английского: ролики с русским названием — в конец (объяснение по-русски — не вход на языке)
+        lists = [sorted(items, key=lambda x: bool(re.search(r"[а-яё]", x["title"].lower()))) for items in lists]
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
     for i in range(max((len(x) for x in lists), default=0)):

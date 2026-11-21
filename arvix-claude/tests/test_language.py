@@ -242,6 +242,17 @@ class LanguageLessonBotTest(BotCase):
         self.assertEqual(session["lang"], "en")
         self.assertIn("hear", session["lang_kinds"])
 
+    def test_english_titles_first_for_english_lesson(self) -> None:
+        """Живой сервер 22.11: первым роликом урока английского пришёл «РАЗГОВОР (использование Present Perfect)»."""
+        import json as _json
+
+        data = {"contents": [{"videoRenderer": {"videoId": f"vid{i}AAAAAAA", "title": {"runs": [{"text": t}]}, "lengthText": {"simpleText": "5:00"}}}
+                             for i, t in enumerate(["РАЗГОВОР (Present Perfect)", "Present Perfect speaking practice"])]}
+        html = ("<script>var ytInitialData = " + _json.dumps(data, ensure_ascii=False) + ";</script>").encode()
+        videos.FETCH = lambda url, accept: html
+        found = videos.search("present perfect", 2, lang="en")
+        self.assertEqual([v["title"] for v in found], ["Present Perfect speaking practice", "РАЗГОВОР (Present Perfect)"])
+
     def test_russian_language_lesson_is_not_a_video_lesson(self) -> None:
         task = self.core.add_task("Русский язык: сочинение 13.3", sphere="learning", start="16:00", duration_min=45)
         self.bot.prepare_lesson(task)  # голова молчит — запасной план
