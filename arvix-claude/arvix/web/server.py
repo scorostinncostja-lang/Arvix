@@ -17,7 +17,8 @@ POST /api/message {text} · /api/voice (аудио) · /api/button {data}
 POST /api/tts {text}          озвучка ответа (ogg), если [tts] включена; иначе 404 — говорит голос телефона
 POST /api/upload              файл телом запроса (X-File-Name, X-Caption — urlencoded), до 20 МБ
 POST /api/tasks {…} · /api/tasks/<id>/<op> · /api/tasks/<id>/photo (фото отчёта телом, X-File-Name) · /api/lesson/<id>
-    · /api/study/open {task | item} · /api/study/learn · /api/study/<task>/<answer|panel|hide|message> (D55, D56); GET /api/study?task=
+    · /api/study/open {task | item} · /api/study/learn · /api/study/<task>/<answer|stage|fix|panel|hide|message|check|upload|voice>
+    · /api/study/review · /api/study/review/<answer|drop> (D55–D60); GET /api/study?task=
 POST /api/focus {minutes, task | topic} · /api/focus/<pause|resume|stop|cancel> · /api/focus/note {event, note}
 POST /api/capture {text}      мысль в Inbox
 POST /api/note {path, text, sha} · /api/note/new {dir, name} · /api/note/toggle {path, line, sha} · /api/note/link {a, b}
@@ -318,6 +319,29 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     self.send_json(opened)
                 elif parts == ["study", "learn"]:
                     self.send_json(app.hub.call(api.study_learn(self.body_json())))
+                elif parts == ["study", "review"]:  # повторение тем (D60): голова собирает задачи, ждём здесь же
+                    self.send_json(app.hub.call(api.review_start(), timeout=200, label="собираю повторение"))
+                elif len(parts) == 3 and parts[:2] == ["study", "review"]:
+                    self.send_json(app.hub.call(api.review_op(parts[2], self.body_json())))
+                elif len(parts) == 3 and parts[0] == "study" and parts[2] == "check":
+                    self.send_json(app.hub.call(api.study_check(parts[1]), timeout=60))
+                elif len(parts) == 3 and parts[0] == "study" and parts[2] == "upload":
+                    data = self.body_bytes()
+                    if not data:
+                        raise ArvixError("Пустой файл")
+                    name = urllib.parse.unquote(self.headers.get("X-File-Name") or "файл")
+                    caption = urllib.parse.unquote(self.headers.get("X-Caption") or "").strip()[:4000]
+                    kind = (self.headers.get("Content-Type") or "").split(";")[0]
+                    app.hub.post(api.study_upload(parts[1], data, name, kind, caption), label="смотрю файл", chat=True)
+                    self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
+                elif len(parts) == 3 and parts[0] == "study" and parts[2] == "voice":
+                    audio = self.body_bytes()
+                    if not audio:
+                        raise ArvixError("Пустая запись")
+                    kind = (self.headers.get("Content-Type") or "audio/webm").split(";")[0]
+                    ext = {"audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav"}.get(kind, "webm")
+                    app.hub.post(api.study_voice(parts[1], audio, f"voice.{ext}"), label="слушаю", chat=True)
+                    self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif len(parts) == 3 and parts[0] == "study" and parts[2] == "message":
                     text = str(self.body_json().get("text") or "").strip()
                     if not text:
@@ -325,7 +349,9 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     app.hub.post(api.study_chat(parts[1], text[:16000]), label="думаю", chat=True)
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif len(parts) == 3 and parts[0] == "study":
-                    self.send_json(app.hub.call(api.study_op(parts[1], parts[2], self.body_json())))
+                    # Ответ на задачу ждёт, пока Арвикс договорит в чате (голова держит очередь до полминуты),
+                    # а не падает «Арвикс занят»: проверка — код, она быстрая, когда до неё дошла очередь
+                    self.send_json(app.hub.call(api.study_op(parts[1], parts[2], self.body_json()), timeout=150))
                 elif parts == ["focus"]:
                     body = self.body_json()
                     self.send_json(app.hub.call(api.focus_start(int(body.get("minutes") or 25), body.get("task"), body.get("topic"))))

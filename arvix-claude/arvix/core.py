@@ -1126,6 +1126,13 @@ class Core:
                 "sources": [str(s)[:160] for s in lesson.get("sources") or []][:6],
                 "questions": [str(c.get("q", ""))[:300] for c in lesson.get("check") or []][:6],
                 "note": note_path, "fallback": bool(lesson.get("fallback")),
+                # Урок целиком (D60): сессию, которую сменила другая, можно вернуть как была — без второго вызова головы
+                "lesson": {"topic": str(lesson.get("topic", ""))[:200], "why": str(lesson.get("why") or "")[:300],
+                           "roadmap_node": str(lesson.get("roadmap_node") or "")[:200],
+                           "plan": [{k: s.get(k) for k in ("stage", "from_min", "to_min", "step", "tool") if s.get(k) is not None}
+                                    for s in lesson.get("plan") or [] if isinstance(s, dict)][:8],
+                           "check": [{"q": str(c.get("q", ""))[:400], "a": str(c.get("a", ""))[:400]} for c in lesson.get("check") or []][:6],
+                           "sources": [str(x)[:300] for x in lesson.get("sources") or []][:8], "fallback": bool(lesson.get("fallback"))},
             }, source=source, entity_id=task.id)
         return task
 
@@ -1147,6 +1154,22 @@ class Core:
             out.append(f"{x['date'][8:10]}.{x['date'][5:7]} {x['topic']}{score}")
         return out
 
+    def concept_template(self) -> str | None:
+        """Шаблон конспекта человека ([learning] concept_template или Templates/Concept.md); нет — None."""
+        from arvix.vault import VaultError
+
+        if not self.cfg.vault:
+            return None
+        vault = self.vault
+        rel_tpl = self.cfg.section("learning").get("concept_template") or next(
+            (vault.rel(p) for p in vault.root.rglob("Concept.md") if "emplate" in str(p.parent.name)), None)
+        if not rel_tpl:
+            return None
+        try:
+            return vault.read(rel_tpl)
+        except VaultError:
+            return None
+
     def concept_skeleton(self, title: str, subject: str, questions: list[str], sources: list[str]) -> str | None:
         """Каркас заметки по шаблону человека в его папку концептов; чужой файл не трогается.
         Возвращает путь или None (хранилища нет / заметка уже есть)."""
@@ -1157,14 +1180,7 @@ class Core:
             return None
         section = self.cfg.section("learning")
         vault = self.vault
-        template = None
-        rel_tpl = section.get("concept_template") or next(
-            (vault.rel(p) for p in vault.root.rglob("Concept.md") if "emplate" in str(p.parent.name)), None)
-        if rel_tpl:
-            try:
-                template = vault.read(rel_tpl)
-            except VaultError:
-                template = None
+        template = self.concept_template()
         folder = section.get("concept_dir") or next(
             (p.name for p in sorted(vault.root.iterdir()) if p.is_dir() and "concept" in p.name.lower()), None)
         if not folder:

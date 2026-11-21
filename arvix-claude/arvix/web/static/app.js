@@ -2194,18 +2194,19 @@ function openLogSheet() {
   });
 }
 
-// --- Обучение (D55) ----------------------------------------------------------------------------------
-/* Учебная сессия = учебный блок + его урок (план по минутам, таймер, проверка) + окна, которые ставит
- * Арвикс: тест (варианты проверяет код), доска (графики и чертежи), схема, видео, объяснение, заметка.
- * Очередь тем — общая с «Проектами»: тема проекта (теория или практика) видна здесь, выученная — там.
- * Арвикс видит сессию (ответы, текст заметки, время) — она уходит ему блоком <study> с каждым вопросом. */
+// --- Обучение (D55, D60) -----------------------------------------------------------------------------
+/* Учебная сессия = учебный блок + его урок, разложенный по этапам (D60): диагностика → разбор → практика →
+ * работа над ошибками → проверка. На экране — один этап: что делать сейчас, его окна и «Дальше». Уровень по
+ * диагностике, проверку задач и сбор ошибок считает код; Арвикс наполняет этапы и видит сессию (блок <study>).
+ * Очередь тем — общая с «Проектами». Повторения тем по интервалам — карточка «Повторение» в обзоре. */
 const STUDY_LAYOUT_KEY = "arvix_studylayout";
 const studyLayout = (() => {
   try { return { pane: "desk", ...JSON.parse(localStorage.getItem(STUDY_LAYOUT_KEY) || "{}") }; } catch (_) { return { pane: "desk" }; }
 })();
 const saveStudyLayout = () => { try { localStorage.setItem(STUDY_LAYOUT_KEY, JSON.stringify(studyLayout)); } catch (_) { /* приватный режим */ } };
-const studyUI = { open: false, task: null, quiz: {}, notes: {}, deskKey: "", auto: false };
+const studyUI = { open: false, task: null, quiz: {}, notes: {}, twin: {}, deskKey: "", auto: false, view: null, review: false, rq: {}, busy: "", lastStage: "", peek: false };
 const KIND_RU = { theory: "теория", practice: "практика" };
+const STAGE_ICON = { diag: "1", learn: "2", practice: "3", fix: "4", check: "5" };
 
 async function loadStudy() {
   state.study = await api("study" + (studyUI.task ? "?task=" + encodeURIComponent(studyUI.task) : ""));
@@ -2222,19 +2223,22 @@ async function loadStudy() {
 function deskKey(s) {
   if (!s) return "";
   const { messages, ...rest } = s;
-  return JSON.stringify(rest);
+  return JSON.stringify(rest) + "|" + (studyUI.view || "");
 }
 
 function renderStudy(opts = {}) {
   const S = state.study;
   if (!S) { view.innerHTML = `<div class="empty">Загружаю…</div>`; return; }
   if (S.gentle) { view.innerHTML = `<div class="card note-card">${esc(S.note)}</div>`; return; }
+  if (studyUI.review) { renderReview(); return; }
   const s = S.session;
   if (!(studyUI.open && s)) { studyUI.deskKey = ""; view.innerHTML = studyOverviewHtml(S); bindStudy(); return; }
   const key = deskKey(s);
   if (opts.live && key === studyUI.deskKey && $("#sc-thread")) { drawStudyThread(); return; }
   const keep = captureStudyComposer();
   const deskEl = $(".sw-desk"), deskTop = deskEl ? deskEl.scrollTop : 0;  // правка заметки или ответ теста не уводят стол наверх
+  const sameStage = studyUI.lastStage === `${s.task.id}:${shownStage(s)}`;  // другой этап — стол сверху
+  studyUI.lastStage = `${s.task.id}:${shownStage(s)}`;
   studyUI.deskKey = key;
   const chat = s.live || (s.messages || []).length > 0;  // закрытая сессия — история: стол и её нить, только чтение
   const pane = !chat ? "desk" : isWide() ? "both" : studyLayout.pane;
@@ -2242,24 +2246,30 @@ function renderStudy(opts = {}) {
     <section class="sw-desk">${studyHeadHtml(s)}
       ${isWide() || !chat ? "" : `<div class="seg pm-tabs">${[["desk", "Стол"], ["chat", "Чат с Арвиксом"]].map(([k, l]) =>
         `<button type="button" data-spane="${k}" class="${pane === k ? "on" : ""}">${l}</button>`).join("")}</div>`}
-      ${pane !== "chat" ? `<div class="sw-panels">${studyDeskHtml(s)}</div>` : ""}</section>
+      ${pane !== "chat" ? stepperHtml(s) + `<div class="sw-stage">${stageHtml(s)}</div>` : ""}</section>
     ${pane !== "desk" ? `<aside class="sw-chat">${studyChatHtml(s)}</aside>` : ""}</div>`;
   bindStudy();
   restoreStudyComposer(keep);
-  if (deskTop && $(".sw-desk")) $(".sw-desk").scrollTop = deskTop;
+  if (sameStage && deskTop && $(".sw-desk")) $(".sw-desk").scrollTop = deskTop;
+  const stp = $(".stp"), on = $(".stp-i.on");  // на телефоне полоса этапов шире экрана: текущий этап — в середину
+  if (stp && on && stp.scrollWidth > stp.clientWidth) stp.scrollLeft = on.offsetLeft - (stp.clientWidth - on.clientWidth) / 2;
   drawStudyThread();
   tickStudy();
 }
 
-// --- обзор: сегодня · очередь · пройденное -----------------------------------------------------
+const shownStage = (s) => (s.live ? s.stage : studyUI.view || s.stage);
+
+// --- обзор: повторение · сегодня · очередь · пройденное ----------------------------------------
 function studyOverviewHtml(S) {
   let html = `<div class="so">`;
   const s = S.session;
   if (s && s.live) {
+    const st = s.stages.find((x) => x.id === s.stage);
     html += `<div class="card so-live" data-sresume role="button" tabindex="0"><h3>Сессия ${s.started ? "идёт" : "готова"}</h3>
-      <div class="so-row"><div class="grow"><b>${esc(s.topic)}</b><div class="muted small">${esc(s.task.title)} · ${hm(s.task.duration_min)} · окон ${s.panels.length}</div></div>
+      <div class="so-row"><div class="grow"><b>${esc(s.topic)}</b><div class="muted small">${esc(s.task.title)} · ${hm(s.task.duration_min)} · этап ${STAGE_ICON[s.stage]}/5 — ${esc(st ? st.name : "")}</div></div>
       <button class="pill primary">${icon("chevron")} Открыть</button></div></div>`;
   }
+  html += reviewCardHtml(S.review);
   html += `<div class="section-title first"><span>Сегодня</span><span>${S.blocks.length ? S.blocks.length + " учебн." : ""}</span></div>`;
   html += S.blocks.length ? S.blocks.map((t) => `<div class="task ${esc(t.status)}"><div class="time"><b>${esc(t.start || "—")}</b>${esc(t.end || "")}</div>
       <div class="body"><div class="title">${esc(t.title)}</div><div class="meta"><span class="chip">${hm(t.duration_min)}</span>
@@ -2287,12 +2297,43 @@ function studyOverviewHtml(S) {
     html += S.history.map((x) => `<div class="card so-hist" data-shist="${esc(x.task_id)}" role="button" tabindex="0"><div class="so-row"><div class="grow">
         <b>${esc(x.topic)}</b><div class="muted small">${ddmm(x.date)} · ${esc(x.subject)}${x.panels ? ` · окон ${x.panels}` : ""}</div></div>
         <span class="chip ${x.score >= 70 ? "green" : x.score != null ? "yellow" : ""}">${x.score != null ? x.score + "%" : x.checked ? "без оценки" : "без проверки"}</span></div>
-      ${x.gaps.length ? `<div class="small so-gaps">В карточки: ${x.gaps.map(esc).join("; ")}</div>` : ""}</div>`).join("");
+      ${x.gaps.length ? `<div class="small so-gaps">Пробелы: ${x.gaps.map(esc).join("; ")}</div>` : ""}</div>`).join("");
+  }
+  const R = S.review || {};
+  const all = [...(R.due || []), ...(R.upcoming || [])];
+  if (all.length) {
+    html += `<details class="card so-revlist"><summary class="muted small">Темы на повторении · ${all.length}${R.done ? ` · закреплено ${R.done}` : ""}</summary>
+      ${all.map((r) => `<div class="so-row small"><div class="grow">${esc(r.topic)} <span class="muted">· шаг ${Math.min(r.step + 1, r.steps)}/${r.steps} · ${r.due ? dueText(r.due) : ""}</span></div>
+        <button class="icon-btn sm" data-srevdrop="${esc(r.id)}" aria-label="Убрать тему из повторений">${icon("x")}</button></div>`).join("")}</details>`;
   }
   return html + `</div>`;
 }
 
-// --- рабочий стол ------------------------------------------------------------------------------
+function dueText(iso) {
+  const today = state.data && state.data.date ? state.data.date : new Date().toISOString().slice(0, 10);
+  const n = Math.round((new Date(iso) - new Date(today)) / 86400000);
+  return n <= 0 ? "сегодня" : n === 1 ? "завтра" : `через ${n} дн. (${ddmm(iso)})`;
+}
+
+function reviewCardHtml(R) {
+  if (!R) return "";
+  const q = R.quiz;
+  if (q && q.done) {
+    return `<div class="card so-rev done"><h3>${icon("checks")} Повторение сделано</h3>
+      ${q.by_review.map((r) => `<div class="small">${esc(r.topic)} — <b>${r.pct}%</b> · ${r.status === "done" ? "тема закреплена" : "дальше " + dueText(r.due)}</div>`).join("")}
+      ${R.due.length ? `<button class="pill small-pill primary" data-srev>Ещё ${R.due.length} ${R.due.length === 1 ? "тема" : "темы"}</button>` : ""}
+      <button class="pill small-pill" data-srevopen>Разбор ответов</button></div>`;
+  }
+  if (!R.due.length && !q) return "";
+  const n = q ? new Set(q.items.map((x) => x.review)).size : Math.min(R.due.length, R.per_quiz);
+  const names = q ? [...new Set(q.items.map((x) => x.topic))] : R.due.slice(0, R.per_quiz).map((r) => r.topic);
+  return `<div class="card so-rev"><h3>🔁 Повторение · ${n} ${n === 1 ? "тема" : "темы"} · ≈${Math.max(3, n * 3)} мин</h3>
+    <div class="muted small">Вспомнить сейчас — помнить к экзамену: тема возвращается через 1, 3, 7, 16 и 35 дней, задачи с новыми числами.</div>
+    <div class="so-revtopics">${names.map((t) => `<span class="chip">${esc(t)}</span>`).join("")}${R.due.length > R.per_quiz && !q ? `<span class="muted small">и ещё ${R.due.length - R.per_quiz}</span>` : ""}</div>
+    <button class="pill primary" data-srev ${studyUI.busy === "review" ? "disabled" : ""}>${studyUI.busy === "review" ? "Арвикс собирает задачи…" : q ? "Продолжить" : `${icon("play")} Начать`}</button></div>`;
+}
+
+// --- рабочий стол: шапка, этапы, этап ----------------------------------------------------------
 function studyHeadHtml(s) {
   const chips = [`<span class="chip">${hm(s.task.duration_min)}</span>`];
   if (s.item) chips.push(`<span class="chip ${s.item.kind === "practice" ? "accent" : ""}">${KIND_RU[s.item.kind] || ""}</span>`);
@@ -2302,88 +2343,212 @@ function studyHeadHtml(s) {
   let act = "";
   if (s.live && s.focus) act = `<div class="sw-timer" id="sw-timer" data-until="${esc(s.focus.until)}" data-paused="${esc(s.focus.paused_at || "")}"><b id="sw-left">--:--</b>
       ${s.focus.paused_at ? `<button class="icon-btn sm go" data-sfocus="resume" aria-label="Дальше">${icon("play")}</button>` : `<button class="icon-btn sm" data-sfocus="pause" aria-label="Пауза">${icon("pause")}</button>`}</div>`;
-  else if (s.live && s.task.open && !s.started) act = `<button class="pill primary small-pill" data-sgo>${icon("play")} Начать · ${hm(s.task.duration_min)}</button>`;
-  if (s.live && s.started && !s.check.length && s.task.open) act += `<button class="pill small-pill" data-scheck title="Закончить раньше и ответить на вопросы">Готов к проверке</button>`;
+  else if (s.live && s.task.open && !s.started) act = `<button class="pill primary small-pill" data-sgo title="Таймер на весь блок; он пойдёт и сам, когда ответишь на задачи">${icon("play")} Начать · ${hm(s.task.duration_min)}</button>`;
   return `<div class="ph"><button class="icon-btn sm" data-sback aria-label="К разделу">${icon("back")}</button>
     <div class="grow ph-text"><div class="ph-title">${esc(s.topic)}</div><div class="muted small">${esc(s.task.title)}</div><div class="meta">${chips.join("")}</div></div>
     <div class="ph-acts">${act}</div></div>`;
 }
 
-function studyDeskHtml(s) {
+function stepperHtml(s) {
+  const cur = shownStage(s);
+  const elapsed = s.started ? (Date.now() - new Date(s.started).getTime()) / 60000 : -1;
+  return `<nav class="stp" aria-label="Этапы сессии">${s.stages.map((st, i) => {
+    const timer = s.started && st.from != null && elapsed >= st.from && elapsed < st.to;
+    const badge = st.id === "fix" && st.errors ? `<span class="stp-b">${st.errors}</span>` : "";
+    return `<button type="button" class="stp-i${st.id === cur ? " on" : ""}${st.done ? " done" : ""}" data-sstage="${st.id}" aria-current="${st.id === cur ? "step" : "false"}">
+      <span class="stp-n">${st.done ? icon("check") : i + 1}</span><span class="stp-t">${esc(st.short || st.name)}${badge}</span>
+      ${st.from != null ? `<span class="stp-m">${timer ? "⏱ " : ""}${st.from}–${st.to}</span>` : ""}</button>`;
+  }).join("")}</nav>`;
+}
+
+function stageHtml(s) {
+  const cur = shownStage(s);
+  const st = s.stages.find((x) => x.id === cur) || s.stages[0];
+  const i = s.stages.indexOf(st);
   let html = "";
-  if (!s.prepared && s.live === false && s.task.open) {
-    html += `<div class="sp sp-wide"><div class="muted">Арвикс готовит сессию: смотрит роадмап, твои заметки о методе, прошлые уроки…</div></div>`;
+  if (!s.prepared && s.live === false && s.task.open) {  // голова собирает этапы — минуту-две; пустых этапов не показываем
+    return `<div class="sp sg"><div class="sg-h"><b>Арвикс готовит сессию</b><span class="muted small">1–3 мин</span></div>
+      <div class="sg-goal">Смотрит роадмап, твои заметки и прошлые ошибки, подбирает задачи диагностики и практики, разбор и видео.</div>
+      <div class="sg-step">Пока ждёшь — возьми тетрадь и с пустого листа выпиши всё, что помнишь по теме. Это и есть разминка перед диагностикой.</div></div>`;
   }
-  if (s.check.length) {
-    html += `<div class="sp sp-wide sp-check"><div class="sp-h"><b>Проверка — ${s.check.length} вопроса</b></div>
-      <ol class="small">${s.check.map((q) => `<li>${esc(q)}</li>`).join("")}</ol>
-      <textarea id="sk-text" rows="4" placeholder="Ответь одним сообщением, по номерам. Не знаешь — так и напиши: это тоже ответ."></textarea>
-      <button class="btn primary" data-skheck>${icon("send")} Отправить ответы</button>
-      <div class="muted small">Ответ и есть отчёт: Арвикс оценит по эталонам и закроет блок.</div></div>`;
-  }
-  if (s.result) {
-    html += `<div class="sp sp-wide"><div class="sp-h"><b>Итог проверки</b><span class="chip ${s.result.score >= 70 ? "green" : "yellow"}">${s.result.score != null ? s.result.score + "%" : "без оценки"}</span></div>
-      ${(s.result.gaps || []).length ? `<div class="small"><b>В карточки Anki и журнал ошибок:</b><ul>${s.result.gaps.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></div>` : ""}
-      ${s.result.next_step ? `<div class="small"><b>Следующий блок:</b> ${esc(s.result.next_step)}</div>` : ""}</div>`;
-  }
-  if (s.plan.length) {
-    const elapsed = s.started ? (Date.now() - new Date(s.started).getTime()) / 60000 : -1;
-    html += `<div class="sp"><div class="sp-h"><b>План</b><span class="muted small">${s.started ? "идёт" : "▶ — таймер на весь блок"}</span></div>
-      ${s.plan.map((st) => { const on = elapsed >= st.from_min && elapsed < st.to_min, past = elapsed >= st.to_min;
-        return `<div class="sp-step${on ? " on" : ""}${past ? " past" : ""}"><span class="sp-min">${st.from_min}–${st.to_min}</span><div class="grow">${esc(st.step)}${st.tool ? `<div class="muted small">${esc(st.tool)}</div>` : ""}</div></div>`; }).join("")}
-      ${s.fallback ? `<div class="muted small">Голова была недоступна — план общий.</div>` : ""}</div>`;
-  }
-  for (const p of s.panels) html += panelHtml(s.live ? p : { ...p, fixed: true });
-  const notePath = s.note || "";
-  if (notePath && !s.panels.some((p) => p.type === "note" && p.path === notePath)) html += panelHtml({ id: "lesson-note", type: "note", title: "Заметка своими словами", path: notePath, by: "arvix", fixed: true });
-  if (s.sources.length) html += panelHtml({ id: "lesson-sources", type: "sources", title: "Источники", list: s.sources, fixed: true });
-  if (s.task.open) {
-    html += `<div class="sp sp-add"><div class="muted small">Окна ставит Арвикс по ходу — попроси в чате. Сам можешь добавить видео по ссылке.</div>
+  html += `<div class="sp sg"><div class="sg-h"><b>${i + 1} · ${esc(st.name)}</b>${st.from != null ? `<span class="muted small">${st.from}–${st.to} мин</span>` : ""}</div>
+    <div class="sg-goal">${esc(st.goal)}</div>
+    ${st.steps.map((x) => `<div class="sg-step">${esc(x.step)}${x.tool ? ` <span class="muted">· ${esc(x.tool)}</span>` : ""}</div>`).join("")}
+    ${s.fallback && cur === "diag" ? `<div class="muted small">Голова была недоступна — этапы общие, задачи бери из учебника и банка ФИПИ.</div>` : ""}</div>`;
+  const mine = s.panels.filter((p) => p.stage === cur);
+  if (cur === "diag") {
+    html += mine.map((p) => panelHtml(p, s)).join("");
+    if (!mine.some((p) => p.type === "quiz")) html += `<div class="sp muted small">Задач диагностики нет — вспомни тему на бумаге с пустого листа и отметь, где споткнулся.</div>`;
+    if (s.route) html += routeHtml(s.route);
+  } else if (cur === "learn" && s.live && !studyUI.peek && s.panels.some((p) => p.stage === "diag" && p.type === "quiz" && !p.done)) {
+    // Разбор строится по ошибкам диагностики: подсмотреть его до задач — сломать диагностику самому себе
+    html += `<div class="sp"><div>Разбор откроется после диагностики — он строится по твоим ошибкам, лишнего читать не придётся.</div>
+      <div class="pills"><button class="pill small-pill primary" data-sstage="diag">К диагностике</button><button class="pill small-pill" data-speek>Открыть разбор всё равно</button></div></div>`;
+  } else if (cur === "learn") {
+    if (s.route) html += routeHtml(s.route);
+    const weak = new Set((s.route && s.route.weak) || []);
+    const texts = mine.filter((p) => p.type === "text");
+    const known = s.route ? texts.filter((p) => p.skill && !weak.has(p.skill)) : [];
+    html += texts.filter((p) => !known.includes(p)).map((p) => panelHtml(p, s)).join("");
+    html += mine.filter((p) => p.type !== "text").map((p) => panelHtml(p, s)).join("");
+    if (known.length) html += `<details class="sp sp-known"><summary><b>Это ты уже умеешь</b> <span class="muted small">· ${known.map((p) => esc(p.skill)).join(", ")} — открыть разбор</span></summary>${known.map((p) => panelHtml(p, s)).join("")}</details>`;
+    const notePath = s.note || "";
+    if (notePath && !s.panels.some((p) => p.type === "note" && p.path === notePath)) html += panelHtml({ id: "lesson-note", type: "note", title: "Заметка своими словами", path: notePath, by: "arvix", fixed: true }, s);
+    if (s.sources.length) html += panelHtml({ id: "lesson-sources", type: "sources", title: "Источники", list: s.sources, fixed: true }, s);
+    if (s.task.open) html += `<div class="sp sp-add"><div class="muted small">Нужно ещё — спроси в чате: пример, чертёж, схему, другое видео. Свою ссылку на видео можно добавить и самому.</div>
       <div class="pills"><button class="pill small-pill" data-sadd="video">+ Видео по ссылке</button></div></div>`;
+  } else if (cur === "practice") {
+    html += mine.map((p) => panelHtml(p, s)).join("");
+    if (!mine.some((p) => p.type === "quiz")) html += `<div class="sp muted small">Задач в приложении нет — решай по плану этапа выше. Нужны задачи здесь — попроси в чате: «дай 5 задач».</div>`;
+  } else if (cur === "fix") {
+    html += fixHtml(s);
+    html += mine.map((p) => panelHtml(p, s)).join("");
+  } else if (cur === "check") {
+    html += checkHtml(s);
+    html += mine.map((p) => panelHtml(p, s)).join("");
   }
+  html += nextHtml(s, cur);
   return html;
 }
 
-function panelHtml(p) {
-  const by = p.by === "me" ? `<span class="chip">ты</span>` : "";
-  const close = p.fixed ? "" : `<button class="icon-btn sm" data-shide="${esc(p.id)}" aria-label="Скрыть окно">${icon("x")}</button>`;
-  const wide = ["board", "diagram", "video", "note"].includes(p.type) ? " sp-wide" : "";
-  return `<div class="sp sp-${esc(p.type)}${wide}" data-panel="${esc(p.id)}"><div class="sp-h"><b>${esc(p.title)}</b><span class="grow"></span>${by}${close}</div>${panelBody(p)}</div>`;
+function routeHtml(r) {
+  return `<div class="sp sg-route lv-${esc(r.level)}"><div class="sp-h"><b>${esc(r.label)} · ${r.right} из ${r.total}</b><span class="chip">${r.pct}%</span></div>
+    <div class="small">${esc(r.advice)}</div>
+    ${r.strong.length ? `<div class="small muted">Умеешь: ${r.strong.map(esc).join(", ")}</div>` : ""}</div>`;
 }
 
-function panelBody(p) {
-  if (p.type === "quiz") return quizHtml(p);
+function nextHtml(s, cur) {
+  if (!s.live) return "";
+  const order = s.stages.map((x) => x.id), i = order.indexOf(cur);
+  if (i >= order.length - 1) return "";
+  let target = order[i + 1], extra = "";
+  if (cur === "diag" && s.route && s.route.next === "practice") {
+    target = "practice";
+    extra = `<button class="pill small-pill" data-sstage="learn">Всё равно разбор</button>`;
+  }
+  const name = s.stages.find((x) => x.id === target).name;
+  const errs = target === "fix" ? s.errors.filter((e) => !e.closed).length : 0;
+  return `<div class="sg-next">${extra}<button class="btn primary" data-sstage="${target}">Дальше: ${esc(name)}${errs ? ` (${errs})` : ""} ${icon("chevron")}</button></div>`;
+}
+
+// --- работа над ошибками: причина, решение, похожая задача — проверяет код ----------------------
+function fixHtml(s) {
+  const errs = s.errors || [];
+  const open = s.panels.filter((p) => p.type === "quiz" && !p.done && (p.stage === "diag" || p.stage === "practice"));
+  let html = "";
+  if (open.length) html += `<div class="sp small muted">Не отвечены: ${open.map((p) => esc(p.title)).join(", ")} — их ошибки появятся здесь после ответа.</div>`;
+  if (!errs.length) return html + `<div class="sp"><b>Ошибок нет.</b> <span class="muted small">Иди к проверке — или попроси в чате задачи посложнее.</span></div>`;
+  const left = errs.filter((e) => !e.closed).length;
+  html += `<div class="sp small"><b>${errs.length - left} из ${errs.length} закрыто.</b> <span class="muted">Незакрытые уйдут в повторение темы — Арвикс вернёт их через день.</span></div>`;
+  return html + errs.map((e) => {
+    const kinds = Object.entries(s.error_kinds).map(([k, label]) => `<button type="button" class="chip${e.kind === k ? " accent" : ""}" data-sfixkind="${k}" data-key="${esc(e.key)}"${s.live ? "" : " disabled"}>${esc(label)}</button>`).join("");
+    let twin = "";
+    if (e.twin && !e.twin.done) {
+      const v = studyUI.twin[e.key];
+      const input = e.twin.options ? `<div class="sq-opts">${e.twin.options.map((o, j) => `<button type="button" class="sq-opt${v === j ? " on" : ""}" data-stwin="${esc(e.key)}" data-j="${j}">${esc(o)}</button>`).join("")}</div>`
+        : `<input class="sq-in" data-stwinin="${esc(e.key)}" value="${esc(v ?? "")}" placeholder="Ответ" autocomplete="off">`;
+      twin = `<div class="fx-twin"><div class="small"><b>Похожая задача — реши сам:</b></div><div>${esc(e.twin.q)}</div>${input}
+        ${s.live ? `<button class="pill small-pill primary" data-stwinok="${esc(e.key)}">Проверить</button>` : ""}</div>`;
+    } else if (e.twin) {
+      twin = `<div class="fx-twin ${e.twin.ok ? "ok" : "bad"}"><div class="small"><b>${e.twin.ok ? "✓ Похожую решил" : "✗ Похожая — тоже ошибка"}</b></div><div class="small">${esc(e.twin.q)}</div>
+        <div class="small">Твой ответ: ${esc(e.twin.given)}${e.twin.ok ? "" : ` · верно: <b>${esc(e.twin.right)}</b>`}</div>${e.twin.why ? `<div class="small muted">${esc(e.twin.why)}</div>` : ""}</div>`;
+    }
+    const tail = e.closed ? "" : s.live ? `<div class="pills">${!e.twin || e.twin.done ? `<button class="pill small-pill" data-sask="Дай ещё похожую задачу на: ${esc(e.q.slice(0, 120))}">Ещё похожую — в чате</button>` : ""}
+        <button class="pill small-pill" data-sfixdone="${esc(e.key)}">Разобрался</button></div>` : "";
+    return `<div class="sp fx${e.closed ? " closed" : ""}"><div class="fx-h"><span class="chip">${e.stage === "diag" ? "диагностика" : e.stage === "practice" ? "практика" : "тест"}</span>
+        ${e.skill ? `<span class="chip">${esc(e.skill)}</span>` : ""}<span class="grow"></span>${e.closed ? `<span class="chip green">${e.self ? "разобрался" : "закрыта"}</span>` : ""}</div>
+      <div class="fx-q">${esc(e.q)}</div>
+      <div class="small"><span class="fx-bad">${e.unknown ? "Не знал" : "Твой ответ: " + esc(e.given)}</span> · верно: <b class="fx-good">${esc(e.right)}</b></div>
+      ${e.why ? `<div class="small fx-why">${esc(e.why)}</div>` : ""}
+      ${e.closed && !e.kind ? "" : `<div class="fx-kinds"><span class="muted small">Почему:</span>${kinds}</div>`}
+      ${twin}${tail}</div>`;
+  }).join("");
+}
+
+// --- проверка: вопросы конца блока, ответ и есть отчёт ------------------------------------------
+function checkHtml(s) {
+  if (s.result) {
+    return `<div class="sp"><div class="sp-h"><b>Итог проверки</b><span class="chip ${s.result.score >= 70 ? "green" : "yellow"}">${s.result.score != null ? s.result.score + "%" : "без оценки"}</span></div>
+      ${(s.result.gaps || []).length ? `<div class="small"><b>Пробелы — в карточки Anki и журнал ошибок:</b><ul>${s.result.gaps.map((g) => `<li>${esc(g)}</li>`).join("")}</ul></div>` : ""}
+      ${s.result.next_step ? `<div class="small"><b>Следующий блок:</b> ${esc(s.result.next_step)}</div>` : ""}
+      ${s.review ? `<div class="small"><b>Повторение темы:</b> ${s.review.status === "done" ? "закреплена" : dueText(s.review.due)} — 2 задачи в «Обучении».</div>` : ""}</div>`;
+  }
+  if (s.check.length) {
+    return `<div class="sp sp-check"><div class="sp-h"><b>Проверка — ${s.check.length} вопроса</b></div>
+      <ol class="small">${s.check.map((q) => `<li>${esc(q)}</li>`).join("")}</ol>
+      <textarea id="sk-text" rows="4" placeholder="Ответь одним сообщением, по номерам. Не знаешь — так и напиши: это тоже ответ."></textarea>
+      <button class="btn primary" data-skheck>${icon("send")} Отправить ответы</button>
+      <div class="muted small">Ответ и есть отчёт: Арвикс оценит по эталонам, закроет блок и поставит повторение темы.</div></div>`;
+  }
+  if (!s.live || !s.task.open) return `<div class="sp muted small">Проверки у этой сессии не было.</div>`;
+  const left = (s.errors || []).filter((e) => !e.closed).length;
+  return `<div class="sp"><div class="small">Вопросы проверки придут сюда. Ответишь — блок закрыт: ${s.focus ? "таймер остановится, прошедшие минуты запишутся." : "время блока засчитается."}</div>
+    ${left ? `<div class="small muted">Незакрытых ошибок: ${left} — они уйдут в повторение темы.</div>` : ""}
+    <button class="btn primary" data-scheck>${icon("check")} Начать проверку</button></div>`;
+}
+
+function panelHtml(p, s) {
+  const by = p.by === "me" ? `<span class="chip">ты</span>` : "";
+  const live = s && s.live;
+  // Задачи этапа не скрываются: их ответы — уровень и ошибки сессии; скрыть можно объяснение, видео, чертёж
+  const close = p.fixed || !live || p.type === "quiz" ? "" : `<button class="icon-btn sm" data-shide="${esc(p.id)}" aria-label="Скрыть окно">${icon("x")}</button>`;
+  return `<div class="sp sp-${esc(p.type)}" data-panel="${esc(p.id)}"><div class="sp-h"><b>${esc(p.title)}</b><span class="grow"></span>${by}${close}</div>${panelBody(p, live)}</div>`;
+}
+
+function panelBody(p, live) {
+  if (p.type === "quiz") return quizHtml(p, live);
   if (p.type === "board") return boardSvg(p);
   if (p.type === "diagram") return diagramSvg(p);
   if (p.type === "text") return `<div class="obs">${obsidian(p.text).html}</div>`;
   if (p.type === "sources") return `<ol class="small sp-src">${p.list.map((x) => `<li>${/^https?:\/\//.test(x) ? `<a href="${esc(x)}" target="_blank" rel="noopener">${esc(x)}</a>` : esc(x)}</li>`).join("")}</ol>`;
-  if (p.type === "video") {
-    let body = "";
-    if (p.embed) body = `<div class="sp-player"><iframe src="${esc(p.embed)}" title="${esc(p.title)}" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
-    else if (p.url) body = `<a class="pill small-pill" href="${esc(p.url)}" target="_blank" rel="noopener">Открыть видео</a> <span class="muted small">${esc(p.url)}</span>`;
-    else body = `<a class="pill small-pill" href="${esc(p.search)}" target="_blank" rel="noopener">Найти: «${esc(p.query)}»</a><div class="muted small">Настоящей ссылки у Арвикса нет — выбери сам и пришли её в чат, он поставит видео сюда.</div>`;
-    return body + (p.ask ? `<div class="small sp-ask">После просмотра ответь в чате: <b>${esc(p.ask)}</b></div>` : "");
-  }
+  if (p.type === "video") return videoBody(p);
   if (p.type === "note") return noteBody(p);
   return "";
 }
 
-// --- тест: варианты проверяет код, открытые — Арвикс на проверке блока ------------------------------
-function quizHtml(p) {
+/* Видео: ролики нашёл код (RuTube и YouTube) — список, плеер у выбранного; ссылку человека — плеером или ссылкой. */
+function videoBody(p) {
+  const list = p.results || [];
+  const pick = studyUI.quiz["v:" + p.id] ?? 0;
+  const cur = list[pick] || (p.embed ? { embed: p.embed, url: p.url, title: p.title } : null);
+  let body = "";
+  if (cur && cur.embed) body += `<div class="sp-player"><iframe src="${esc(cur.embed)}" title="${esc(cur.title || p.title)}" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>`;
+  else if (p.url) body += `<a class="pill small-pill" href="${esc(p.url)}" target="_blank" rel="noopener">Открыть видео</a> <span class="muted small">${esc(p.url)}</span>`;
+  if (list.length) {
+    body += `<div class="vd-list">${list.map((v, j) => `<button type="button" class="vd${j === pick ? " on" : ""}" data-svid="${esc(p.id)}" data-j="${j}">
+      <span class="vd-site ${esc(v.site)}">${v.site === "rutube" ? "RuTube" : v.site === "youtube" ? "YouTube" : esc(v.site)}</span>
+      <span class="vd-t">${esc(v.title)}</span><span class="muted small">${esc(v.channel)}${v.minutes ? " · " + v.minutes + " мин" : ""}</span></button>`).join("")}</div>
+      ${cur && cur.url ? `<a class="small muted" href="${esc(cur.url)}" target="_blank" rel="noopener">Открыть на ${cur.site === "rutube" ? "RuTube" : "YouTube"} ↗</a>` : ""}`;
+  } else if (!p.url && p.search) {
+    body += `<a class="pill small-pill" href="${esc(p.search)}" target="_blank" rel="noopener">Найти: «${esc(p.query)}»</a><div class="muted small">Поиск сейчас не ответил — открой ссылку или пришли в чат свою, Арвикс поставит видео сюда.</div>`;
+  }
+  return body + (p.ask ? `<div class="small sp-ask">После просмотра: <b>${esc(p.ask)}</b></div>` : "");
+}
+
+// --- тест: варианты и короткий ответ проверяет код, открытые — Арвикс на проверке блока ------------
+function quizHtml(p, live = true) {
   const sel = studyUI.quiz[p.id] || (studyUI.quiz[p.id] = {});
   const qs = p.questions.map((q, i) => {
     if (p.done) {
       const mark = q.open ? "•" : q.ok ? "✓" : "✗";
-      const opts = q.open ? `<div class="small">Твой ответ: ${esc(q.given || "—")}</div><div class="small muted">Эталон: ${esc(q.a || "")}</div>`
-        : `<div class="sq-opts">${q.options.map((o, j) => `<span class="sq-opt${j === q.answer ? " right" : ""}${j === q.given && j !== q.answer ? " wrong" : ""}">${esc(o)}</span>`).join("")}</div>`;
-      return `<div class="sq ${q.open ? "" : q.ok ? "ok" : "bad"}"><div><b>${mark}</b> ${esc(q.q)}</div>${opts}${q.why ? `<div class="small muted">${esc(q.why)}</div>` : ""}</div>`;
+      let opts;
+      if (q.open) opts = `<div class="small">Твой ответ: ${esc(q.given_text || "—")}</div><div class="small muted">Эталон: ${esc(q.a || "")}</div>`;
+      else if (q.options) opts = `<div class="sq-opts">${q.options.map((o, j) => `<span class="sq-opt${j === q.answer ? " right" : ""}${j === q.given && j !== q.answer ? " wrong" : ""}">${esc(o)}</span>`).join("")}</div>`
+        + (q.unknown ? `<div class="small muted">Отметил «не знаю»</div>` : "");
+      else opts = `<div class="small">${q.unknown ? "Не знал" : `Твой ответ: <span class="${q.ok ? "fx-good" : "fx-bad"}">${esc(q.given_text)}</span>`}${q.ok ? "" : ` · верно: <b class="fx-good">${esc(q.right)}</b>`}</div>`;
+      return `<div class="sq ${q.open ? "" : q.ok ? "ok" : "bad"}"><div><b>${mark}</b> ${esc(q.q)}</div>${opts}${q.why ? `<div class="small muted sq-why">${esc(q.why)}</div>` : ""}</div>`;
     }
-    const body = q.open ? `<textarea class="sq-text" data-sq="${esc(p.id)}" data-i="${i}" rows="2" placeholder="Своими словами">${esc(sel[i] || "")}</textarea>`
-      : `<div class="sq-opts">${q.options.map((o, j) => `<button type="button" class="sq-opt${sel[i] === j ? " on" : ""}" data-sq="${esc(p.id)}" data-i="${i}" data-j="${j}">${esc(o)}</button>`).join("")}</div>`;
-    return `<div class="sq"><div>${i + 1}. ${esc(q.q)}</div>${body}</div>`;
+    const unk = sel[i] === "?";
+    let body;
+    if (q.open) body = `<textarea class="sq-text" data-sq="${esc(p.id)}" data-i="${i}" rows="2" placeholder="Своими словами"${unk ? " disabled" : ""}>${esc(unk ? "" : sel[i] || "")}</textarea>`;
+    else if (q.options) body = `<div class="sq-opts">${q.options.map((o, j) => `<button type="button" class="sq-opt${sel[i] === j ? " on" : ""}" data-sq="${esc(p.id)}" data-i="${i}" data-j="${j}">${esc(o)}</button>`).join("")}</div>`;
+    else body = `<input class="sq-in" data-sq="${esc(p.id)}" data-i="${i}" value="${esc(unk ? "" : sel[i] ?? "")}" placeholder="Ответ — число или слово" autocomplete="off" enterkeyhint="next"${unk ? " disabled" : ""}>`;
+    const meta = [q.skill ? esc(q.skill) : "", q.level ? ["", "простая", "средняя", "сложная"][q.level] : ""].filter(Boolean).join(" · ");
+    return `<div class="sq${unk ? " unk" : ""}"><div>${i + 1}. ${esc(q.q)}${meta ? ` <span class="muted small">· ${meta}</span>` : ""}</div>${body}
+      <button type="button" class="chip sq-unk${unk ? " accent" : ""}" data-sunk="${esc(p.id)}" data-i="${i}">Не знаю</button></div>`;
   }).join("");
-  return qs + (p.done ? `<div class="small">${p.score_pct != null ? `<b>${p.score_pct}%</b> по вопросам с вариантами. ` : ""}Открытые Арвикс учтёт на проверке блока. Ошибся — спроси в чате «почему».</div>`
-    : `<button class="btn primary" data-squiz="${esc(p.id)}">Проверить</button>`);
+  if (p.done) return qs + `<div class="small">${p.score_pct != null ? `<b>${p.score_pct}%</b> — проверено кодом. ` : ""}${p.questions.some((q) => q.open) ? "Открытые Арвикс учтёт на проверке блока. " : ""}${p.questions.some((q) => q.ok === false) ? "Ошибки — в «Работе над ошибками»." : ""}</div>`;
+  return qs + (live ? `<button class="btn primary" data-squiz="${esc(p.id)}">Проверить</button>` : `<div class="muted small">Тест не решён.</div>`);
 }
 
 // --- доска: формулы разбирает свой парсер (без eval), рисует SVG ---------------------------------
@@ -2513,6 +2678,8 @@ function diagramSvg(p) {
 }
 
 // --- заметка урока: пишет человек, Арвикс читает ---------------------------------------------
+/* Заметка свёрнута до строки: полный текст — по «Открыть» или «Писать». Иначе каркас Concept.md со свойствами
+ * занимал весь стол и закрывал то, что нужно делать сейчас. */
 function noteBody(p) {
   const n = studyUI.notes[p.path];
   if (!n) {
@@ -2522,32 +2689,40 @@ function noteBody(p) {
   if (n.missing) return `<div class="muted small">Заметки ${esc(p.path)} нет в хранилище.</div>`;
   const at = `data-snote="${esc(n.path)}"`;
   const bar = n.edit ? `<button class="pill small-pill primary" data-snote-save ${at}>Сохранить</button><button class="pill small-pill" data-snote-cancel ${at}>Отмена</button>`
-    : `<button class="pill small-pill" data-snote-edit ${at}>${icon("pencil")} Писать</button><a class="pill small-pill" href="${obsidianUrl(n.path)}">Obsidian</a>`;
-  const doc = n.edit ? null : obsidian(n.text);
-  return `<div class="pn-bar"><span class="muted small grow">${esc(n.path)}</span>${bar}</div>
-    ${n.edit ? `<textarea class="pn-edit sn-edit" ${at}>${esc(n.text)}</textarea>`
-      : `<div class="obs pn-view">${doc.props.length ? propsHtml(doc.props) : ""}${doc.html || `<p class="muted">Пусто — «Писать».</p>`}</div>`}
-    <div class="muted small">Своими словами, без подглядывания — Арвикс видит, что написано, и спросит по пробелам.</div>`;
+    : `<button class="pill small-pill primary" data-snote-edit ${at}>${icon("pencil")} Писать</button>${n.open ? `<button class="pill small-pill" data-snote-fold ${at}>Свернуть</button>` : `<button class="pill small-pill" data-snote-open ${at}>Открыть</button>`}<a class="pill small-pill" href="${obsidianUrl(n.path)}">Obsidian</a>`;
+  let body = "";
+  if (n.edit) body = `<textarea class="pn-edit sn-edit" ${at}>${esc(n.text)}</textarea>`;
+  else if (n.open) { const doc = obsidian(n.text); body = `<div class="obs pn-view">${doc.props.length ? propsHtml(doc.props) : ""}${doc.html || `<p class="muted">Пусто — «Писать».</p>`}</div>`; }
+  else {
+    const s = state.study && state.study.session;
+    const own = s && s.note === n.path ? s.note_own : null;  // сколько написал сам — считает сервер, без каркаса шаблона
+    body = !own ? `<div class="small muted">Открой, чтобы прочитать заметку.</div>`
+      : own.words ? `<div class="small">Своими словами — ${own.words} сл.: ${esc(own.preview)}</div>`
+      : `<div class="small muted">Пока пусто. Закрой разбор и запиши суть, пример и ловушку — без подглядывания: так запоминается.</div>`;
+  }
+  return `<div class="sn-bar"><span class="muted small sn-file">${esc(n.path.split("/").pop())}</span><span class="sn-acts">${bar}</span></div>${body}`;
 }
 
 const notesLoading = new Set();
 async function loadStudyNote(path) {
   if (notesLoading.has(path)) return;
   notesLoading.add(path);
-  try { const n = await api("note?path=" + encodeURIComponent(path)); studyUI.notes[path] = { path: n.path, text: n.text, sha: n.sha, edit: false }; }
+  try { const n = await api("note?path=" + encodeURIComponent(path)); studyUI.notes[path] = { path: n.path, text: n.text, sha: n.sha, edit: false, open: false }; }
   catch (_) { studyUI.notes[path] = { path, missing: true }; }
   notesLoading.delete(path);
   if (state.tab === "study" && !studyEditing()) { studyUI.deskKey = ""; renderStudy(); }
 }
 const studyEditing = () => Object.values(studyUI.notes).some((n) => n.edit);
 
-// --- чат урока: своя нить сессии (D56) — общий чат и разбор дня сюда не попадают ----------------
+// --- чат урока: своя нить сессии (D56), с фото решения и голосом (D60) ----------------------------
 function studyChatHtml(s) {
   const can = s.live;
   return `<div class="pc sc"><div class="pc-thread" id="sc-thread"></div>
     ${can ? `<div class="aw-chips">${s.asks.map((q) => `<button class="chip" data-sask="${esc(q)}">${esc(q)}</button>`).join("")}</div>
-    <div class="pc-compose"><textarea id="sc-text" rows="1" placeholder="Спроси Арвикса по теме — он видит этот стол"></textarea>
-      <button class="icon-btn go" id="sc-send" aria-label="Отправить">${icon("send")}</button></div>`
+    <div class="pc-compose"><button class="icon-btn" id="sc-file" aria-label="Прислать фото решения, скриншот или файл">${icon("clip")}</button>
+      <input type="file" id="sc-files" multiple hidden>
+      <textarea id="sc-text" rows="1" placeholder="Спроси Арвикса — он видит этот стол"></textarea>
+      <button class="icon-btn go" id="sc-send" data-mode="mic" aria-label="Голосовое сообщение">${icon("mic")}</button></div>`
       : `<div class="muted small">Сессия закрыта — переписка сохранена здесь.</div>`}</div>`;
 }
 
@@ -2558,34 +2733,99 @@ function drawStudyThread() {
   const thinking = state.thinking && (!msgs.length || msgs[msgs.length - 1].who === "me");
   box.innerHTML = (msgs.length ? msgs.map((m) => `<div class="msg ${m.who === "me" ? "me" : ""}">${quoteHtml(m.reply_to)}<div class="mtext">${linkify(esc(m.text))}</div>
       ${(m.buttons || []).length ? `<div class="btns">${m.buttons.map((row) => row.map(([label, data]) => `<button data-sbtn="${esc(data)}">${esc(label)}</button>`).join("")).join("")}</div>` : ""}</div>`).join("")
-    : `<div class="pc-empty muted small">Застрял — спроси. Арвикс объяснит у доски по шагам, нарисует график, даст тест или найдёт видео — окна появятся на столе.</div>`)
-    + (thinking ? `<div class="msg typing">Арвикс думает…</div>` : "");
+    : `<div class="pc-empty muted small">Застрял — спроси текстом или голосом. Решил в тетради — сфоткай и пришли (📎): Арвикс найдёт, где ошибка. Он объяснит у доски, нарисует чертёж, даст похожую задачу — окна появятся на этапе.</div>`)
+    + (thinking ? `<div class="msg typing">${/слуша/.test(state.thinking) ? "Арвикс слушает…" : /файл/.test(state.thinking) ? "Арвикс смотрит файл…" : "Арвикс думает…"}</div>` : "");
   box.scrollTop = box.scrollHeight;
   box.querySelectorAll("[data-sbtn]").forEach((b) => b.addEventListener("click", async () => {
     haptic(); try { await api("button", { json: { data: b.dataset.sbtn } }); } catch (err) { toast(err.message); }
   }));
 }
 
+function studyMine(text) {
+  const s = state.study.session;
+  s.messages = [...(s.messages || []), { who: "me", text, at: new Date().toISOString() }];
+}
+
 async function studySend(text) {
   text = String(text || "").trim();
   if (!text) return;
   const s = state.study.session;
-  s.messages = [...(s.messages || []), { who: "me", text, at: new Date().toISOString() }];
+  studyMine(text);
   state.thinking = "думаю";
   drawStudyThread();
   try { await api(`study/${s.task.id}/message`, { json: { text } }); } catch (err) { toast(err.message); }
 }
 
+async function studyFiles(files) {
+  const s = state.study.session, ta = $("#sc-text");
+  let caption = ta ? ta.value.trim() : "";
+  for (const file of files) {
+    if (file.size > MAX_FILE) { toast(`«${file.name}» больше 20 МБ — сожми или раздели`); continue; }
+    studyMine("📎 " + file.name + (caption ? " — " + caption : ""));
+    state.thinking = "смотрю файл"; drawStudyThread();
+    try {
+      const res = await fetch(`/api/study/${s.task.id}/upload`, { method: "POST", body: file, headers: { ...authHeaders(), "Content-Type": file.type || "application/octet-stream",
+        "X-File-Name": encodeURIComponent(file.name), "X-Caption": encodeURIComponent(caption) } });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Ошибка " + res.status);
+      haptic();
+    } catch (err) { toast(err.message); }
+    caption = "";
+  }
+  if (ta) { ta.value = ""; ta.style.height = "auto"; studyComposerMode(); }
+}
+
+/* Голосовое в нить урока: как в чате — пустое поле = микрофон, есть текст = отправить, идёт запись = стоп. */
+let studyRec = null, studyChunks = [], studyRecStart = 0;
+function studyComposerMode() {
+  const b = $("#sc-send"), ta = $("#sc-text"); if (!b || !ta) return;
+  const recording = studyRec && studyRec.state === "recording";
+  const mode = recording ? "rec" : ta.value.trim() ? "send" : "mic";
+  if (b.dataset.mode === mode) return;
+  b.dataset.mode = mode;
+  b.innerHTML = icon(mode === "rec" ? "stop" : mode);
+  b.classList.toggle("rec", recording);
+  b.setAttribute("aria-label", { rec: "Остановить запись", send: "Отправить", mic: "Голосовое сообщение" }[mode]);
+}
+
+async function studyRecord() {
+  if (studyRec && studyRec.state === "recording") { studyRec.stop(); return; }
+  const s = state.study.session;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const type = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus", "audio/mp4"].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+    const rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    studyRec = rec; studyChunks = []; studyRecStart = Date.now();
+    rec.ondataavailable = (e) => e.data.size && studyChunks.push(e.data);
+    rec.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      studyComposerMode();
+      if (Date.now() - studyRecStart < 700) { toast("Слишком коротко"); return; }
+      const blob = new Blob(studyChunks, { type: rec.mimeType || "audio/webm" });
+      studyMine("🎙 голосовое…");
+      state.thinking = "слушаю"; drawStudyThread();
+      try { await api(`study/${s.task.id}/voice`, { body: blob, headers: { "Content-Type": blob.type.split(";")[0] } }); } catch (err) { toast(err.message); }
+    };
+    rec.start(); haptic("medium");
+    studyComposerMode();
+  } catch (err) { toast("Нет доступа к микрофону: " + err.message); }
+}
+
 function captureStudyComposer() {
   const ta = $("#sc-text"), sk = $("#sk-text");
-  return { value: ta ? ta.value : "", focus: ta && document.activeElement === ta, check: sk ? sk.value : "", checkFocus: sk && document.activeElement === sk };
+  return { value: ta ? ta.value : "", focus: ta && document.activeElement === ta, check: sk ? sk.value : "", checkFocus: sk && document.activeElement === sk,
+    input: document.activeElement && document.activeElement.matches && document.activeElement.matches("input.sq-in")
+      ? { sq: document.activeElement.dataset.sq, i: document.activeElement.dataset.i, twin: document.activeElement.dataset.stwinin } : null };
 }
 function restoreStudyComposer(keep) {
   const ta = $("#sc-text"), sk = $("#sk-text");
-  if (ta && keep.value) ta.value = keep.value;
+  if (ta && keep.value) { ta.value = keep.value; studyComposerMode(); }
   if (ta && keep.focus) ta.focus();
   if (sk && keep.check) sk.value = keep.check;
   if (sk && keep.checkFocus) sk.focus();
+  if (keep.input) {  // поле ответа, в котором печатал, — снова под курсором после перерисовки
+    const sel = keep.input.twin ? `input[data-stwinin="${CSS.escape(keep.input.twin)}"]` : `input.sq-in[data-sq="${CSS.escape(keep.input.sq || "")}"][data-i="${keep.input.i}"]`;
+    const el = view.querySelector(sel); if (el) { el.focus(); const v = el.value; el.value = ""; el.value = v; }
+  }
 }
 
 let studyTimer;
@@ -2602,12 +2842,51 @@ function tickStudy() {
   if (!el.dataset.paused) studyTimer = setInterval(() => { if (!document.body.contains(el)) { clearInterval(studyTimer); return; } draw(); }, 1000);
 }
 
+// --- повторение тем: отдельный экран ---------------------------------------------------------------
+function renderReview() {
+  const R = state.study.review || {}, q = R.quiz;
+  let html = `<div class="so"><div class="ph"><button class="icon-btn sm" data-srevback aria-label="К разделу">${icon("back")}</button>
+    <div class="grow ph-text"><div class="ph-title">Повторение</div><div class="muted small">Вспомни метод, а не ответ: числа новые. Не знаешь — «Не знаю».</div></div></div>`;
+  if (!q) {
+    html += `<div class="card"><div class="muted">${studyUI.busy === "review" ? "Арвикс собирает задачи по темам…" : "Повторения на сегодня нет."}</div></div></div>`;
+    view.innerHTML = html; bindStudy(); return;
+  }
+  const sel = studyUI.rq;
+  html += `<div class="sp">${q.items.map((it, i) => {
+    const head = `<div class="muted small">${esc(it.topic)}</div><div>${i + 1}. ${esc(it.q)}</div>`;
+    if (q.done) {
+      const right = it.options ? `<div class="sq-opts">${it.options.map((o, j) => `<span class="sq-opt${j === it.answer ? " right" : ""}${j === it.given && j !== it.answer ? " wrong" : ""}">${esc(o)}</span>`).join("")}</div>`
+        : `<div class="small">${it.given === "?" ? "Не знал" : `Твой ответ: <span class="${it.ok ? "fx-good" : "fx-bad"}">${esc(it.given_text)}</span>`}${it.ok ? "" : ` · верно: <b class="fx-good">${esc(it.right)}</b>`}</div>`;
+      return `<div class="sq ${it.ok ? "ok" : "bad"}">${head.replace("<div>", `<div><b>${it.ok ? "✓" : "✗"}</b> `)}${right}${it.why ? `<div class="small muted sq-why">${esc(it.why)}</div>` : ""}</div>`;
+    }
+    const unk = sel[i] === "?";
+    const body = it.options ? `<div class="sq-opts">${it.options.map((o, j) => `<button type="button" class="sq-opt${sel[i] === j ? " on" : ""}" data-rq="${i}" data-j="${j}">${esc(o)}</button>`).join("")}</div>`
+      : `<input class="sq-in" data-rqin="${i}" value="${esc(unk ? "" : sel[i] ?? "")}" placeholder="Ответ — число или слово" autocomplete="off"${unk ? " disabled" : ""}>`;
+    return `<div class="sq${unk ? " unk" : ""}">${head}${body}<button type="button" class="chip sq-unk${unk ? " accent" : ""}" data-rqunk="${i}">Не знаю</button></div>`;
+  }).join("")}
+    ${q.done ? "" : `<button class="btn primary" data-rqok>Проверить</button>`}</div>`;
+  if (q.done) {
+    html += `<div class="sp"><b>Дальше по темам</b>${q.by_review.map((r) => `<div class="small">${esc(r.topic)} — <b>${r.pct}%</b> · ${r.status === "done" ? "закреплена, больше не повторяем" : r.pct >= 80 ? "интервал растёт: " + dueText(r.due) : r.pct < 50 ? "с начала: " + dueText(r.due) : "тот же интервал: " + dueText(r.due)}</div>`).join("")}
+      <div class="muted small">Ошибся — разбери решение выше; спросить «почему» можно в общем чате.</div></div>`;
+  }
+  view.innerHTML = html + `</div>`;
+  bindStudy();
+}
+
+async function startReview() {
+  if (studyUI.busy) return;
+  studyUI.busy = "review"; studyUI.rq = {}; renderStudy();
+  try { const r = await api("study/review", { json: {} }); state.study.review = r.review; studyUI.review = true; }
+  catch (err) { toast(err.message); }
+  studyUI.busy = ""; renderStudy(); window.scrollTo(0, 0);
+}
+
 // --- действия ----------------------------------------------------------------------------------
 async function openStudySession(body) {
   try {
     const r = await api("study/open", { json: body });
-    studyUI.open = true; studyUI.task = r.task_id; studyUI.notes = {}; studyUI.deskKey = "";
-    if (r.queued) { state.thinking = "готовлю урок"; toast("Арвикс готовит сессию — план и окна появятся здесь"); }
+    studyUI.open = true; studyUI.task = r.task_id; studyUI.notes = {}; studyUI.deskKey = ""; studyUI.view = null; studyUI.review = false; studyUI.peek = false;
+    if (r.queued) { state.thinking = "готовлю урок"; toast("Арвикс готовит сессию: задачи, разбор, видео — минуту-две"); }
     if (state.tab !== "study") { setTab("study"); return; }
     await loadStudy(); renderStudy();
   } catch (err) { toast(err.message); }
@@ -2616,10 +2895,19 @@ async function openStudySession(body) {
 async function studyOp(op, body, msg) {
   const s = state.study.session;
   const r = await api(`study/${s.task.id}/${op}`, { json: body });
-  state.study.session = r.session; notify("success");
+  if (r.session) state.study.session = r.session;
+  notify("success");
   if (msg) toast(typeof msg === "function" ? msg(r) : msg);
   studyUI.deskKey = ""; renderStudy();
   return r;
+}
+
+async function goStage(stage) {
+  const s = state.study.session;
+  if (!s.live) { studyUI.view = stage; studyUI.deskKey = ""; renderStudy(); }
+  else if (stage !== s.stage) { try { await studyOp("stage", { stage }); } catch (err) { toast(err.message); return; } }
+  const desk = $(".sw-desk"); if (desk) desk.scrollTop = 0;
+  window.scrollTo(0, 0);
 }
 
 function openStudyLearnSheet() {
@@ -2645,11 +2933,18 @@ function openStudyLearnSheet() {
 
 function bindStudy() {
   const on = (sel, fn) => view.querySelectorAll(sel).forEach((el) => el.addEventListener("click", (e) => { haptic("soft"); fn(el, e); }));
-  on("[data-sresume]", () => { studyUI.open = true; studyUI.task = null; renderStudy(); window.scrollTo(0, 0); });
+  on("[data-sresume]", () => { studyUI.open = true; studyUI.task = null; studyUI.view = null; renderStudy(); window.scrollTo(0, 0); });
   on("[data-sopen]", (el) => openStudySession({ task: el.dataset.sopen }));
   on("[data-sitem]", (el) => openStudySession({ item: el.dataset.sitem }));
-  on("[data-shist]", async (el) => { studyUI.task = el.dataset.shist; studyUI.open = true; studyUI.notes = {}; await loadStudy(); renderStudy(); window.scrollTo(0, 0); });
+  on("[data-shist]", async (el) => { studyUI.task = el.dataset.shist; studyUI.open = true; studyUI.notes = {}; studyUI.view = null; await loadStudy(); renderStudy(); window.scrollTo(0, 0); });
   on("[data-slearn-add]", () => openStudyLearnSheet());
+  on("[data-srev]", () => startReview());
+  on("[data-srevopen]", () => { studyUI.review = true; renderStudy(); window.scrollTo(0, 0); });
+  on("[data-srevback]", async () => { studyUI.review = false; await loadStudy(); renderStudy(); window.scrollTo(0, 0); });
+  on("[data-srevdrop]", async (el) => {
+    if (!confirm("Убрать тему из повторений? Вернуть её можно новой сессией по теме.")) return;
+    try { const r = await api("study/review/drop", { json: { review: el.dataset.srevdrop } }); state.study.review = r.review; renderStudy(); } catch (err) { toast(err.message); }
+  });
   on("[data-sdone]", async (el) => {
     try { const r = await api("study/learn", { json: { item: el.dataset.sdone, status: "done" } }); state.study = r.study; toast("✓ Отмечено — в проекте тоже"); renderStudy(); }
     catch (err) { toast(err.message); }
@@ -2659,18 +2954,18 @@ function bindStudy() {
     try { const r = await api("study/learn", { json: { item: x.id, kind: x.kind === "practice" ? "theory" : "practice" } }); state.study = r.study; renderStudy(); }
     catch (err) { toast(err.message); }
   });
-  on("[data-sback]", async () => { studyUI.open = false; studyUI.task = null; studyUI.notes = {}; await loadStudy(); renderStudy(); window.scrollTo(0, 0); });
+  on("[data-sback]", async () => { studyUI.open = false; studyUI.task = null; studyUI.notes = {}; studyUI.view = null; await loadStudy(); renderStudy(); window.scrollTo(0, 0); });
   on("[data-spane]", (el) => { studyLayout.pane = el.dataset.spane; saveStudyLayout(); studyUI.deskKey = ""; renderStudy(); });
+  on("[data-sstage]", (el) => goStage(el.dataset.sstage));
+  on("[data-speek]", () => { studyUI.peek = true; studyUI.deskKey = ""; renderStudy(); });
   on("[data-sgo]", async () => {
     try { await api("lesson/" + state.study.session.task.id, { json: {} }); toast("Пошло. Телефон — экраном вниз."); } catch (err) { toast(err.message); }
   });
-  on("[data-scheck]", async () => {
-    const s = state.study.session;
-    if (!confirm("Закончить блок и ответить на вопросы проверки?")) return;
-    try {
-      if (s.focus) await api("focus/stop", { json: {} });  // прошедшие минуты — в журнал, таймер не пришлёт проверку второй раз
-      await api("button", { json: { data: `l:${s.task.id}:check` } });
-    } catch (err) { toast(err.message); }
+  on("[data-scheck]", async (el) => {
+    const s = state.study.session, left = (s.errors || []).filter((e) => !e.closed).length;
+    if (!confirm(`Закончить блок и ответить на вопросы проверки?${left ? `\nНезакрытых ошибок: ${left} — они уйдут в повторение.` : ""}`)) return;
+    el.disabled = true;
+    try { await studyOp("check", {}); } catch (err) { el.disabled = false; toast(err.message); }
   });
   on("[data-sfocus]", async (el) => { try { await api("focus/" + el.dataset.sfocus, { json: {} }); } catch (err) { toast(err.message); } });
   on("[data-skheck]", async () => {
@@ -2685,44 +2980,101 @@ function bindStudy() {
   on("[data-shide]", async (el) => { try { await studyOp("hide", { panel: el.dataset.shide }); } catch (err) { toast(err.message); } });
   on("[data-sadd]", async () => {
     const url = (prompt("Ссылка на видео (YouTube, RuTube, Vimeo — встроится; другое — ссылкой)", "") || "").trim(); if (!url) return;
-    try { await studyOp("panel", { panel: { type: "video", url, title: "Видео" } }, "Видео на столе"); } catch (err) { toast(err.message); }
+    try { await studyOp("panel", { panel: { type: "video", url, title: "Видео", stage: "learn" } }, "Видео на столе"); } catch (err) { toast(err.message); }
   });
+  on("[data-svid]", (el) => { studyUI.quiz["v:" + el.dataset.svid] = +el.dataset.j; studyUI.deskKey = ""; renderStudy(); });
+  // тест: выбор, короткий ответ, «не знаю»
   view.querySelectorAll("button[data-sq]").forEach((b) => b.addEventListener("click", () => {
     haptic("soft");
     const sel = studyUI.quiz[b.dataset.sq] || (studyUI.quiz[b.dataset.sq] = {});
     sel[+b.dataset.i] = +b.dataset.j;
     b.parentElement.querySelectorAll(".sq-opt").forEach((o) => o.classList.toggle("on", o === b));
+    const unk = b.closest(".sq").querySelector(".sq-unk"); if (unk) unk.classList.remove("accent");
+    b.closest(".sq").classList.remove("unk");
   }));
-  view.querySelectorAll("textarea[data-sq]").forEach((t) => t.addEventListener("input", () => {
+  view.querySelectorAll("textarea[data-sq], input[data-sq]").forEach((t) => t.addEventListener("input", () => {
     (studyUI.quiz[t.dataset.sq] || (studyUI.quiz[t.dataset.sq] = {}))[+t.dataset.i] = t.value;
   }));
+  view.querySelectorAll("input[data-sq]").forEach((t) => t.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const all = [...view.querySelectorAll(`input.sq-in[data-sq="${CSS.escape(t.dataset.sq)}"]:not([disabled])`)];
+    const next = all[all.indexOf(t) + 1];
+    if (next) next.focus(); else { const btn = view.querySelector(`[data-squiz="${CSS.escape(t.dataset.sq)}"]`); if (btn) btn.focus(); }
+  }));
+  on("[data-sunk]", (el) => {
+    const sel = studyUI.quiz[el.dataset.sunk] || (studyUI.quiz[el.dataset.sunk] = {});
+    const i = +el.dataset.i;
+    sel[i] = sel[i] === "?" ? null : "?";
+    studyUI.deskKey = ""; renderStudy();
+  });
   on("[data-squiz]", async (el) => {
     const p = state.study.session.panels.find((x) => x.id === el.dataset.squiz); if (!p) return;
     const sel = studyUI.quiz[p.id] || {};
-    const answers = p.questions.map((q, i) => (q.open ? String(sel[i] || "") : sel[i] ?? null));
-    if (answers.some((a, i) => !p.questions[i].open && a == null) && !confirm("Не на все вопросы выбран ответ. Проверить так?")) return;
+    const answers = p.questions.map((q, i) => (sel[i] === "?" ? "?" : q.options ? sel[i] ?? null : String(sel[i] ?? "").trim()));
+    const empty = answers.filter((a, i) => (p.questions[i].options ? a == null : a === "")).length;
+    if (empty && !confirm(`Без ответа: ${empty}. Проверить так? Пустой ответ — ошибка; честнее отметить «Не знаю».`)) return;
     el.disabled = true; el.textContent = "Проверяю…";  // проверка — код, но очередь может быть занята головой
-    try { await studyOp("answer", { panel: p.id, answers }, (r) => r.score_pct != null ? `${r.score_pct}% — разбор под вопросами` : "Записал — оценит на проверке"); delete studyUI.quiz[p.id]; }
-    catch (err) { el.disabled = false; el.textContent = "Проверить"; toast(err.message); }
+    try {
+      await studyOp("answer", { panel: p.id, answers }, (r) => r.score_pct != null ? `${r.score_pct}% — решения под задачами` : "Записал — оценит на проверке");
+      delete studyUI.quiz[p.id];
+    } catch (err) { el.disabled = false; el.textContent = "Проверить"; toast(err.message); }
   });
+  // работа над ошибками
+  on("[data-sfixkind]", async (el) => { try { await studyOp("fix", { key: el.dataset.key, kind: el.dataset.sfixkind }); } catch (err) { toast(err.message); } });
+  on("[data-sfixdone]", async (el) => { try { await studyOp("fix", { key: el.dataset.sfixdone, done: true }, "Закрыто — тема всё равно вернётся в повторении"); } catch (err) { toast(err.message); } });
+  on("[data-stwin]", (el) => { studyUI.twin[el.dataset.stwin] = +el.dataset.j; el.parentElement.querySelectorAll(".sq-opt").forEach((o) => o.classList.toggle("on", o === el)); });
+  view.querySelectorAll("input[data-stwinin]").forEach((t) => {
+    t.addEventListener("input", () => { studyUI.twin[t.dataset.stwinin] = t.value; });
+    t.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); const b = view.querySelector(`[data-stwinok="${CSS.escape(t.dataset.stwinin)}"]`); if (b) b.click(); } });
+  });
+  on("[data-stwinok]", async (el) => {
+    const key = el.dataset.stwinok, v = studyUI.twin[key];
+    if (v == null || String(v).trim() === "") { toast("Сначала ответ"); return; }
+    el.disabled = true;
+    try { const r = await studyOp("fix", { key, twin: v }, (r) => r.fixed.twin.ok ? "✓ Верно — ошибка закрыта" : "✗ Неверно — посмотри решение"); delete studyUI.twin[key]; return r; }
+    catch (err) { el.disabled = false; toast(err.message); }
+  });
+  // заметка
   const noteOf = (el) => studyUI.notes[el.dataset.snote];
   on("[data-snote-edit]", (el) => { noteOf(el).edit = true; studyUI.deskKey = ""; renderStudy();
     setTimeout(() => { const t = view.querySelector(`textarea.sn-edit[data-snote="${CSS.escape(el.dataset.snote)}"]`); if (t) t.focus(); }, 30); });
+  on("[data-snote-open]", (el) => { noteOf(el).open = true; studyUI.deskKey = ""; renderStudy(); });
+  on("[data-snote-fold]", (el) => { noteOf(el).open = false; studyUI.deskKey = ""; renderStudy(); });
   on("[data-snote-cancel]", (el) => { noteOf(el).edit = false; studyUI.deskKey = ""; renderStudy(); });
   on("[data-snote-save]", async (el) => {
     const n = noteOf(el), box = view.querySelector(`textarea.sn-edit[data-snote="${CSS.escape(n.path)}"]`);
     try { const r = await api("note", { json: { path: n.path, text: box.value, sha: n.sha } });
-      studyUI.notes[n.path] = { path: r.path, text: r.text, sha: r.sha, edit: false }; toast("Сохранено — Арвикс видит"); studyUI.deskKey = ""; renderStudy(); }
+      studyUI.notes[n.path] = { path: r.path, text: r.text, sha: r.sha, edit: false, open: false }; toast("Сохранено — Арвикс видит"); studyUI.deskKey = ""; renderStudy(); }
     catch (err) { if (err.status === 409) { toast("Заметку изменили — открыл свежую"); delete studyUI.notes[n.path]; loadStudyNote(n.path); } else toast(err.message); }
+  });
+  // повторение
+  view.querySelectorAll("button[data-rq]").forEach((b) => b.addEventListener("click", () => {
+    haptic("soft"); studyUI.rq[+b.dataset.rq] = +b.dataset.j;
+    b.parentElement.querySelectorAll(".sq-opt").forEach((o) => o.classList.toggle("on", o === b));
+  }));
+  view.querySelectorAll("input[data-rqin]").forEach((t) => t.addEventListener("input", () => { studyUI.rq[+t.dataset.rqin] = t.value; }));
+  on("[data-rqunk]", (el) => { const i = +el.dataset.rqunk; studyUI.rq[i] = studyUI.rq[i] === "?" ? null : "?"; renderStudy(); });
+  on("[data-rqok]", async (el) => {
+    const q = state.study.review.quiz;
+    const answers = q.items.map((it, i) => (studyUI.rq[i] === "?" ? "?" : it.options ? studyUI.rq[i] ?? null : String(studyUI.rq[i] ?? "").trim()));
+    const empty = answers.filter((a) => a == null || a === "").length;
+    if (empty && !confirm(`Без ответа: ${empty}. Проверить так?`)) return;
+    el.disabled = true; el.textContent = "Проверяю…";
+    try { const r = await api("study/review/answer", { json: { answers } }); state.study.review = r.review; studyUI.rq = {}; notify("success"); renderStudy(); window.scrollTo(0, 0); }
+    catch (err) { el.disabled = false; el.textContent = "Проверить"; toast(err.message); }
   });
   view.querySelectorAll(".sp-text .obs, .sp-note .obs").forEach((el) => hydrateAssets(el));
   view.querySelectorAll("[data-sresume], [data-shist]").forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter") el.click(); }));
   const ta = $("#sc-text");
   if (ta) {
-    const grow = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; };
+    const grow = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; studyComposerMode(); };
     ta.addEventListener("input", grow); grow();
-    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && isWide()) { e.preventDefault(); const t = ta.value; ta.value = ""; studySend(t); } });
-    $("#sc-send").onclick = () => { const t = ta.value; ta.value = ""; studySend(t); };
+    const send = () => { const t = ta.value; ta.value = ""; grow(); studySend(t); };
+    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && isWide()) { e.preventDefault(); send(); } });
+    $("#sc-send").onclick = () => ($("#sc-send").dataset.mode === "send" ? send() : studyRecord());
+    $("#sc-file").onclick = () => $("#sc-files").click();
+    $("#sc-files").onchange = (e) => { studyFiles([...e.target.files]); e.target.value = ""; };
   }
 }
 

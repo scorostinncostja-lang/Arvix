@@ -196,6 +196,10 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
         recent = st.lessons[-4:]
         lines.append("УРОКИ: " + " · ".join(
             f"{x['date'][8:10]}.{x['date'][5:7]} {x['subject']}: {x['topic']}" + (f" {x['score']}%" if x.get("score") is not None else "") for x in recent))
+    from arvix import review
+
+    if core.effective_mode() != "red" and (line := review.context_line(core)):  # в 🟥 учёбу не предлагают (правило №5)
+        lines.append(line)
 
     directives = st.active_directives(today)[:5]
     if directives:

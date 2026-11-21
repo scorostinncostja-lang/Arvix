@@ -609,7 +609,7 @@ class LessonTest(BotCase):
         self.assertIn("Прошлые уроки по этому предмету: 02.11 Закон Ома для участка цепи — без проверки", self.brain.calls[-1]["system"])
         plan = next(t for t in self.api.texts if t.startswith("📚 Физика: мощность тока"))
         self.assertIn("Голова недоступна — план общий", plan)
-        self.assertIn("0–3  Вспомни с пустого листа", plan)
+        self.assertIn("0–4  Диагностика: Вспомни с пустого листа", plan)  # без головы — те же этапы (D60)
         self.assertIn("В конце — «Сделано?»", plan)
         self.assertEqual(self.core.state.tasks[nxt.id].status, "active")
         self.at(moscow(2026, 11, 2, 16, 30))
