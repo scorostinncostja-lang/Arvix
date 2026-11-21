@@ -159,7 +159,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 if token:
                     self.send_json({"token": token})
                 else:
-                    self.fail(HTTPStatus.FORBIDDEN, "Ссылка устарела или уже открыта. Попроси Арвикса прислать новую.")
+                    self.fail(HTTPStatus.FORBIDDEN, "Ссылка устарела или уже открыта. Попроси Arvix прислать новую.")
                 return
             who = self.authorized()
             if who is None:
@@ -286,7 +286,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     body = self.body_json()
                     text = str(body.get("text") or "").strip()[:4000]
                     created = app.hub.call(api.project_new(text, body.get("goal") or None))
-                    # Карточка есть сразу; заполняет её Арвикс в чате проекта — фоном, ответ придёт потоком
+                    # Карточка есть сразу; заполняет её Arvix в чате проекта — фоном, ответ придёт потоком
                     app.hub.post(api.project_chat(created["project"]["id"], text, kickoff=True), label="думаю")
                     self.send_json(created)
                 elif len(parts) == 3 and parts[0] == "projects" and parts[2] == "chat":
@@ -349,8 +349,8 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     app.hub.post(api.study_chat(parts[1], text[:16000]), label="думаю", chat=True)
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif len(parts) == 3 and parts[0] == "study":
-                    # Ответ на задачу ждёт, пока Арвикс договорит в чате (голова держит очередь до полминуты),
-                    # а не падает «Арвикс занят»: проверка — код, она быстрая, когда до неё дошла очередь
+                    # Ответ на задачу ждёт, пока Arvix договорит в чате (голова держит очередь до полминуты),
+                    # а не падает «Arvix занят»: проверка — код, она быстрая, когда до неё дошла очередь
                     self.send_json(app.hub.call(api.study_op(parts[1], parts[2], self.body_json()), timeout=150))
                 elif parts == ["focus"]:
                     body = self.body_json()

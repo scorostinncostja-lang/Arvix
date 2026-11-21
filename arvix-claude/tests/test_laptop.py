@@ -86,7 +86,7 @@ class LaptopLayoutTest(unittest.TestCase):
     def test_sidebar_markup(self) -> None:
         html = (STATIC / "index.html").read_text()
         self.assertIn('class="brand"', html)
-        self.assertEqual(html.count("data-tab="), 6)  # Сегодня · Арвикс · Заметки · Проекты (D43) · Обучение (D55) · Прогресс
+        self.assertEqual(html.count("data-tab="), 6)  # Сегодня · Arvix · Заметки · Проекты (D43) · Обучение (D55) · Прогресс
 
     def test_sidebar_collapses(self) -> None:
         """Панель сворачивается в полосу значков кнопкой (касание, не наведение) и Ctrl+B; выбор помнится."""

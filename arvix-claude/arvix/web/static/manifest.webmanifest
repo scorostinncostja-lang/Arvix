@@ -1,14 +1,14 @@
 {
-  "name": "Арвикс",
-  "short_name": "Арвикс",
-  "description": "Личный ментор: задачи, фокус, заметки, прогресс и разговор с Арвиксом.",
+  "name": "Arvix",
+  "short_name": "Arvix",
+  "description": "Личный ментор: задачи, фокус, заметки, прогресс и разговор с Arvix.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0f1115",
-  "theme_color": "#0f1115",
+  "background_color": "#0a0b10",
+  "theme_color": "#0a0b10",
   "lang": "ru",
   "icons": [
     {
@@ -24,7 +24,7 @@
       "purpose": "any"
     },
     {
-      "src": "icon-512.png",
+      "src": "icon-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
@@ -37,7 +37,7 @@
   ],
   "shortcuts": [
     {
-      "name": "Чат с Арвиксом",
+      "name": "Чат с Arvix",
       "url": "/?tab=chat"
     },
     {

@@ -4,17 +4,17 @@
 
 timezone = "Europe/Moscow"
 vault = ""            # путь к Obsidian-хранилищу
-home = "~/Arvix"      # папка, где Claude Code запускается в режиме Арвикса
+home = "~/Arvix"      # папка, где Claude Code запускается в режиме Arvix
 
 [telegram]
 token = ""
 owner_id = 0
 # Ответ головы — одним сообщением (D46); прежние bubble_* больше не читаются.
 
-# Где в хранилище живут файлы Арвикса. Пути — от корня хранилища.
-# Чужие заметки Арвикс только дополняет; перезаписывает лишь свои и нетронутые.
+# Где в хранилище живут файлы Arvix. Пути — от корня хранилища.
+# Чужие заметки Arvix только дополняет; перезаписывает лишь свои и нетронутые.
 [vault_paths]
-profile = "05_System/Профиль Арвикса.md"
+profile = "05_System/Профиль Arvix.md"
 goals = "05_System/Цели"
 roadmaps = "03_Resources/Роадмапы"
 notes = "03_Resources/Обучение"     # каркасы конспектов, если нет папки предмета
@@ -23,13 +23,13 @@ inbox = "05_System/Inbox.md"
 system = "05_System/Арвикс"         # журнал, инсайты, бэкапы
 daily = ""                          # пусто — папка ежедневных заметок из настроек Obsidian
 daily_template = ""                 # пусто — шаблон из настроек Obsidian
-projects = "01_Projects"            # карточки проектов (портфолио) — блоком Арвикса в заметке проекта
+projects = "01_Projects"            # карточки проектов (портфолио) — блоком Arvix в заметке проекта
 
 [schedule]
 brief = "auto"          # auto = время подъёма из профиля + 15 мин
 midday = "15:00"        # чек-ин, если к этому времени выполнено < 40%
 debrief = "22:30"
-curiosity = "18:30"     # Арвикс пишет первым: вопрос про то, что помнит; "" — выключено
+curiosity = "18:30"     # Arvix пишет первым: вопрос про то, что помнит; "" — выключено
 retro_weekday = 6       # 0 = пн … 6 = вс
 retro = "20:00"
 rollover = "04:00"      # вчерашний день закрывается в 04:00
@@ -64,7 +64,7 @@ model = "sonnet"
 [roles.stt]             # распознавание голосовых; для engine = "openai" — например "whisper-1"
 model = "whisper-large-v3-turbo"
 
-[roles.tts]             # голос Арвикса для engine = "gemini" (бесплатный тариф AI Studio); экономнее — "gemini-3.8-flash-lite-tts"
+[roles.tts]             # голос Arvix для engine = "gemini" (бесплатный тариф AI Studio); экономнее — "gemini-3.8-flash-lite-tts"
 model = "gemini-3.8-flash-tts"
 
 # Голосовые сообщения в Telegram (05-INTERFACES §2.6). engine: off | groq | openai | command.
@@ -110,7 +110,7 @@ social = 2
 novelty = 1
 offscreen = 3
 
-[tts]                   # голос Арвикса (D34, D36, D46): голосовое — только когда стоит послушать; голос в звонке
+[tts]                   # голос Arvix (D34, D36, D46): голосовое — только когда стоит послушать; голос в звонке
 engine = "off"          # "gemini" — arvix setup --tts gemini (ключ AI Studio); "command" — своя команда (Piper)
 voice = "Charon"        # мужские голоса Gemini: Charon, Orus, Iapetus, Algieba, Sadaltager, Puck, Fenrir…
 command = ""

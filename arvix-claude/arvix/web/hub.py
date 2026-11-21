@@ -38,7 +38,7 @@ class Hub:
         return job
 
     def chat_waiting(self) -> bool:
-        """В очереди есть ещё сообщение человека — он написал, пока Арвикс думал над прошлым."""
+        """В очереди есть ещё сообщение человека — он написал, пока Arvix думал над прошлым."""
         with self.jobs.mutex:
             return any(job.chat for job in self.jobs.queue)
 
@@ -46,7 +46,7 @@ class Hub:
         """Выполнить в главном потоке и вернуть результат (или поднять его ошибку)."""
         job = self.post(fn, label)
         if not job.done.wait(timeout):
-            raise TimeoutError("Арвикс занят — попробуй через несколько секунд")
+            raise TimeoutError("Arvix занят — попробуй через несколько секунд")
         if job.error is not None:
             raise job.error
         return job.result

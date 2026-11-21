@@ -175,13 +175,13 @@ class TelegramAPI:
 
     def set_commands(self, commands: list[tuple[str, str]]) -> None:
         """Меню команд в клиенте Telegram (кнопка «/» слева от поля ввода). Пустой список —
-        меню убирается: с Арвиксом говорят словами (D23)."""
+        меню убирается: с Arvix говорят словами (D23)."""
         if not commands:
             self.call("deleteMyCommands")
             return
         self.call("setMyCommands", commands=[{"command": c, "description": d[:256]} for c, d in commands])
 
-    def set_menu_button(self, url: str, text: str = "Арвикс") -> None:
+    def set_menu_button(self, url: str, text: str = "Arvix") -> None:
         """Кнопка слева от поля ввода: с url — открывает Mini App, без — стандартная."""
         button = {"type": "web_app", "text": text, "web_app": {"url": url}} if url else {"type": "default"}
         self.call("setChatMenuButton", menu_button=button)

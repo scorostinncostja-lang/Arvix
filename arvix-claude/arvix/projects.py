@@ -1,8 +1,8 @@
-"""Проекты (D43, D44, D47; 02-MECHANICS §14): то, что человек строит сам, вместе с Арвиксом.
+"""Проекты (D43, D44, D47; 02-MECHANICS §14): то, что человек строит сам, вместе с Arvix.
 
-Человек говорит словами, Арвикс заполняет (D47): название, зачем, результат, этапы с критерием, что
+Человек говорит словами, Arvix заполняет (D47): название, зачем, результат, этапы с критерием, что
 выучить, источники, заметки. Всё содержательное живёт в Obsidian — папка проекта `01_Projects/<проект>/`:
-главная заметка с блоком Арвикса, «Журнал», заметки самого человека и Арвикса, присланные файлы.
+главная заметка с блоком Arvix, «Журнал», заметки самого человека и Arvix, присланные файлы.
 Приложение — окна над этой папкой: чат проекта, заметки, план, «учиться».
 
 Считает код (правило №1): время, темп, прогноз, застой, следующий шаг, свободное окно. Состояние —
@@ -10,7 +10,7 @@
 learn_item_set; задачи проекта — обычные task_created с полем project.
 
 Убрано по опыту (D44, D47): деньги, каналы, GitHub-синхронизация. Старые события в журнале остаются.
-Арвикс не делает проект за человека (00-VISION §7): разбирает, режет, ставит время, ревьюит.
+Arvix не делает проект за человека (00-VISION §7): разбирает, режет, ставит время, ревьюит.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Any
 
 from arvix.core import ArvixError, new_id, parse_hhmm
 
-# Что это за проект. Подсказка, а не клетка: Арвикс и человек пишут любое слово.
+# Что это за проект. Подсказка, а не клетка: Arvix и человек пишут любое слово.
 KIND_PRESETS = {
     "code": "программирование", "app": "сайт или приложение", "bot": "бот и автоматизация", "game": "игра",
     "content": "контент и блог", "video": "видео и монтаж", "design": "дизайн", "music": "музыка",
@@ -48,7 +48,7 @@ RESOURCE_KINDS = {"source": "источник", "doc": "документация
                   "example": "пример (репозиторий, работа)", "repo": "репозиторий", "design": "макет", "note": "заметка",
                   "chat": "чат и люди", "other": "другое"}
 
-STALL_DAYS = 7        # без движения столько дней — застой: Арвикс пишет сам
+STALL_DAYS = 7        # без движения столько дней — застой: Arvix пишет сам
 DECIDE_DAYS = 21      # столько — прямой вопрос «продолжаем, откладываем или завершаем?»
 BEHIND_MARGIN = 0.15  # отставание этапов от времени больше 15 п.п. — «отстаёт»
 DAY_START = "09:00"   # раньше блок проекта код сам не ставит
@@ -163,7 +163,7 @@ def note_files(core: Any, project: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _sync_block(core: Any, rel: str, name: str, content: str, header: str) -> None:
-    """Блок Арвикса в заметке — только если он изменился: журнал не растёт от пустых перезаписей."""
+    """Блок Arvix в заметке — только если он изменился: журнал не растёт от пустых перезаписей."""
     from arvix.vault import replace_block
 
     path = core.vault.root / rel
@@ -179,7 +179,7 @@ def sync_notes(core: Any, project_ref: Any) -> str | None:
         return None
     project = resolve(core, project_ref)
     if not project.get("folder") and project.get("folder") is not None:
-        return None  # черновик из одной фразы: папки нет, пока Арвикс не дал проекту имя
+        return None  # черновик из одной фразы: папки нет, пока Arvix не дал проекту имя
     try:
         rel = main_note(core, project)
         _sync_block(core, rel, MAIN_BLOCK, card_md(core, project), f"# {project['title']}\n\n")
@@ -193,7 +193,7 @@ def sync_notes(core: Any, project_ref: Any) -> str | None:
 
 
 def write_note(core: Any, project_ref: Any, name: str, content: str, *, append: bool = False, source: str = "claude") -> str:
-    """Заметка в папке проекта — руки Арвикса в Obsidian (D47). Свою нетронутую он перезаписывает,
+    """Заметка в папке проекта — руки Arvix в Obsidian (D47). Свою нетронутую он перезаписывает,
     чужую (правленную человеком) — только дописывает: правила vault.write. За пределы папки — нельзя."""
     project = resolve(core, project_ref)
     name = safe_name(str(name or "").removesuffix(".md"))
@@ -203,7 +203,7 @@ def write_note(core: Any, project_ref: Any, name: str, content: str, *, append: 
         raise ArvixError("Пустая заметка")
     rel = f"{folder(core, project)}/{name}.md"
     if rel == main_note(core, project):
-        append = True  # в главной заметке своё место у Арвикса — блок; остальное только дописывается
+        append = True  # в главной заметке своё место у Arvix — блок; остальное только дописывается
     try:
         core.write_note(rel, str(content).strip() + "\n", append=append, source=source)
     except ArvixError:
@@ -279,7 +279,7 @@ def set_project(
 
 def start(core: Any, text: str, *, goal_id: str | None = None, source: str = "web") -> str:
     """Новый проект из одной фразы (D47): код сразу создаёт карточку-черновик, чтобы человеку было куда
-    смотреть, а Арвикс следующим ходом заполняет её в чате проекта. Лимит занят — проект «отложен»."""
+    смотреть, а Arvix следующим ходом заполняет её в чате проекта. Лимит занят — проект «отложен»."""
     text = str(text or "").strip()
     if len(text) < 3:
         raise ArvixError("Напиши, что хочешь сделать, — хотя бы пару слов")
@@ -358,7 +358,7 @@ def set_resource(
     core: Any, project_ref: Any, title: str = "", *, resource_id: str | None = None, url: str = "", kind: str | None = None,
     note: str = "", status: str | None = None, by: str = "", source: str = "claude", sync: bool = True,
 ) -> str:
-    """Источник, инструмент или пример (чужой репозиторий, работа) — заполняет Арвикс по разговору.
+    """Источник, инструмент или пример (чужой репозиторий, работа) — заполняет Arvix по разговору.
     by="arvix" — проверь ссылку сам: модель может ошибиться."""
     project = resolve(core, project_ref)
     old = core.state.resources.get(resource_id or "", {})
@@ -752,7 +752,7 @@ def stalled(core: Any) -> list[tuple[dict[str, Any], dict[str, Any]]]:
 
 
 def card_md(core: Any, project: dict[str, Any]) -> str:
-    """Блок Арвикса в главной заметке проекта — только факты журнала. Текст человека вокруг не трогается."""
+    """Блок Arvix в главной заметке проекта — только факты журнала. Текст человека вокруг не трогается."""
     s = stats(core, project)
     why = ", ".join(purpose_label(x) for x in purposes_of(project))
     goal = core.state.goals.get(project.get("goal_id") or "")

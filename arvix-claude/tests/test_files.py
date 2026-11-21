@@ -1,4 +1,4 @@
-"""Файлы Арвиксу: хранилище, безопасная распаковка, документы, видео, Telegram и приложение."""
+"""Файлы Arvix: хранилище, безопасная распаковка, документы, видео, Telegram и приложение."""
 
 from __future__ import annotations
 
@@ -190,7 +190,7 @@ class InstallTest(BotCase):
         self.brain.answers.append({"reply": "Держи.", "actions": [{"type": "install_app"}]})
         self.text("скинь приложение на телефон, apk")
         text, buttons = self.api.sent[-1]
-        self.assertIn("Арвикс на телефон", text)
+        self.assertIn("Arvix на телефон", text)
         label, data = buttons[0][0]
         self.assertTrue(data.startswith("url:https://1-2-3-4.sslip.io:8443/#p="), data)
         self.assertNotIn(app_token(self.core), data)  # постоянный ключ в переписку не попадает

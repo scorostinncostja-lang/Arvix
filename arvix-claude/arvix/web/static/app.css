@@ -1,31 +1,44 @@
+/* Дизайн-система (D58): тёмный премиум по умолчанию в тёмной теме системы, светлая — та же логика.
+ * Акцент — фиолетовый и бирюзовый из логотипа. Глубина — тонкими границами и подсветкой, а не тенями. */
 :root {
-  --bg: #f5f6f8;
+  --bg: #f6f6f9;
+  --bg-2: #fbfbfd;
   --card: #ffffff;
-  --card-2: #eef0f4;
-  --text: #13161c;
-  --muted: #6b7280;
-  --line: #e3e6ec;
-  --accent: #4f6bff;
-  --accent-2: #19b394;
-  --warn: #e8a317;
+  --card-2: #f0f1f5;
+  --card-3: #e8e9ef;
+  --text: #0f1117;
+  --muted: #6b7080;
+  --line: #e6e7ee;
+  --line-2: #d9dbe4;
+  --accent: #6d5dfc;
+  --accent-2: #12b39a;
+  --accent-grad: linear-gradient(135deg, #8b7bff 0%, #6d5dfc 55%, #5a4bf0 100%);
+  --glow: 0 6px 20px rgba(109, 93, 252, .28);
+  --warn: #d9900f;
   --bad: #e5484d;
-  --good: #18a058;
-  --me: #4f6bff;
+  --good: #16a35a;
+  --me: #6d5dfc;
   --me-text: #ffffff;
-  --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 4px 16px rgba(16, 24, 40, .06);
+  --shadow: 0 1px 2px rgba(15, 17, 23, .04), 0 2px 8px rgba(15, 17, 23, .04);
+  --shadow-lg: 0 24px 64px rgba(15, 17, 23, .18);
+  --hi: inset 0 1px 0 rgba(255, 255, 255, .6);
   --radius: 16px;
   --tabs-h: 64px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0f1115; --card: #181b22; --card-2: #20242d; --text: #eceef3; --muted: #9aa3b2; --line: #272b35;
-    --accent: #7c8cff; --accent-2: #2fd0a9; --me: #4f6bff; --shadow: none; color-scheme: dark;
+    --bg: #0a0b10; --bg-2: #0d0e14; --card: #12141b; --card-2: #1a1d26; --card-3: #232733; --text: #ecedf3; --muted: #8b90a0;
+    --line: rgba(255, 255, 255, .07); --line-2: rgba(255, 255, 255, .12); --accent: #8b7bff; --accent-2: #3ee0c0; --me: #6d5dfc;
+    --glow: 0 6px 24px rgba(124, 108, 255, .35); --shadow: none; --shadow-lg: 0 24px 80px rgba(0, 0, 0, .6);
+    --hi: inset 0 1px 0 rgba(255, 255, 255, .04); color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #0f1115; --card: #181b22; --card-2: #20242d; --text: #eceef3; --muted: #9aa3b2; --line: #272b35;
-  --accent: #7c8cff; --accent-2: #2fd0a9; --me: #4f6bff; --shadow: none; color-scheme: dark;
+  --bg: #0a0b10; --bg-2: #0d0e14; --card: #12141b; --card-2: #1a1d26; --card-3: #232733; --text: #ecedf3; --muted: #8b90a0;
+  --line: rgba(255, 255, 255, .07); --line-2: rgba(255, 255, 255, .12); --accent: #8b7bff; --accent-2: #3ee0c0; --me: #6d5dfc;
+  --glow: 0 6px 24px rgba(124, 108, 255, .35); --shadow: none; --shadow-lg: 0 24px 80px rgba(0, 0, 0, .6);
+  --hi: inset 0 1px 0 rgba(255, 255, 255, .04); color-scheme: dark;
 }
 /* Внутри Telegram — его цвета */
 :root.tg {
@@ -40,7 +53,11 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
-body { font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", system-ui, sans-serif; overscroll-behavior-y: none; }
+/* Inter — читаемый на экране шрифт с кириллицей; без сети — системный. Цифры одной ширины: время и минуты не скачут. */
+body { font: 15px/1.5 "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif; overscroll-behavior-y: none;
+  font-feature-settings: "cv11", "ss01"; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
+b, strong { font-weight: 650; }
+code, kbd, pre { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
 button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
 input, textarea, select { font: inherit; color: var(--text); }
 .muted { color: var(--muted); }
@@ -140,6 +157,29 @@ main { flex: 1; padding: 4px 16px calc(var(--tabs-h) + env(safe-area-inset-botto
 .msg { position: relative; max-width: 86%; padding: 8px 12px 6px; border-radius: 18px; white-space: pre-wrap; word-break: break-word; background: var(--card);
   box-shadow: var(--shadow); align-self: flex-start; transition: transform .18s ease, background .3s; }
 .msg.me { align-self: flex-end; background: var(--me); color: var(--me-text); }
+/* Разметка в пузыре (richText): абзацы, списки, цитата, код — компактно, как в мессенджере */
+.mtext { white-space: normal; line-height: 1.5; }
+.mtext > :first-child { margin-top: 0; }
+.mtext > :last-child { margin-bottom: 0; }
+.mtext p { margin: 0 0 8px; }
+.mtext b { font-weight: 650; }
+.mtext .m-h { font-weight: 700; font-size: 16px; margin: 10px 0 4px; }
+.mtext .m-list { margin: 2px 0 8px; padding-left: 20px; }
+.mtext .m-list li { margin: 2px 0; padding-left: 2px; }
+.mtext ul.m-list { list-style: none; padding-left: 16px; }
+.mtext ul.m-list li { position: relative; }
+.mtext ul.m-list li::before { content: "—"; position: absolute; left: -16px; color: var(--muted); }
+.msg.me .mtext ul.m-list li::before { color: inherit; opacity: .7; }
+.mtext ol.m-list li::marker { color: var(--muted); font-variant-numeric: tabular-nums; }
+.mtext blockquote { margin: 2px 0 8px; padding: 2px 0 2px 10px; border-left: 3px solid var(--accent); opacity: .92; }
+.msg.me .mtext blockquote { border-left-color: rgba(255,255,255,.8); }
+.mtext code { padding: 1px 5px; border-radius: 5px; font-size: .88em; background: var(--card-2); }
+.msg.me .mtext code { background: rgba(255,255,255,.18); }
+.mtext pre.m-code { margin: 4px 0 8px; padding: 8px 10px; border-radius: 8px; background: var(--card-2); overflow-x: auto; font-size: 13px; line-height: 1.45; white-space: pre; }
+.msg.me .mtext pre.m-code { background: rgba(255,255,255,.14); }
+.mtext pre.m-code code { padding: 0; background: none; }
+.mtext a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.mtext mark { background: color-mix(in srgb, #ffd400 45%, transparent); color: inherit; padding: 0 2px; border-radius: 3px; }
 /* Как в Telegram: подряд идущие сообщения одного автора — плотной группой, «хвостик» только у последнего */
 .msg.cont { margin-top: -3px; }
 .msg.tail { border-bottom-left-radius: 6px; }
@@ -702,6 +742,12 @@ select.input { width: 100%; min-width: 0; padding: 10px 12px; border-radius: 12p
   .pw-div:hover { opacity: 1; background: var(--accent); }
   .so-hist:hover, .so-live:hover { filter: brightness(.97); }
   .sq-opt:not(.on):not(.right):not(.wrong):hover { filter: brightness(.95); }
+  /* премиум-слой (D58) */
+  .task:hover, .list-item:hover { border-color: var(--line-2); }
+  .icon-btn:hover, .pill:hover:not(.primary), .btn:hover:not(.primary), .seg button:hover:not(.on), .msg .btns button:hover { background: var(--card-3); filter: none; }
+  .pill.primary:hover, .btn.primary:hover, .fab:hover, .composer .round.send:hover { filter: brightness(1.08); }
+  .tabs button.active:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  .tabs button:hover:not(.active) { background: color-mix(in srgb, var(--text) 5%, transparent); }
 }
 
 /* --- Планшет вертикально (600–899 px): нижние вкладки как на телефоне, но во всю ширину, без полос по бокам ---- */
@@ -863,4 +909,120 @@ button.chip { cursor: pointer; }
 }
 @media (min-width: 1500px) {
   .sw.wide { grid-template-columns: minmax(0, 1fr) 440px; }
+}
+
+
+/* ============================================================================================
+ * Премиум-слой (D58): поверх компонентов выше — карточки с границей, градиентный акцент, стекло,
+ * аватар Arvix в чате, единые наведение и фокус. Внутри Telegram (:root.tg) цвета — его.
+ * ========================================================================================== */
+html, body { background: var(--bg); }
+body { letter-spacing: -.006em; }
+::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 2px; }
+a { color: var(--accent); }
+
+.top { background: color-mix(in srgb, var(--bg) 78%, transparent); backdrop-filter: saturate(160%) blur(16px); -webkit-backdrop-filter: saturate(160%) blur(16px);
+  border-bottom: 1px solid transparent; }
+.top-day { font-weight: 700; letter-spacing: -.02em; }
+.chip { border: 1px solid transparent; font-weight: 500; }
+.chip.mode { font-weight: 650; letter-spacing: .01em; }
+.chip.green { border-color: color-mix(in srgb, var(--good) 28%, transparent); }
+.chip.yellow { border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+.chip.red { border-color: color-mix(in srgb, var(--bad) 30%, transparent); }
+.chip.accent { border-color: color-mix(in srgb, var(--accent) 28%, transparent); }
+
+.card, .stat, .task, .list-item, .typing { border: 1px solid var(--line); box-shadow: var(--shadow), var(--hi); }
+.card { border-radius: 18px; padding: 16px 18px; }
+.card h3, .section-title { font-size: 11.5px; font-weight: 650; letter-spacing: .08em; color: var(--muted); }
+.section-title { margin: 22px 4px 10px; }
+
+.stat { border-radius: 16px; padding: 12px 14px; }
+.stat b { font-size: 20px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.bar { height: 5px; background: var(--card-3); }
+.bar > i { background: var(--accent-grad); }
+.bar.deep > i { background: linear-gradient(90deg, #2fc9a8, var(--accent-2)); }
+
+.task { border-radius: 16px; padding: 13px 14px; transition: border-color .15s, background .15s, transform .15s, opacity .2s; }
+.task .time b { font-weight: 650; }
+.task .title { font-weight: 600; letter-spacing: -.01em; }
+.task.active { outline: 0; border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, var(--card)), var(--card)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+.task.debt { outline: 0; border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+.task.busy { border: 1px dashed var(--line-2); background: transparent; box-shadow: none; }
+.icon-btn { border-radius: 12px; background: var(--card-2); border: 1px solid var(--line); transition: background .15s, transform .1s, border-color .15s; }
+.icon-btn:active, .pill:active, .btn:active, .seg button:active { transform: scale(.96); }
+.icon-btn.go { border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.icon-btn.ok { border-color: color-mix(in srgb, var(--good) 30%, transparent); }
+
+.pill { border: 1px solid var(--line); background: var(--card-2); transition: background .15s, transform .1s, box-shadow .15s; }
+.pill.primary, .btn.primary, .seg button.on { background: var(--accent-grad); color: #fff; border-color: transparent; box-shadow: var(--glow); }
+.btn { border: 1px solid var(--line); border-radius: 14px; transition: background .15s, transform .1s, box-shadow .15s, filter .15s; }
+.btn.primary { font-weight: 650; }
+.seg button { border: 1px solid var(--line); border-radius: 11px; transition: background .15s, transform .1s; }
+
+.ring { background: conic-gradient(from -90deg, #8b7bff, #3ee0c0 calc(var(--p) * 1turn), var(--card-3) 0); box-shadow: 0 0 32px color-mix(in srgb, var(--accent) 18%, transparent); }
+
+.fab { border-radius: 18px; background: var(--accent-grad); box-shadow: var(--glow), inset 0 1px 0 rgba(255,255,255,.25); transition: transform .15s; }
+.fab:active { transform: scale(.94); }
+
+.tabs { background: color-mix(in srgb, var(--bg-2) 82%, transparent); backdrop-filter: saturate(160%) blur(18px); -webkit-backdrop-filter: saturate(160%) blur(18px); }
+.tabs button { transition: color .15s, background .15s; }
+.tabs button.active .ico { filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent) 55%, transparent)); }
+
+.search input, .field input, .field textarea, .field select, .input, select.input, .composer textarea {
+  background: var(--card-2); border: 1px solid var(--line); transition: border-color .15s, box-shadow .15s, background .15s; }
+.search input:focus, .field input:focus, .field textarea:focus, .field select:focus, .input:focus, .composer textarea:focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); background: var(--card); outline: none; }
+
+.sheet { background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow-lg); }
+.sheet-back { background: rgba(5, 6, 10, .55); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+.toast { background: var(--card-3); color: var(--text); border: 1px solid var(--line-2); box-shadow: var(--shadow-lg); font-weight: 500; }
+.msg-menu { border-radius: 16px; box-shadow: var(--shadow-lg); }
+
+/* чат: пузырь Arvix — карточка с границей, свой — градиент; аватар у последнего в группе */
+.msg { border: 1px solid var(--line); box-shadow: var(--hi); font-size: 15px; }
+.msg.me { background: var(--accent-grad); border-color: transparent; box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 22%, transparent); }
+.chat .msg:not(.me), .chat .typing { margin-left: 38px; }
+.typing { position: relative; }
+.m-ava { position: absolute; left: -38px; bottom: 0; width: 30px; height: 30px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.25); pointer-events: none; }
+.msg .btns button { border: 1px solid var(--line); background: var(--card-2); transition: background .15s; }
+.composer { background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: saturate(160%) blur(16px); -webkit-backdrop-filter: saturate(160%) blur(16px); }
+.composer .round.send { background: var(--accent-grad); box-shadow: var(--glow); }
+.day-sep span { border: 1px solid var(--line); background: color-mix(in srgb, var(--card) 80%, transparent); box-shadow: none; }
+.quote { border-left-color: var(--accent); }
+
+.login { padding: 64px 12px; }
+.login img { width: 72px; height: 72px; border-radius: 20px; box-shadow: var(--glow); }
+.login h1 { font-size: 28px; letter-spacing: -.03em; margin: 18px 0 6px; }
+
+@media (min-width: 900px) {
+  .top { border-bottom-color: var(--line); }
+  .tabs { background: var(--bg-2); border-right: 1px solid var(--line); }
+  .brand { font-size: 17px; letter-spacing: -.02em; }
+  .brand img { border-radius: 9px; box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 30%, transparent); }
+  .tabs button { color: color-mix(in srgb, var(--text) 82%, var(--muted)); }
+  .tabs button.active { position: relative; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text); }
+  .tabs button.active::before { content: ""; position: absolute; left: -12px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent-grad); }
+  .tabs button.active .ico { color: var(--accent); }
+  .side-mini .tabs button.active::before { left: -10px; }
+  .composer { border-top-color: var(--line); }
+}
+
+/* В Telegram — его палитра без градиентов, чтобы кнопки совпадали с темой */
+:root.tg .pill.primary, :root.tg .btn.primary, :root.tg .seg button.on, :root.tg .fab, :root.tg .msg.me, :root.tg .composer .round.send { background: var(--accent); box-shadow: none; }
+
+/* Телефон: сначала цифры и план дня, выбор фокуса — ниже; идущий таймер — наверху (D58) */
+@media (max-width: 899px) {
+  .today-grid { display: flex; flex-direction: column; }
+  .today-side { display: contents; }
+  .today-side > * { order: 2; }
+  .today-side > .stats { order: 0; margin-bottom: 4px; }
+  .today-side > .card:has(#focus-card) { order: 0; }
+  .today-main { order: 1; margin-bottom: 12px; }
+}
+@media (max-width: 480px) {
+  .task { gap: 10px; padding: 12px; }
+  .task .acts { gap: 4px; }
+  .task .icon-btn { width: 34px; height: 34px; border-radius: 10px; }
 }

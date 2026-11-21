@@ -34,7 +34,7 @@ from arvix.state import State
 CLI = "cli"
 PLUGIN_STYLE = "arvix:Arvix"
 PLUGIN_TOOLS = "mcp__plugin_arvix_arvix"
-# Строка состояния Claude Code в доме Арвикса: режим · день · следующий блок · долг.
+# Строка состояния Claude Code в доме Arvix: режим · день · следующий блок · долг.
 STATUS_LINE = {"type": "command", "command": "~/.local/bin/arvix statusline", "refreshInterval": 60}
 YES = ("y", "д", "да", "yes")
 
@@ -240,13 +240,13 @@ def merge_home_settings(current: dict[str, Any], wanted: dict[str, Any]) -> tupl
 
 
 def init_home(home: Path, vault: str) -> list[str]:
-    """Дом Арвикса: папка, где `claude` запускается в стиле Arvix с доступом к хранилищу.
+    """Дом Arvix: папка, где `claude` запускается в стиле Arvix с доступом к хранилищу.
     Повторный вызов дополняет настройки (например, строкой состояния), не перезаписывая их."""
     created = []
     (home / ".claude").mkdir(parents=True, exist_ok=True)
     marker = home / ".arvix-home"
     if not marker.exists():
-        marker.write_text("Маркер дома Арвикса: хуки плагина работают только здесь.\n", encoding="utf-8")
+        marker.write_text("Маркер дома Arvix: хуки плагина работают только здесь.\n", encoding="utf-8")
         created.append(str(marker))
     settings = home / ".claude" / "settings.json"
     wanted = home_settings(vault)
@@ -265,10 +265,10 @@ def init_home(home: Path, vault: str) -> list[str]:
     readme = home / "CLAUDE.md"
     if not readme.exists():
         readme.write_text(
-            "# Дом Арвикса\n\n"
-            "Здесь Claude работает как Арвикс — личный ментор (стиль Arvix включён в .claude/settings.json).\n\n"
+            "# Дом Arvix\n\n"
+            "Здесь Claude работает как Arvix — личный ментор (стиль Arvix включён в .claude/settings.json).\n\n"
             "- Состояние, задачи, долг, интервью — MCP-инструменты `arvix` (начинай с `context`).\n"
-            f"- Obsidian: `{vault or 'не настроено'}` — Арвикс работает в его структуре: свои заметки создаёт, чужие только дополняет.\n"
+            f"- Obsidian: `{vault or 'не настроено'}` — Arvix работает в его структуре: свои заметки создаёт, чужие только дополняет.\n"
             "- Скиллы: /arvix:onboarding, /arvix:plan, /arvix:goal, /arvix:brief, /arvix:debrief, /arvix:retro, /arvix:learn, /arvix:notes.\n",
             encoding="utf-8",
         )
@@ -296,7 +296,7 @@ def _pair_telegram(token: str) -> int:
             name = " ".join(x for x in (sender.get("first_name"), sender.get("last_name")) if x)
             if _ask(f"Сообщение от {name} (@{sender.get('username', '—')}, id {sender['id']}). Это ты? y/N", "n").lower() in ("y", "д", "да", "yes"):
                 api.get_updates(offset, timeout=0)  # подтвердить прочитанное
-                api.send(sender["id"], "Связь есть. Я Арвикс. Дальше — /start.")
+                api.send(sender["id"], "Связь есть. Я Arvix. Дальше — /start.")
                 return int(sender["id"])
     sys.exit("Не дождался сообщения. Запусти `arvix setup` ещё раз.")
 
@@ -320,7 +320,7 @@ STT_KEY_HINT = {
 
 
 def _setup_tts(engine: str, voice: str | None) -> dict[str, Any]:
-    """Голос Арвикса: ключ Gemini — только скрытым вводом в терминале."""
+    """Голос Arvix: ключ Gemini — только скрытым вводом в терминале."""
     from arvix.tts import DEFAULT_VOICE
 
     if engine != "gemini":
@@ -349,13 +349,13 @@ def _check_voice() -> None:
     tts = TTS(load_config())
     started = time.monotonic()
     try:
-        audio = tts.synth("Привет. Я Арвикс, теперь у меня живой голос.")
+        audio = tts.synth("Привет. Я Arvix, теперь у меня живой голос.")
     except TTSError as exc:
         sys.exit(f"Голос не работает: {exc}")
     print(f"Голос работает: {tts.label}, {len(audio) // 1024} КБ за {time.monotonic() - started:.1f} с")
     if subprocess.run(["systemctl", "--user", "is-active", "--quiet", "arvix-telegram"], check=False).returncode == 0:
         subprocess.run(["systemctl", "--user", "restart", "arvix-telegram"], check=False)
-        print("Готово: бот перезапущен — отправь Арвиксу голосовое или позвони из приложения.")
+        print("Готово: бот перезапущен — отправь Arvix голосовое или позвони из приложения.")
 
 
 def _setup_stt(engine: str) -> dict[str, Any]:
@@ -396,7 +396,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
         ZoneInfo(tz)
     except (ZoneInfoNotFoundError, ValueError):
         sys.exit(f"Неизвестный часовой пояс: {tz}")
-    home = pick("Дом Арвикса для Claude Code", str(cfg.home), args.home)
+    home = pick("Дом Arvix для Claude Code", str(cfg.home), args.home)
     updates: dict[str, Any] = {"vault": vault, "timezone": tz, "home": home}
     claude_bin = cfg.section("brain").get("claude_bin") or "claude"
     from shutil import which
@@ -435,7 +435,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
         "\nДальше:\n"
         "  arvix setup --telegram --yes                   # привязать бота, если ещё нет\n"
         "  systemctl --user enable --now arvix-telegram   # бот\n"
-        f"  cd {home} && claude                            # Арвикс в Claude Code\n"
+        f"  cd {home} && claude                            # Arvix в Claude Code\n"
         "  arvix doctor                                   # проверка"
     )
 
@@ -490,7 +490,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     remote = target()
     if remote:
         alive = run_remote("arvix_cli.py", ["--version"], "", timeout=15)
-        check(f"сервер {remote[0]} (журнал там)", alive is not None, "ssh не проходит или Арвикс на сервере не установлен: deploy/sync-server.sh")
+        check(f"сервер {remote[0]} (журнал там)", alive is not None, "ssh не проходит или Arvix на сервере не установлен: deploy/sync-server.sh")
     else:
         check(f"база {cfg.db_path}", Core().store is not None)
     check(f"хранилище {cfg.vault}", bool(cfg.vault and cfg.vault.is_dir()), "arvix setup")
@@ -518,13 +518,13 @@ def cmd_doctor(args: argparse.Namespace) -> None:
 
     tts = TTS(cfg)
     if tts.engine == "off":
-        print("--   голос Арвикса выключен — arvix setup --tts gemini (звонок пока говорит голосом телефона)")
+        print("--   голос Arvix выключен — arvix setup --tts gemini (звонок пока говорит голосом телефона)")
     else:
-        check(f"голос Арвикса: {tts.label}", tts.enabled, tts.problem())
+        check(f"голос Arvix: {tts.label}", tts.enabled, tts.problem())
     if shutil.which("ffmpeg"):
-        print("OK   видео Арвиксу: ffmpeg есть — кадры и звук из роликов")
+        print("OK   видео Arvix: ffmpeg есть — кадры и звук из роликов")
     else:
-        print("--   видео Арвиксу: нет ffmpeg — ролик сохранится без кадров и расшифровки (sudo apt install -y ffmpeg)")
+        print("--   видео Arvix: нет ffmpeg — ролик сохранится без кадров и расшифровки (sudo apt install -y ffmpeg)")
     tg = cfg.section("telegram")
     check("Telegram токен и владелец", bool(tg.get("token") and tg.get("owner_id")), "arvix setup --telegram --yes")
     if tg.get("token"):
@@ -710,7 +710,7 @@ def cmd_hook(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="arvix", description="Арвикс — личный ментор (L0-команды без ИИ).")
+    parser = argparse.ArgumentParser(prog="arvix", description="Arvix — личный ментор (L0-команды без ИИ).")
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -761,14 +761,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("setup", cmd_setup, "первичная настройка (без флагов — диалог)")
     p.add_argument("--vault", help="путь к Obsidian-хранилищу")
     p.add_argument("--tz", help="часовой пояс, например Europe/Moscow")
-    p.add_argument("--home", help="дом Арвикса для Claude Code")
+    p.add_argument("--home", help="дом Arvix для Claude Code")
     p.add_argument("--telegram", dest="telegram", action="store_true", default=None, help="привязать Telegram-бота (токен — скрытый ввод)")
     p.add_argument("--no-telegram", dest="telegram", action="store_false", help="пропустить Telegram")
     p.add_argument("-y", "--yes", action="store_true", help="без вопросов: текущие значения и флаги")
     p.add_argument("--stt", choices=("groq", "openai", "command", "off"), help="голосовые в Telegram: движок распознавания")
-    p.add_argument("--tts", choices=("gemini", "command", "off"), help="голос Арвикса: ответ голосом и звонок (gemini — ключ скрытым вводом)")
+    p.add_argument("--tts", choices=("gemini", "command", "off"), help="голос Arvix: ответ голосом и звонок (gemini — ключ скрытым вводом)")
     p.add_argument("--voice", help="голос Gemini, например Charon, Orus, Iapetus, Algieba")
-    add("init-home", cmd_init_home, "создать или дополнить дом Арвикса для Claude Code")
+    add("init-home", cmd_init_home, "создать или дополнить дом Arvix для Claude Code")
     add("doctor", cmd_doctor, "проверка установки")
     add("statusline", cmd_statusline, "строка состояния для Claude Code (stdin — JSON сессии)")
     p = add("remote", cmd_remote, "удалённый режим: журнал на сервере (show / set user@host / off)")

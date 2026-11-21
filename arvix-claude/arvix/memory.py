@@ -1,4 +1,4 @@
-"""Долгая память Арвикса (04-AI-LAYER §8, D25): журнал хранит всё дословно, код находит нужное.
+"""Долгая память Arvix (04-AI-LAYER §8, D25): журнал хранит всё дословно, код находит нужное.
 
 Модель не может держать в промпте месяцы переписки, а пересказ теряет детали. Поэтому
 память не сжимается вовсе: источник правды — события журнала (переписка, факты, заметки,
@@ -154,7 +154,7 @@ def export_transcripts(core: Any, folder: Path | None = None) -> Path:
     facts: list[str] = []
     for event in core.store.read(0):
         if event.kind in ("message_in", "message_out"):
-            who = "Я" if event.kind == "message_in" else "Арвикс"
+            who = "Я" if event.kind == "message_in" else "Arvix"
             text = str(event.payload.get("text") or "").strip()
             if text:
                 days.setdefault(event.local_date, []).append(f"**{event.at.astimezone(core.tz):%H:%M} {who}:** {text}")
@@ -172,5 +172,5 @@ def export_transcripts(core: Any, folder: Path | None = None) -> Path:
         if day < today and path.exists():
             continue
         path.write_text(f"# Переписка {day:%d.%m.%Y}\n\n" + "\n\n".join(lines) + "\n", encoding="utf-8")
-    (folder / "ФАКТЫ.md").write_text("# Что Арвикс знает о человеке\n\n" + "\n".join(facts) + "\n", encoding="utf-8")
+    (folder / "ФАКТЫ.md").write_text("# Что Arvix знает о человеке\n\n" + "\n".join(facts) + "\n", encoding="utf-8")
     return folder

@@ -13,7 +13,7 @@
 задачи, подтемы, разбор, запрос видео. Человек видит один этап за раз и кнопку «Дальше».
 
 Окна этапов — события журнала (`study_panel`, `study_answer`, `study_stage`, `study_fix`), состояние —
-свёртка (`State.study`). Арвикс видит сессию блоком в промпте (`context_block`): этап, уровень, ошибки,
+свёртка (`State.study`). Arvix видит сессию блоком в промпте (`context_block`): этап, уровень, ошибки,
 текст заметки. Эталоны в приложение не уходят, пока человек не ответил (`public_panel`, `public_errors`).
 
 Темы — общая очередь `learn_item_set` (projects.py): тема из проекта, теория или практика, видна и в
@@ -52,7 +52,7 @@ STAGE_GOAL = {
              "Потом закрой всё и запиши суть своими словами в заметку.",
     "practice": "Решай сам, без подсказок и без заметок. Ответ проверяется сразу, ошибки уходят в работу над ошибками.",
     "fix": "У каждой ошибки: посмотри решение, отметь, почему ошибся, и реши похожую. Решил похожую — ошибка закрыта.",
-    "check": "Ответь без заметок. Это и есть отчёт о блоке: Арвикс оценит и назначит повторение темы.",
+    "check": "Ответь без заметок. Это и есть отчёт о блоке: Arvix оценит и назначит повторение темы.",
 }
 ERROR_KINDS = {"rule": "не знал правило", "calc": "ошибка в счёте", "read": "невнимательно прочитал", "start": "не понял, с чего начать"}
 UNKNOWN = "?"  # ответ «не знаю»: честнее угадывания, разбор получает точную картину
@@ -77,7 +77,7 @@ QUESTION_SCHEMA = {
         "answer": {"type": "integer", "description": "индекс верного варианта с 0"},
         "short": {"type": "string", "description": "короткий ответ, как в бланке ОГЭ: число или слово — проверит код"},
         "accept": {"type": "array", "items": {"type": "string"}, "description": "другие верные записи ответа: «0,5», «1/2»"},
-        "a": {"type": "string", "description": "эталон открытого ответа (своими словами) — оценит Арвикс на проверке"},
+        "a": {"type": "string", "description": "эталон открытого ответа (своими словами) — оценит Arvix на проверке"},
         "why": {"type": "string", "description": "решение в 1–3 строки — покажется после ответа"},
         "skill": {"type": "string", "description": "подтема, которую проверяет задача — то же имя, что в skills"},
         "level": {"type": "integer", "description": "1 — простая, 2 — средняя, 3 — сложная"},
@@ -483,7 +483,7 @@ def answer_quiz(core: Any, panel_id: str, answers: list[Any], *, task_ref: Any =
     if panel is None:
         raise ArvixError("Такого теста в сессии нет")
     if panel_id in session.get("answers", {}):
-        raise ArvixError("На этот тест уже ответил — попроси Арвикса дать новый")
+        raise ArvixError("На этот тест уже ответил — попроси Arvix дать новый")
     clean: list[Any] = []
     for i, q in enumerate(panel["questions"]):
         given = answers[i] if i < len(answers) else None
@@ -583,9 +583,9 @@ def fix_error(core: Any, key: str, *, task_ref: Any = None, kind: str | None = N
     if twin is not None:
         q = err["q"].get("twin")
         if not q:
-            raise ArvixError("У этой ошибки нет похожей задачи — попроси Арвикса в чате")
+            raise ArvixError("У этой ошибки нет похожей задачи — попроси Arvix в чате")
         if err["twin_given"] is not None:
-            raise ArvixError("Похожую уже решал — попроси Арвикса дать ещё одну")
+            raise ArvixError("Похожую уже решал — попроси Arvix дать ещё одну")
         if "options" in q:
             given = twin if isinstance(twin, int) and not isinstance(twin, bool) and 0 <= twin < len(q["options"]) else UNKNOWN
             ok = given == q["answer"]
@@ -604,7 +604,7 @@ def fix_error(core: Any, key: str, *, task_ref: Any = None, kind: str | None = N
     return next(e for e in errors(session_of(core, task.id)) if e["key"] == key)
 
 
-# --- что видит приложение и что видит Арвикс -------------------------------------------------------
+# --- что видит приложение и что видит Arvix -------------------------------------------------------
 
 def _public_question(q: dict[str, Any]) -> dict[str, Any]:
     return {"q": q["q"], "options": q.get("options"), "open": "a" in q, "short": "short" in q, "skill": q.get("skill"),
@@ -645,7 +645,7 @@ def public_errors(session: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def note_excerpt(core: Any, path: str | None, limit: int = 1500) -> str:
-    """Начало заметки, которую человек пишет на сессии: Арвикс видит, что уже написано своими словами."""
+    """Начало заметки, которую человек пишет на сессии: Arvix видит, что уже написано своими словами."""
     if not path or not core.cfg.vault:
         return ""
     from arvix.vault import VaultError
@@ -698,7 +698,7 @@ def _quiz_marks(session: dict[str, Any], p: dict[str, Any], ans: dict[str, Any])
 
 
 def context_block(core: Any, task_id: str, note_path: str | None = None) -> str:
-    """Сессия глазами Арвикса — в <lesson>: этап, уровень, ошибки, окна, ответы, заметка.
+    """Сессия глазами Arvix — в <lesson>: этап, уровень, ошибки, окна, ответы, заметка.
     Так он может «видеть и управлять»: дать похожую задачу на ошибку, скрыть лишнее, сослаться на ответ."""
     session = session_of(core, task_id)
     stage = current_stage(session)

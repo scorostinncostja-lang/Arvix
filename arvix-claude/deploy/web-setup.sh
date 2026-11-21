@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Приложение Арвикса наружу по HTTPS (05-INTERFACES §7.1, D26): Mini App в Telegram и PWA на телефоне.
+# Приложение Arvix наружу по HTTPS (05-INTERFACES §7.1, D26): Mini App в Telegram и PWA на телефоне.
 #
 #   deploy/web-setup.sh root@HOST [arvix]       # root — ставит Caddy; arvix — пользователь бота
 #
@@ -8,7 +8,7 @@
 #   2. адрес без покупки домена: <ip-через-дефисы>.sslip.io (DNS, который отвечает самим IP);
 #   3. HTTPS на порту 8443, сертификат — через порт 80. Порт 443 НЕ трогается: на нём может жить VPN;
 #   4. Caddy проксирует на 127.0.0.1:8787 — туда слушает служба бота (сам API наружу не открыт);
-#   5. пишет [web] public_url у пользователя бота и перезапускает бота: в Telegram появится кнопка «Арвикс».
+#   5. пишет [web] public_url у пользователя бота и перезапускает бота: в Telegram появится кнопка «Arvix».
 # Повторный запуск безопасен. Чужие сайты в Caddyfile не трогаются (свой блок — в /etc/caddy/arvix.caddy).
 set -euo pipefail
 ROOT_HOST="${1:?использование: web-setup.sh root@HOST [пользователь-бота]}"
@@ -36,7 +36,7 @@ if ss -ltn | awk '{print $4}' | grep -qE ":80$" && ! ss -ltnp | grep -E ":80 " |
   exit 1
 fi
 cat > /etc/caddy/arvix.caddy <<CADDY
-# Арвикс: приложение (Mini App / PWA). Файл пишет deploy/web-setup.sh.
+# Arvix: приложение (Mini App / PWA). Файл пишет deploy/web-setup.sh.
 $NAME:$PORT {
 	encode gzip
 	reverse_proxy 127.0.0.1:8787 {
@@ -80,7 +80,7 @@ curl -s --max-time 10 -o /dev/null -w "приложение: %{http_code}\n" "$U
 cat <<EOF
 
 Готово.
-  Telegram: кнопка «Арвикс» слева от поля ввода в чате с ботом (или «📱 Приложение» внизу).
+  Telegram: кнопка «Arvix» слева от поля ввода в чате с ботом (или «📱 Приложение» внизу).
   Телефон:  в приложении → «Прогресс» → «Установить на телефон» → в Chrome ⋮ → «Установить приложение».
   Ноутбук:  в браузере — одноразовая ссылка привязки (голый адрес откроет приложение без данных):
             ssh $BOT_USER@${ROOT_HOST#*@} '~/.local/bin/arvix app-link'

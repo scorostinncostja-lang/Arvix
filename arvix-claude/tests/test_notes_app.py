@@ -211,7 +211,7 @@ class DaySummaryTest(ArvixCase):
         use_template(self, OWNER_TEMPLATE)
         rel = daily_note.ensure(self.core, self.core.today())
         path = self.vault / rel
-        path.write_text(path.read_text(encoding="utf-8") + "\n<!-- arvix:день -->\n## Арвикс\nстарое\n<!-- /arvix:день -->\nмоя строка\n",
+        path.write_text(path.read_text(encoding="utf-8") + "\n<!-- arvix:день -->\n## Arvix\nстарое\n<!-- /arvix:день -->\nмоя строка\n",
                         encoding="utf-8")
         daily_note.sync(self.core, self.core.today())
         text = path.read_text(encoding="utf-8")

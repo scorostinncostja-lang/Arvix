@@ -60,7 +60,7 @@ DIALOG_DAY = "dialog_day"
 TYPING_EVERY = 4.0  # «печатает…» в Telegram гаснет через 5 с — обновляем чуть чаще
 NOTES_ASK = re.compile(r"заметк|обсидиан|obsidian|хранилищ|конспект|роадмап|роудмап|в моих|найди|поищи|записано|файл", re.IGNORECASE)
 ANALYST_RULES = """<analyst>
-Ты — аналитик Арвикса. Ты не пересказываешь события — их видно и так.
+Ты — аналитик Arvix. Ты не пересказываешь события — их видно и так.
 Ты ищешь связь, которую человек сам не замечает.
 Каждый вывод опирается минимум на 3 события — указывай их id в evidence.
 Вывод без доказательств отбрасывается кодом. Лучше один вывод, чем пять догадок.
@@ -76,7 +76,7 @@ profile_set (key латиницей snake_case, value строкой) — для
 set_template — если в ответах есть расписание недели: шаблоны дней (study|work|deep|recovery|silent),
 weekdays 0=пн…6=вс, blocks с start ЧЧ:ММ, duration в минутах, title, sphere, importance 1–5, difficulty 1–5, deep_work.
 Шаблон — только реалистичный: свободное время после учёбы/смен, сон по плану, 1–3 блока в день.
-Ничего не выдумывай сверх ответов. summary — что записано, 1–3 строки, голосом Арвикса.
+Ничего не выдумывай сверх ответов. summary — что записано, 1–3 строки, голосом Arvix.
 </extract>"""
 SCHEDULE_RULES = """<schedule>
 Собери шаблоны дней недели из ответов человека: учёба и работа, свободные окна, подъём и отбой, пики энергии.
@@ -96,7 +96,7 @@ SCHEDULE_RULES = """<schedule>
 - Предметы и экзамены, если их нет в ответах, сначала посмотри в хранилище (Grep/Read: карты предметов в 02_Areas,
   папка подготовки к экзаменам) — не угадывай.
 - Если есть пожелания человека или прежний вариант — исправь именно то, о чём он просит.
-summary — логика распорядка, 2–4 строки, голосом Арвикса.
+summary — логика распорядка, 2–4 строки, голосом Arvix.
 </schedule>"""
 WEEKDAY_NAMES = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
 DAY_TYPE_RU = {"study": "учебный", "work": "рабочий", "deep": "глубокий", "recovery": "восстановительный", "silent": "тихий"}
@@ -271,7 +271,7 @@ class Bot:
         return event.id, (event.payload.get("tg_id") if self.channel == "telegram" else None)
 
     def overtaken(self, event_id: int) -> bool:
-        """После сообщения человека уже есть другие: он дописал, пока Арвикс думал, или пришло напоминание."""
+        """После сообщения человека уже есть другие: он дописал, пока Arvix думал, или пришло напоминание."""
         try:
             if self.more_incoming():
                 return True
@@ -285,11 +285,11 @@ class Bot:
         a = self.answering or {}
         target = a.get("target")
         if target is not None:
-            whose = "своё сообщение" if target.kind == "message_in" else "сообщение Арвикса"
+            whose = "своё сообщение" if target.kind == "message_in" else "сообщение Arvix"
             when = f" от {target.at.astimezone(self.core.tz):%d.%m %H:%M}"
             text = str(target.payload.get("text") or "")
         elif a.get("quoted_text"):
-            whose = "сообщение Арвикса" if a.get("quoted_bot") else "своё сообщение"
+            whose = "сообщение Arvix" if a.get("quoted_bot") else "своё сообщение"
             when = f" от {datetime.fromtimestamp(a['quoted_at'], self.core.tz):%d.%m %H:%M}" if a.get("quoted_at") else ""
             text = a["quoted_text"]
         else:
@@ -315,7 +315,7 @@ class Bot:
 
     def on_reaction(self, message_id: int, emoji: str, *, channel: str) -> dict[str, Any]:
         """Реакция — сигнал, а не реплика: ответа нет, голова увидит её в истории и блоке <messenger>.
-        Исключение — «непонятно» (❓, 🤔): тогда Арвикс сам объясняет это место проще, цитатой."""
+        Исключение — «непонятно» (❓, 🤔): тогда Arvix сам объясняет это место проще, цитатой."""
         result = self.core.react(message_id, emoji, channel=channel)
         if result["changed"] and Core.reaction_key(emoji) in Core.CONFUSED:
             self.explain_unclear(message_id, emoji)
@@ -1429,7 +1429,7 @@ class Bot:
             return ""
         session = study.context_block(self.core, task.id, lesson.get("note"))  # окна, ответы, заметка (D55)
         if not lesson.get("started"):
-            return session  # план готов, ▶ не нажат: окна уже видны человеку — и Арвиксу
+            return session  # план готов, ▶ не нажат: окна уже видны человеку — и Arvix
         elapsed = int((self.core.now() - datetime.fromisoformat(lesson["started"])).total_seconds() // 60)
         plan = "; ".join(f"{s.get('from_min')}–{s.get('to_min')} {s.get('step')}" for s in lesson.get("plan") or [])
         return lesson_mod.LESSON_CONTEXT.format(topic=lesson.get("topic", ""), title=task.title, minutes=task.duration_min,
@@ -1784,7 +1784,8 @@ class Bot:
         """Сообщение кода с разметкой (жирный, строки) — как ответ головы."""
         target, tg_reply = self.quote_target()
         message_id = self.api.send(self.owner, fmt.strip_markup(text), buttons, html=fmt.to_html(text), reply_to=tg_reply)
-        self.core.message_out(fmt.strip_markup(text), key=key, channel=self.channel, buttons=buttons,
+        # в журнал — с разметкой, как ответ головы: приложение рисует жирный само (richText)
+        self.core.message_out(text, key=key, channel=self.channel, buttons=buttons,
                               reply_to=target, tg_id=self.tg_id(message_id))
         return message_id
 
@@ -1798,16 +1799,16 @@ class Bot:
         return f"{url}/#p={pair_code(self.core)}" if url else ""
 
     def send_install(self) -> None:
-        """Арвикс на телефон «как APK»: Chrome сам собирает из приложения WebAPK — иконка,
+        """Arvix на телефон «как APK»: Chrome сам собирает из приложения WebAPK — иконка,
         своё окно, обновляется сам (D26). Ссылка одноразовая: постоянный ключ в чат не попадает."""
         link = self.install_link()
         if not link:
             self.send("Приложение ещё не включено на сервере: нужен HTTPS-адрес (deploy/web-setup.sh).")
             return
         self.send_rich(
-            "📲 **Арвикс на телефон** — настоящее приложение: иконка на экране, своё окно, без адресной строки, обновляется само.\n"
+            "📲 **Arvix на телефон** — настоящее приложение: иконка на экране, своё окно, без адресной строки, обновляется само.\n"
             "1. Нажми «Установить» — откроется браузер. Если открылось внутри Telegram — ⋮ → «Открыть в Chrome».\n"
-            "2. В Chrome появится кнопка «Установить Арвикс» (или ⋮ → «Установить приложение»).\n"
+            "2. В Chrome появится кнопка «Установить Arvix» (или ⋮ → «Установить приложение»).\n"
             "Ссылка одноразовая и живёт 15 минут.",
             [[("📲 Установить", f"url:{link}")]],
         )
@@ -1817,11 +1818,11 @@ class Bot:
         if not url:
             self.send("Приложение ещё не включено на сервере: нужен HTTPS-адрес (deploy/web-setup.sh).")
             return
-        self.send_rich("📱 **Арвикс** — задачи, фокус, заметки и прогресс. Обновляется сам.",
+        self.send_rich("📱 **Arvix** — задачи, фокус, заметки и прогресс. Обновляется сам.",
                        [[("Открыть", f"app:{url}/")]])
 
     def send_curiosity(self) -> bool:
-        """Раз в день Арвикс сам пишет первым — не «как дела», а про то, что помнит:
+        """Раз в день Arvix сам пишет первым — не «как дела», а про то, что помнит:
         пробник, разговор, обещание. Вызывает планировщик ([schedule] curiosity)."""
         core = self.core
         st = core.state
@@ -1830,13 +1831,14 @@ class Bot:
         recent = [f for f in list(st.facts.values())[-25:]]
         facts = "\n".join(f"- {f['fact']}" for f in recent) or "—"
         system = "\n\n".join([
-            constitution(st.profile, gentle=False, sections=("identity", "voice", "honesty")),
+            constitution(st.profile, gentle=False, sections=("identity", "voice", "depth", "honesty")),
             "<context>\n" + build_context(core) + "\n</context>",
             "<history>\n" + "\n".join(self.history()) + "\n</history>",
             self.messenger_block(),
             "<curiosity>\nНапиши человеку первым — одно короткое сообщение, 1–2 предложения. Как наставник, которому "
             "правда интересно: спроси про конкретное из памяти (событие, пробник, разговор, решение, проект) или "
-            "поделись одной мыслью по его цели. Не «как дела?», не про задачи из списка, не напоминание. "
+            "поделись одной мыслью по его цели (см. <depth>) — или спроси то, чего тебе не хватает, чтобы помогать лучше "
+            "(причина паттерна, пробел в профиле, что изменилось). Не «как дела?», не про задачи из списка, не напоминание. "
             "Если спросить нечего — reply пустой.\n</curiosity>",
         ])
         result = self.brain.ask(system=system, prompt="Факты о человеке:\n" + facts, schema=VOICE_SCHEMA)
@@ -1844,6 +1846,29 @@ class Bot:
         if not reply:
             return False
         self.reply(reply, key=f"curiosity:{core.today().isoformat()}")
+        return True
+
+    def send_initiative(self, reasons: list[str]) -> bool:
+        """Arvix пишет первым по поводу, который нашёл код (D59): тот же голос и те же actions, что в ответе,
+        но вместо сообщения человека — повод. Пустой reply — голова решила, что писать незачем."""
+        from arvix import initiative
+
+        core = self.core
+        if core.effective_mode() == "red" or not core.state.mentor_enabled:
+            return False  # правило №5: в мягком режиме о пропусках не пишем вовсе
+        extra = initiative.PROMPT.format(reasons="\n".join(reasons))
+        if seen := self.messenger_block():
+            extra += "\n" + seen
+        system, prompt = voice_prompt(core, channel="telegram", message="(человек молчит — ты пишешь первым, повод в <initiative>)",
+                                      history=self.history(), extra=extra)
+        result = self.brain.ask(system=system, prompt=prompt, schema=VOICE_SCHEMA, vault_tools=False, effort="medium")
+        reply = ((result or {}).get("reply") or "").strip()
+        if not reply:
+            return False
+        done, failed, warnings = apply_actions(core, result.get("actions") or [], source=self.channel)
+        self.reply(reply, self.receipt(done, failed, warnings), key=f"initiative:{core.now():%Y-%m-%dT%H:%M}")
+        if done:
+            self.refresh_panel()
         return True
 
     def brain_down_hint(self) -> str:
@@ -1924,7 +1949,7 @@ class Bot:
         """Недельное ретро (L2): аналитик ищет паттерны, директивы без evidence отбрасывает код."""
         core = self.core
         result = self.brain.ask(
-            system=self.analyst_system("<task>Недельное ретро: паттерны, квоты, бюджет, коррекция плана. message — для человека голосом Арвикса; directives — 1–5, каждая с evidence.</task>"),
+            system=self.analyst_system("<task>Недельное ретро: паттерны, квоты, бюджет, коррекция плана. message — для человека голосом Arvix; directives — 1–5, каждая с evidence.</task>"),
             prompt="Лента событий за 7 дней:\n" + "\n".join(core.events_feed(days=7)) + f"\n\nКонтекст:\n{build_context(core)}",
             schema=RETRO_SCHEMA, role="analyst",
         )
@@ -1966,7 +1991,7 @@ class Bot:
         status = self.core.interview_status()
         core_block = next(b for b in status["blocks"] if b["block"] == "core")
         if core_block["done"] < core_block["total"]:
-            self.send("Я Арвикс. Не ассистент и не друг по переписке — внешний контур дисциплины, пока не выстроится свой.", keyboard=tpl.keyboard(self.app_url()))
+            self.send("Я Arvix. Не ассистент и не друг по переписке — внешний контур дисциплины, пока не выстроится свой.", keyboard=tpl.keyboard(self.app_url()))
             self.cmd_onboard("")
         else:
             self.send_brief()

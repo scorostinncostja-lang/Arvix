@@ -1,6 +1,6 @@
 """Ответы на сообщения, как в Telegram (D52).
 
-Человек отвечает цитатой — голова получает, на что именно; Арвикс отвечает цитатой, когда без неё
+Человек отвечает цитатой — голова получает, на что именно; Arvix отвечает цитатой, когда без неё
 непонятно, на что ответ: человек уже написал следующее или голова вернулась к раннему сообщению.
 Раньше `reply_to_message` из Telegram выбрасывался: «а это зачем?» в ответ на вчерашний план
 голова читала как вопрос о последнем сообщении."""
@@ -41,7 +41,7 @@ class HumanQuotesTest(ReplyCase):
                  quote="физика 19:00")
         seen = self.brain.calls[-1]["system"]
         self.assertIn("<reply_to>\nЧеловек ответил цитатой", seen)
-        self.assertIn("сообщение Арвикса", seen)
+        self.assertIn("сообщение Arvix", seen)
         self.assertIn("физика 19:00, английский 20:00", seen)  # текст из журнала, а не обрезок Telegram
         self.assertIn("Выделенный фрагмент: «физика 19:00»", seen)
         incoming = self.events("message_in")[-1]
@@ -178,7 +178,7 @@ class PlumbingTest(ReplyCase):
 
 
 class ReactionsTest(ReplyCase):
-    """Реакции (D52): сигнал, а не реплика — Арвикс видит и учитывает; «непонятно» — объясняет проще."""
+    """Реакции (D52): сигнал, а не реплика — Arvix видит и учитывает; «непонятно» — объясняет проще."""
 
     def tg_react(self, tg_id: int, emoji: str, user: int = OWNER) -> None:
         new = [{"type": "emoji", "emoji": emoji}] if emoji else []
@@ -235,7 +235,7 @@ class ReactionsTest(ReplyCase):
             web_api.react(out.id, "🍌")
         web_api.react(out.id, "❤️")(self.bot)
         self.assertEqual(web_api.messages_view(self.core)[-1]["reaction"], "❤️")
-        with self.assertRaises(ArvixError):  # на своё сообщение реакция Арвиксу ничего не говорит
+        with self.assertRaises(ArvixError):  # на своё сообщение реакция Arvix ничего не говорит
             self.core.react(self.core.message_in("моё", channel="web"), "👍")
 
     def test_question_mark_in_the_app_explains(self) -> None:

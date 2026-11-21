@@ -132,7 +132,7 @@ DEBRIEF_SCHEMA = {
 RETRO_SCHEMA = {
     "type": "object",
     "properties": {
-        "message": {"type": "string", "description": "ретро для человека голосом Арвикса, до 900 символов"},
+        "message": {"type": "string", "description": "ретро для человека голосом Arvix, до 900 символов"},
         "directives": {
             "type": "array",
             "items": {

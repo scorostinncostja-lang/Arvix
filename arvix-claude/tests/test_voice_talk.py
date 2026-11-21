@@ -1,4 +1,4 @@
-"""Голос Арвикса (D34, D46): голосовое — только voice_note головы, не озвучка текста; озвучка в приложении."""
+"""Голос Arvix (D34, D46): голосовое — только voice_note головы, не озвучка текста; озвучка в приложении."""
 
 from __future__ import annotations
 
@@ -186,7 +186,7 @@ class GeminiVoiceTest(BotCase):
         seen: dict = {}
         with mock.patch("urllib.request.urlopen", self.fake_response(payload, seen)):
             if shutil.which("ffmpeg"):
-                self.assertTrue(tts.synth("**Привет** 🎯, это Арвикс").startswith(b"OggS"))
+                self.assertTrue(tts.synth("**Привет** 🎯, это Arvix").startswith(b"OggS"))
             else:
                 tts._gemini("Привет")
         self.assertEqual(seen["url"], "https://generativelanguage.googleapis.com/v1beta/interactions")
@@ -198,7 +198,7 @@ class GeminiVoiceTest(BotCase):
         part = body["input"][0]["content"][0]
         self.assertEqual(part["annotations"][0]["type"], "speech_metadata")
         if shutil.which("ffmpeg"):
-            self.assertEqual(part["text"], "Привет , это Арвикс")  # разметка и эмодзи не читаются вслух
+            self.assertEqual(part["text"], "Привет , это Arvix")  # разметка и эмодзи не читаются вслух
 
     def test_quota_and_bad_key_are_explained_in_words(self) -> None:
         import io

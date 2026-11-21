@@ -38,7 +38,7 @@ SESSION = {
              {"stage": "learn", "from_min": 7, "to_min": 18, "step": "Разбор и заметка", "tool": "Атанасян §66"},
              {"stage": "practice", "from_min": 18, "to_min": 34, "step": "Задачи №15", "tool": "Решу ОГЭ"},
              {"stage": "fix", "from_min": 34, "to_min": 40, "step": "Ошибки", "tool": "журнал ошибок"},
-             {"stage": "check", "from_min": 40, "to_min": 45, "step": "Проверка", "tool": "Арвикс"}],
+             {"stage": "check", "from_min": 40, "to_min": 45, "step": "Проверка", "tool": "Arvix"}],
     "diagnostic": DIAG,
     "skills": [{"name": "Пифагор", "explain": "c² = a² + b². Пример: 6, 8 → 10.", "source": "Атанасян, §54"},
                {"name": "R описанной", "explain": "Центр — середина гипотенузы, R = c/2.", "source": "Атанасян, §74"},
@@ -396,7 +396,9 @@ class ReviewTest(BotCase):
         out = web_api.review_start()(self.bot)
         quiz = out["review"]["quiz"]
         self.assertEqual([i["q"] for i in quiz["items"]], ["Гипотенуза 30. R?", "Катеты 20 и 21. Гипотенуза?"])
-        self.assertNotIn("15", json.dumps(quiz, ensure_ascii=False))  # эталон — после ответа
+        for item in quiz["items"]:  # эталон — после ответа (id случайные: искать «15» в JSON нельзя — он бывает в id)
+            self.assertFalse({"right", "answer", "why", "accept"} & set(item), item)
+            self.assertIs(item["short"], True)
         self.assertIn("R описанной", self.brain.calls[-1]["system"])  # пробелы темы — голове
         again = web_api.review_start()(self.bot)  # второе нажатие — тот же тест, голову не зовём
         self.assertEqual(again["review"]["quiz"]["items"], quiz["items"])
@@ -492,7 +494,7 @@ class StudyStagesServerTest(StudyServerTest):
         key = r["session"]["errors"][0]["key"]
         status, r = self.call(f"/api/study/{task.id}/fix", {"key": key, "kind": "calc"})
         self.assertEqual((status, r["fixed"]["kind"], r["fixed"]["twin"]["done"]), (200, "calc", False))
-        self.assertNotIn("13", json.dumps(r["fixed"], ensure_ascii=False))  # ответ похожей — только после попытки
+        self.assertEqual(set(r["fixed"]["twin"]), {"q", "options", "short", "done"})  # ответ похожей — только после попытки
         status, r = self.call(f"/api/study/{task.id}/stage", {"stage": "check"})
         self.assertEqual(r["session"]["stage"], "check")
         status, r = self.call(f"/api/study/{task.id}/check", {})

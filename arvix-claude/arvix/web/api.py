@@ -345,7 +345,7 @@ def project_chat(project_id: str, text: str, *, kickoff: bool = False) -> Any:
 
 
 def project_upload(project_id: str, data: bytes, name: str, mime: str, caption: str) -> Any:
-    """Файл в чат проекта — в папку проекта «Файлы» (код, скриншот, PDF): Арвикс читает и отвечает."""
+    """Файл в чат проекта — в папку проекта «Файлы» (код, скриншот, PDF): Arvix читает и отвечает."""
     def run(bot: Any) -> None:
         bot.core.refresh()
         with bot.via("web", SINK), bot.in_project(project_id), bot.incoming():
@@ -354,7 +354,7 @@ def project_upload(project_id: str, data: bytes, name: str, mime: str, caption: 
 
 
 def project_roadmap(goal_id: str) -> Any:
-    """«Арвикс, предложи проекты к цели» — фоновая задача: ответ придёт сообщением, проекты — отложенными."""
+    """«Arvix, предложи проекты к цели» — фоновая задача: ответ придёт сообщением, проекты — отложенными."""
     def run(bot: Any) -> None:
         with bot.via("web", SINK):
             bot.build_project_roadmap(goal_id)
@@ -550,7 +550,7 @@ def study_open(task_id: str | None = None, item_id: str | None = None, minutes: 
 
 
 def study_chat(task_id: str, text: str) -> Any:
-    """Сообщение из окна учебной сессии: ответ Арвикса — в её нить, не в общий чат (D56)."""
+    """Сообщение из окна учебной сессии: ответ Arvix — в её нить, не в общий чат (D56)."""
     def run(bot: Any) -> None:
         bot.core.refresh()
         task = bot.core.resolve_task(task_id)
@@ -597,7 +597,7 @@ def study_op(task_id: str, op: str, body: dict[str, Any]) -> Any:
         elif op == "panel":
             raw = body.get("panel")
             if not isinstance(raw, dict) or raw.get("type") not in ("video", "note", "sources"):
-                raise ArvixError("Сам можно добавить видео, заметку или источники; тест и доску попроси у Арвикса")
+                raise ArvixError("Сам можно добавить видео, заметку или источники; тест и доску попроси у Arvix")
             out = {"panel": study.add_panel(core, raw, task_ref=task_id, by="me", source="web")}
         elif op == "hide":
             out = {"panel": study.hide_panel(core, str(body.get("panel") or ""), task_ref=task_id, source="web")}
@@ -625,7 +625,7 @@ def study_check(task_id: str) -> Any:
 
 
 def study_upload(task_id: str, data: bytes, name: str, mime: str, caption: str) -> Any:
-    """Файл в чат сессии — фото решения из тетради, скриншот, PDF: Арвикс смотрит его с блоком <study>."""
+    """Файл в чат сессии — фото решения из тетради, скриншот, PDF: Arvix смотрит его с блоком <study>."""
     def run(bot: Any) -> None:
         bot.core.refresh()
         task = bot.core.resolve_task(task_id)
@@ -804,7 +804,7 @@ def chat(text: str, *, voice: bool = False, reply_to: int | None = None) -> Any:
 
 
 def react(message_id: int, emoji: str) -> Any:
-    """Реакция из приложения (D52): набор Core.REACTIONS или пусто — снять. ❓ — Арвикс объяснит проще."""
+    """Реакция из приложения (D52): набор Core.REACTIONS или пусто — снять. ❓ — Arvix объяснит проще."""
     if emoji and emoji not in Core.REACTIONS:
         raise ArvixError("Такой реакции нет")
 
@@ -901,7 +901,7 @@ def daily_date(core: Any, path: str) -> Any:
 
 def note_view(core: Any, path: str) -> dict[str, Any]:
     """Заметка для экрана: текст, хэш для защиты от затирания, и какие строки-чекбоксы —
-    задачи Арвикса (их галочка закрывает задачу, а не просто меняет текст)."""
+    задачи Arvix (их галочка закрывает задачу, а не просто меняет текст)."""
     from arvix import daily_note
     from arvix.vault import sha
 
@@ -940,7 +940,7 @@ def note_create(folder: str, name: str) -> Any:
 
 
 def note_toggle(path: str, line: int, base_sha: str) -> Any:
-    """Галочка в заметке. Строка задачи Арвикса → не текст, а задача: ответ {"task"}, и
+    """Галочка в заметке. Строка задачи Arvix → не текст, а задача: ответ {"task"}, и
     приложение проводит её через ✓ (с отчётом, если он нужен); [x] поставит код после закрытия."""
     def run(bot: Any) -> dict[str, Any]:
         from arvix import daily_note
@@ -959,7 +959,7 @@ def note_toggle(path: str, line: int, base_sha: str) -> Any:
             if task["open"] and not checked:
                 return {"task": task}
             if task["status"] == "done":
-                raise ArvixError("Задача уже закрыта. Журнал не переписывается — если ошибся, скажи Арвиксу.")
+                raise ArvixError("Задача уже закрыта. Журнал не переписывается — если ошибся, скажи Arvix.")
             raise ArvixError("Задача закрыта как несделанная — галочка ей не поставится.")
         lines[line] = f"{m.group(1)}[{' ' if checked else 'x'}]{m.group(3)}{m.group(4)}"
         text = "\n".join(lines)

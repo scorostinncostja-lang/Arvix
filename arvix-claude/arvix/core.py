@@ -1,6 +1,6 @@
 """Core — фасад L0. Каждая операция: проверка → формула → событие в журнал.
 
-Им пользуются все лица Арвикса: MCP-сервер (Claude Code / Desktop), Telegram-бот
+Им пользуются все лица Arvix: MCP-сервер (Claude Code / Desktop), Telegram-бот
 и CLI. Модель сюда напрямую не пишет — она только вызывает операции, а решения
 (долг, режим, нагрузку) принимает код (00-VISION П3, правило №1 CLAUDE.md).
 Игры нет (D41): ни очков, ни здоровья, ни уровней — только факты.
@@ -1196,14 +1196,14 @@ class Core:
 
     # --- сообщения ------------------------------------------------------------------
 
-    # Переписка хранится дословно: это и есть долгая память Арвикса (arvix/memory.py).
+    # Переписка хранится дословно: это и есть долгая память Arvix (arvix/memory.py).
     # Раньше ответ резался до 600 символов — и через неделю он «забывал» собственные объяснения.
     MESSAGE_LIMIT = 16000
 
     def message_in(self, text: str, *, channel: str = "telegram", project: str | None = None, study: str | None = None,
                    reply_to: int | None = None, tg_id: int | None = None) -> int:
         """reply_to — id события-сообщения, на которое человек ответил цитатой (D52);
-        tg_id — номер сообщения в Telegram: по нему Арвикс отвечает цитатой там же."""
+        tg_id — номер сообщения в Telegram: по нему Arvix отвечает цитатой там же."""
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "channel": channel}
         if project:
             payload["project"] = project  # чат проекта (D47): своя нить в общей переписке
@@ -1248,10 +1248,10 @@ class Core:
         return (emoji or "").replace("\ufe0f", "").strip()
 
     def react(self, message_id: int, emoji: str, *, channel: str = "web") -> dict[str, Any]:
-        """Реакция человека на сообщение Арвикса. Пустая строка — снять. Одна реакция на сообщение, как в Telegram."""
+        """Реакция человека на сообщение Arvix. Пустая строка — снять. Одна реакция на сообщение, как в Telegram."""
         target = self.message(int(message_id or 0))
         if target is None or target.kind != "message_out":
-            raise ArvixError("Реакция ставится на сообщение Арвикса")
+            raise ArvixError("Реакция ставится на сообщение Arvix")
         emoji = (emoji or "").strip()[:16]
         current = (self.state.reactions.get(target.id) or {}).get("emoji", "")
         if self.reaction_key(emoji) == self.reaction_key(current):
