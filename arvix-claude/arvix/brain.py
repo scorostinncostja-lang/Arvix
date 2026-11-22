@@ -21,7 +21,6 @@ from typing import Any
 
 from arvix.config import Config, data_dir
 from arvix.core import ArvixError, Core
-from arvix.study import PANEL_SCHEMA
 
 HEAD_SKILLS = Path(__file__).resolve().parent.parent / "head-skills"  # библиотека навыков головы (D33)
 
@@ -31,14 +30,12 @@ ACTION_TYPES = (
     "add_task", "complete_task", "fail_task", "defer_task", "cancel_task", "start_task",
     "log_sleep", "log_expense", "log_social", "remember", "note", "profile_set",
     "set_goal", "add_trait", "declare_reason", "learning_question", "safety_flag", "set_template",
-    # Проекты (D43): карточка, этап с критерием, блок в план, журнал, деньги, канал привлечения.
-    "set_project", "set_milestone", "plan_project", "project_log", "project_resource", "project_note", "learn_add",
-    # Окно учебной сессии (D55): тест, доска, схема, видео, объяснение — в разделе «Обучение».
-    "study_panel",
+    # Навигатор по инструментам (D62): шаги к задаче «что и чем» и запись в заметку хранилища.
+    "task_guide", "write_note",
 ) + (
     # Действия интерфейса: их исполняет бот после ответа, а не ядро (05-INTERFACES §2.1).
-    # Так человек говорит словами, а не командами: «давай позанимаемся физикой» → урок.
-    "plan_schedule", "show_schedule", "start_lesson", "start_focus", "stop_focus", "show_day", "show_status",
+    # Так человек говорит словами, а не командами: «засеки 45 минут физика» → таймер.
+    "plan_schedule", "show_schedule", "start_focus", "stop_focus", "show_day", "show_status",
     "show_week", "show_goals", "debrief_now", "rest_day", "silent_day", "open_app", "install_app", "offer_return",
 )
 UI_ACTIONS = frozenset(ACTION_TYPES[ACTION_TYPES.index("plan_schedule"):])
@@ -47,9 +44,7 @@ ACTION_RU = {
     "start_task": "старт", "log_sleep": "сон", "log_expense": "трата", "log_social": "социум", "remember": "память",
     "note": "заметка", "profile_set": "профиль", "set_goal": "цель", "add_trait": "черта", "declare_reason": "причина дня",
     "learning_question": "учебный вопрос", "safety_flag": "safety", "set_template": "распорядок",
-    "set_project": "проект", "set_milestone": "этап проекта", "plan_project": "блок проекта", "project_log": "журнал проекта",
-    "project_resource": "источник проекта", "project_note": "заметка проекта", "learn_add": "учиться",
-    "study_panel": "окно урока",
+    "task_guide": "шаги к задаче", "write_note": "заметка",
 }
 
 _ACTION_FIELDS = {
@@ -72,27 +67,19 @@ _ACTION_FIELDS = {
     "goal_id": {"type": "string", "description": "для set_goal: id существующей цели — исправить её (kind, deadline, metric, status=dropped)"},
     "parent_id": {"type": "string", "description": "для set_goal: id цели, этапом которой становится эта"},
     "metric": {"type": "string", "description": "для set_goal: как проверить достижение — число, оценка, результат"},
-    "status": {"type": "string", "enum": ["active", "done", "dropped", "idea", "paused", "open", "todo"],
-               "description": "цель: active/done/dropped; проект: active / paused (отложен) / done / dropped (done и dropped — с итогом в reason); "
-                              "этап: open/done/dropped; тема learn_add: todo/done/dropped"},
+    "status": {"type": "string", "enum": ["active", "done", "dropped"], "description": "для set_goal: active/done/dropped"},
     "weekdays": {"type": "array", "items": {"type": "integer"}, "description": "для set_template: 0=пн … 6=вс"},
     "day_type": {"type": "string", "enum": ["study", "work", "deep", "recovery", "silent"]},
-    "project": {"type": "string", "description": "id проекта из блока ПРОЕКТЫ: для add_task — блок работает на проект; для set_project — правка"},
-    "milestone": {"type": "string", "description": "для set_milestone: id этапа — отметить (status=done/dropped) или исправить"},
-    "dod": {"type": "string", "description": "для set_milestone: критерий готовности этапа — как проверить, что он сделан"},
-    "expectation": {"type": "string", "description": "для set_project: что должно быть в конце, проверяемо"},
-    "weekly_min": {"type": "integer", "description": "для set_project: минут в неделю на проект"},
-    "skills": {"type": "array", "items": {"type": "string"}, "description": "для set_project: навыки, которые даёт проект"},
-    "purposes": {"type": "array", "items": {"type": "string"},
-                 "description": "для set_project: зачем — skill, portfolio, experience, people, career, admission, earn, brand, help, idea, fun, health или своё"},
-    "order": {"type": "integer", "description": "для set_project: место в роадмапе цели (1 — первый)"},
-    "url": {"type": "string", "description": "для project_resource: ссылка — только настоящая; чужой репозиторий как пример — kind=example"},
-    "append": {"type": "boolean", "description": "для project_note: дописать в конец, а не создать или перезаписать свою"},
-    "learn": {"type": "string", "description": "для learn_add: id темы — отметить (status=done) или исправить; "
-                                               "kind=theory (понять) или practice (сделать руками); project — необязателен"},
-    "sources": {"type": "array", "items": {"type": "string"}, "description": "для learn_add: источники темы — учебник и глава, документация, курс"},
-    "link": {"type": "string"},
-    "panel": {**PANEL_SCHEMA, "description": "для study_panel: окно сессии в разделе «Обучение» (см. <study>)"},
+    "steps": {"type": "array", "description": "для task_guide: 2–5 шагов — что сделать и чем",
+              "items": {"type": "object", "properties": {
+                  "do": {"type": "string", "description": "действие с адресом внутри инструмента: «каталог → №15: 6 задач»"},
+                  "tool": {"type": "string", "description": "инструмент из ИНСТРУМЕНТЫ; нового в списке нет — «новый: название»"},
+                  "min": {"type": "integer"}}, "required": ["do", "tool"]}},
+    "done": {"type": "string", "description": "для task_guide: готово, когда — проверяемо, по результату"},
+    "save": {"type": "string", "description": "для task_guide: куда записать результат (путь заметки, журнал ошибок, Anki)"},
+    "note": {"type": "string", "description": "для task_guide: название заметки «своими словами», если шаг её просит"},
+    "path": {"type": "string", "description": "для write_note: путь заметки от корня хранилища, например 01_Projects/GYM Bro.md"},
+    "append": {"type": "boolean", "description": "для write_note: дописать в конец его заметки; без append — новая или своя заметка Arvix"},
     "blocks": {
         "type": "array",
         "items": {
@@ -396,66 +383,6 @@ def _start_from_deadline(action: dict[str, Any]) -> str | None:
     return f"{max(total, 0) // 60:02d}:{max(total, 0) % 60:02d}"
 
 
-PROJECT_ACTIONS = frozenset({"set_project", "set_milestone", "plan_project", "project_log", "project_resource", "project_note", "learn_add"})
-
-
-def _project_action(core: Core, kind: str, a: dict[str, Any], source: str) -> tuple[str, list[str]]:
-    """Действия проекта — те же операции L0, что у кнопок приложения (arvix/projects.py)."""
-    from arvix import projects
-
-    if kind == "set_project":
-        pid = projects.set_project(
-            core, a.get("title", ""), project_id=a.get("project") or None, why=a.get("why", ""), kind=a.get("kind"),
-            purposes=a.get("purposes"), expectation=a.get("expectation") or a.get("metric") or "", deadline=a.get("deadline"),
-            weekly_min=a.get("weekly_min"), goal_id=a.get("goal_id") or None, status=a.get("status"), skills=a.get("skills"),
-            link=a.get("link", ""), order=a.get("order"), reason=a.get("reason") or a.get("report") or "",
-            source=source,
-        )
-        p = core.state.projects[pid]
-        # Несостыковки проекта модель и так видит в контексте, человек — в «Плане»: в квитанции не дублируем
-        return f"проект «{p['title']}» · {projects.STATUSES[p['status']]}", []
-    if kind == "learn_add" and not a.get("project"):
-        return _learn_add(core, a, None, source)  # тема без проекта — для раздела «Обучение» (D55)
-    project = projects.resolve(core, a.get("project") or a.get("goal_id") or "")
-    if kind == "set_milestone":
-        status = a.get("status") if a.get("status") in projects.MILESTONE_STATUSES else None
-        projects.set_milestone(core, project["id"], a.get("title", ""), milestone_id=a.get("milestone") or None,
-                               due=a.get("deadline") or a.get("date"), dod=a.get("dod") or a.get("metric") or "",
-                               status=status, source=source)
-        return f"этап «{a.get('title') or core.state.milestones[a['milestone']]['title']}» · {project['title']}" + (
-            " · пройден" if status == "done" else ""), []
-    if kind == "plan_project":
-        task = projects.plan_block(core, project["id"], minutes=a.get("duration_min") or a.get("minutes") or 60,
-                                   day=a.get("date"), start=a.get("start"), title=a.get("title", ""), source=source)
-        return f"+ {task.title} · {task.start}, {task.duration_min} мин" + (" · завтра" if task.local_date > core.today() else ""), \
-            core.task_warnings(task)
-    if kind == "project_log":
-        entry = projects.log_entry(core, project["id"], a.get("text") or a.get("report") or "", kind=a.get("kind") or "update",
-                                   minutes=a.get("minutes") or 0, source=source)
-        return f"журнал «{project['title']}»: {projects.LOG_KINDS[entry['kind']]}", []
-    if kind == "project_resource":
-        projects.set_resource(core, project["id"], a.get("title", ""), url=a.get("url") or a.get("link") or "", kind=a.get("kind"),
-                              note=a.get("text", ""), by="arvix", source=source)
-        return f"источник «{a.get('title') or a.get('url')}» · {project['title']}", []
-    if kind == "project_note":
-        rel = projects.write_note(core, project["id"], a.get("title") or a.get("name") or "", a.get("text") or a.get("content") or "",
-                                  append=bool(a.get("append")), source=source)
-        return f"заметка {rel}", []
-    return _learn_add(core, a, project["id"], source)
-
-
-def _learn_add(core: Core, a: dict[str, Any], project_id: str | None, source: str) -> tuple[str, list[str]]:
-    from arvix import projects
-
-    status = a.get("status") if a.get("status") in ("todo", "done", "dropped") else None
-    kind = a.get("kind") if a.get("kind") in ("theory", "practice") else None
-    projects.set_learn(core, a.get("topic") or a.get("title") or "", item_id=a.get("learn") or None, project_ref=project_id,
-                       goal_id=a.get("goal_id") or None, why=a.get("why", ""), sources=a.get("sources"), status=status,
-                       kind=kind, source=source)
-    label = {"theory": " · теория", "practice": " · практика"}.get(kind or "", "")
-    return f"учиться: {a.get('topic') or a.get('title') or 'тема'}{label}" + (" · пройдено" if status == "done" else ""), []
-
-
 def apply_actions(
     core: Core, actions: list[dict[str, Any]], *, source: str = "telegram", fallback_report: str | None = None,
 ) -> tuple[list[str], list[str], list[str]]:
@@ -477,8 +404,7 @@ def apply_actions(
                     action.get("title", ""), sphere=action.get("sphere") or "project",
                     importance=action.get("importance") or 3, difficulty=action.get("difficulty") or 3,
                     start=_start_from_deadline(action), duration_min=action.get("duration_min") or 60,
-                    deep_work=bool(action.get("deep_work")), day=action.get("date"), project=action.get("project") or None,
-                    source=source,
+                    deep_work=bool(action.get("deep_work")), day=action.get("date"), source=source,
                 )
                 when = (f"{task.start}, " if task.start else "") + f"{task.duration_min} мин"
                 done.append(f"+ {task.title} · {when}" + (" · завтра" if task.local_date > core.today() else ""))
@@ -543,15 +469,20 @@ def apply_actions(
             elif kind == "set_template":
                 core.set_template(action.get("weekdays") or [], action.get("day_type", ""), action.get("blocks") or [], source=source)
                 done.append(f"шаблон «{action.get('day_type')}» для дней {action.get('weekdays')}")
-            elif kind == "study_panel":
-                from arvix import study
-
-                panel = study.add_panel(core, action.get("panel") or {}, task_ref=action.get("task") or None, by="arvix", source=source)
-                done.append(f"окно урока: {study.PANEL_RU[panel['type']]} «{panel['title']}»" + (" скрыто" if panel.get("hidden") else ""))
-            elif kind in PROJECT_ACTIONS:
-                line, extra = _project_action(core, kind, action, source)
-                done.append(line)
-                warnings += extra
+            elif kind == "task_guide":
+                ref = action.get("task") or (added[-1] if added else None)  # блок, поставленный этим же ответом
+                if not ref:
+                    raise ArvixError("к какой задаче шаги? Назови задачу или поставь блок")
+                task = core.set_guide(ref, action, source=source)
+                done.append(f"🧭 шаги к «{task.title}»: {len(task.guide['steps'])}"
+                            + (f" · заметка {task.guide['note_path']}" if task.guide.get("note_path") else ""))
+            elif kind == "write_note":
+                # Правила хранилища — код (vault.py): новая или своя нетронутая — пишется; его заметка — только append.
+                text = str(action.get("text") or "").strip()
+                if not text or not action.get("path"):
+                    raise ArvixError("нужны путь и текст заметки")
+                result = core.write_note(str(action["path"]), text + "\n", append=bool(action.get("append")), source=source)
+                done.append(f"📝 {result['path']}" + (" · дописал" if action.get("append") else ""))
         except ArvixError as exc:
             failed.append(f"{ACTION_RU.get(kind, kind)} — {exc}")
         except (KeyError, TypeError, ValueError) as exc:

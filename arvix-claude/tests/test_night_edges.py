@@ -2,7 +2,7 @@
 
 - После полуночи, до смены дня (04:00), вчерашнее ещё живо: его видно в приложении и голове,
   проверка «Сделано?» приходит, а не задача молча уходит в долг.
-- План урока без ▶️ не глушит проверку в конце блока; «✅ Да» по нему — отчёт, а не второй «Сделано?».
+- Учебный блок без ▶️ получает «Сделано?» в конце; голова молчит в начале — обычное «Блок пошёл» (D62).
 - «Ложусь» — прощание, а не ответ на висящий вопрос; вопрос прошлого дня сгорает на смене дня.
 - В ленте приложения у закрытой задачи нет кнопок.
 """
@@ -48,38 +48,37 @@ class AfterMidnight(BotCase):
         self.assertEqual(self.core.open_yesterday(), [])
 
 
-class LessonWithoutTimer(BotCase):
+class LearningBlockWithoutTimer(BotCase):
     start = moscow(2026, 11, 2, 15, 0)
 
-    def lesson_task(self):  # голова молчит (FakeBrain без ответов) — план кодом, без вопросов проверки
+    def learning_task(self):  # голова молчит (FakeBrain без ответов) — шагов нет, «Блок пошёл» как обычно
         task = self.core.add_task("Математика ОГЭ вариант", start="16:00", duration_min=60, importance=5,
                                   sphere="learning", deep_work=True, source="telegram")
         self.at(moscow(2026, 11, 2, 16, 0))
         self.scheduler.tick()
-        self.assertTrue(self.bot.lesson_pending(task.id))
+        self.assertTrue(any("Блок пошёл: Математика" in t for t in self.api.texts))  # следом — чек-ин середины дня
+        self.assertIsNone(self.core.state.tasks[task.id].guide)
         return task
 
-    def test_check_comes_even_if_lesson_was_never_started(self) -> None:
-        self.lesson_task()
+    def test_check_comes_even_if_block_was_never_started(self) -> None:
+        self.learning_task()
         self.at(moscow(2026, 11, 2, 17, 1))
         self.scheduler.tick()
         self.assertTrue(any("Сделано: Математика" in t for t in self.api.texts))
 
-    def test_yes_on_lesson_without_questions_asks_report_once(self) -> None:
-        task = self.lesson_task()
+    def test_yes_asks_report_once(self) -> None:
+        task = self.learning_task()
         self.press(f"t:{task.id}:yes")
         self.assertNotIn("Сделано", self.api.last)
         self.text("решил 18 из 31, ошибки в геометрии")
         self.assertEqual(self.core.state.tasks[task.id].status, "done")
 
-    def test_running_lesson_timer_still_owns_the_check(self) -> None:
-        task = self.lesson_task()
+    def test_old_lesson_button_answers_in_words(self) -> None:
+        """Кнопка урока из сообщения до D62: не молчание и не ошибка — объяснение, что теперь иначе."""
+        task = self.learning_task()
         self.press(f"l:{task.id}:go")
-        self.assertTrue(self.bot.lesson_running(task.id))
-        sent = len(self.api.sent)
-        self.at(moscow(2026, 11, 2, 16, 59))  # конец блока по плану, таймер ещё идёт
-        self.scheduler.reminders(self.core.now())
-        self.assertFalse(any("Сделано: Математика" in t for t, _ in self.api.sent[sent:]))
+        self.assertIn("уроков и проектов в Arvix больше нет", self.api.last)
+        self.assertEqual(self.core.state.tasks[task.id].status, "planned")
 
 
 class GoodnightAndStaleQuestions(BotCase):

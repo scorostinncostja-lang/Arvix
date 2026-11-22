@@ -7,6 +7,10 @@ State.apply(event) — инкремент, State.rebuild(events) — полны�
 Игры нет (D41): XP, уровней, HP, щитов, Протокола Ноль, сезонов и серии больше не
 считаем. Их старые события (xp_awarded, hp_changed, shield_used, protocol_zero)
 остаются в журнале — он только дополняется, — но в свёртку не входят.
+
+Так же с проектами и учебными сессиями (D62): Arvix — навигатор по инструментам, а не
+их замена. События project_set, milestone_set, learn_item_set, study_*, review_*,
+lesson_* и другие остаются в журнале, свёртка их не читает.
 """
 
 from __future__ import annotations
@@ -44,8 +48,9 @@ class Task:
     debt_since: date | None = None
     reason: str | None = None
     focus_min: int = 0  # фокус-сессии по этой задаче (таймер): при закрытии — глубокие минуты и подтверждение «таймер»
-    project: str | None = None  # id проекта (D43): минуты задачи идут во время проекта
     report_photos: list[str] = field(default_factory=list)  # фото отчёта в хранилище (D49)
+    # «Как сделать» (D62): шаги «действие → инструмент → минуты», «готово, когда», «куда записать» — arvix/guide.py
+    guide: dict[str, Any] | None = None
 
     @property
     def is_open(self) -> bool:
@@ -94,26 +99,9 @@ class State:
     recovery_until: str | None = None  # «Вернуться к плану» после 🟥: до этого момента режим не выше 🟨 (D38)
     expenses: list[dict[str, Any]] = field(default_factory=list)
     learning: list[dict[str, Any]] = field(default_factory=list)
-    lessons: list[dict[str, Any]] = field(default_factory=list)  # учебные блоки: тема, задача, оценка проверки
     safety: list[dict[str, Any]] = field(default_factory=list)
     notes: dict[str, str] = field(default_factory=dict)  # заметки Arvix: путь → хэш последней записи
     budget: dict[str, Any] = field(default_factory=dict)
-    # Проекты (D43, arvix/projects.py): карточки, этапы, журнал, деньги, каналы привлечения.
-    projects: dict[str, dict[str, Any]] = field(default_factory=dict)
-    milestones: dict[str, dict[str, Any]] = field(default_factory=dict)
-    project_log: list[dict[str, Any]] = field(default_factory=list)
-    project_money: list[dict[str, Any]] = field(default_factory=list)
-    channels: dict[str, dict[str, Any]] = field(default_factory=dict)
-    resources: dict[str, dict[str, Any]] = field(default_factory=dict)  # источники и инструменты проектов (D44)
-    learn_items: dict[str, dict[str, Any]] = field(default_factory=dict)  # «учиться»: очередь тем для проектов и вкладки «Обучение» (D47)
-    # Учебные сессии (D55, D60): задача → {"panels": [окно…] по порядку, "answers": {id окна → ответ на тест},
-    # "stage": этап, "fixes": {"окно:вопрос" → работа над ошибкой}}
-    study: dict[str, dict[str, Any]] = field(default_factory=dict)
-    # Повторения тем (D60, arvix/review.py): id → тема, шаг интервала, дата следующего повторения; последний тест повторения
-    reviews: dict[str, dict[str, Any]] = field(default_factory=dict)
-    review_quiz: dict[str, Any] | None = None
-    repos: dict[str, dict[str, Any]] = field(default_factory=dict)  # проект → последнее, что видели в GitHub
-    commits: dict[str, dict[str, Any]] = field(default_factory=dict)  # sha → коммит проекта: движение без слов
     # Как в мессенджере (D52): реакция человека на сообщение (id события → эмодзи) и до какого сообщения он прочитал
     reactions: dict[int, dict[str, Any]] = field(default_factory=dict)
     read_upto: int = 0
@@ -202,8 +190,11 @@ class State:
             proof=p["proof"],
             source=p.get("source") or ev.source,
             tags=tuple(p.get("tags") or ()),
-            project=p.get("project"),
         )
+
+    def _on_task_guide(self, ev: Event, p: dict, day: Day) -> None:
+        if task := self._task(p):
+            task.guide = {k: p.get(k) for k in ("steps", "done", "save", "note", "note_path")} | {"at": ev.at.isoformat()}
 
     def _on_task_started(self, ev: Event, p: dict, day: Day) -> None:
         if task := self._task(p):
@@ -320,20 +311,6 @@ class State:
     def _on_learning_question(self, ev: Event, p: dict, day: Day) -> None:
         self.learning.append({**p, "date": ev.local_date.isoformat()})
 
-    def _on_lesson_started(self, ev: Event, p: dict, day: Day) -> None:
-        self.lessons.append({"task_id": p.get("task_id"), "topic": p.get("topic", ""), "subject": p.get("subject", ""),
-                             "date": ev.local_date.isoformat(), "at": ev.at.isoformat(), "score": None, "gaps": [], "checked": False,
-                             "note": p.get("note"), "roadmap_node": p.get("roadmap_node", ""), "fallback": bool(p.get("fallback")),
-                             "full": p.get("lesson")})
-
-    def _on_lesson_checked(self, ev: Event, p: dict, day: Day) -> None:
-        for lesson in reversed(self.lessons):
-            # «checked», а не score is None: проверка без головы оставляет оценку пустой, и следующая
-            # проверка той же задачи перезаписала бы прошлый урок
-            if lesson["task_id"] == p.get("task_id") and not lesson.get("checked"):
-                lesson.update(score=p.get("score_pct"), gaps=list(p.get("gaps") or []), next_step=p.get("next_step", ""), checked=True)
-                break
-
     def _on_safety_flag(self, ev: Event, p: dict, day: Day) -> None:
         if p.get("level") not in rules.SAFETY_ALARM_LEVELS:
             return  # старые флаги «info» до разделения уровней — не беда
@@ -359,96 +336,6 @@ class State:
 
     def _on_budget_set(self, ev: Event, p: dict, day: Day) -> None:
         self.budget = {**p, "since": ev.local_date.isoformat()}
-
-    def _on_project_set(self, ev: Event, p: dict, day: Day) -> None:
-        old = self.projects.get(p["id"], {})
-        # started в событии — дата из карточки при восстановлении из хранилища (D54); иначе — день события.
-        project = {**p, "started": old.get("started") or p.get("started") or ev.local_date.isoformat(), "updated": ev.local_date.isoformat()}
-        if p.get("status") != old.get("status") and p.get("status") in ("done", "dropped"):
-            project["closed"] = ev.local_date.isoformat()
-        elif p.get("status") not in ("done", "dropped"):
-            project.pop("closed", None)
-        if old.get("status") == "idea" and p.get("status") == "active":
-            project["started"] = ev.local_date.isoformat()  # идея начинается, когда её берут в работу
-        self.projects[p["id"]] = project
-
-    def _on_milestone_set(self, ev: Event, p: dict, day: Day) -> None:
-        old = self.milestones.get(p["id"], {})
-        item = {**p, "done_date": old.get("done_date")}
-        if p.get("status") == "done" and old.get("status") != "done":
-            item["done_date"] = ev.local_date.isoformat()
-        elif p.get("status") != "done":
-            item["done_date"] = None
-        self.milestones[p["id"]] = item
-
-    def _on_project_logged(self, ev: Event, p: dict, day: Day) -> None:
-        self.project_log.append({**p, "date": ev.local_date.isoformat(), "event_id": ev.id})
-
-    def _on_project_money(self, ev: Event, p: dict, day: Day) -> None:
-        self.project_money.append({**p, "date": ev.local_date.isoformat(), "event_id": ev.id})
-
-    def _on_channel_set(self, ev: Event, p: dict, day: Day) -> None:
-        self.channels[p["id"]] = {**p, "updated": ev.local_date.isoformat()}
-
-    def _on_learn_item_set(self, ev: Event, p: dict, day: Day) -> None:
-        old = self.learn_items.get(p["id"], {})
-        self.learn_items[p["id"]] = {**p, "date": old.get("date") or ev.local_date.isoformat(), "updated": ev.local_date.isoformat()}
-
-    def _session(self, task_id: str) -> dict[str, Any]:
-        return self.study.setdefault(task_id, {"panels": [], "answers": {}, "fixes": {}})
-
-    def _on_study_panel(self, ev: Event, p: dict, day: Day) -> None:
-        session = self._session(p["task_id"])
-        panel = {**p["panel"], "at": ev.at.isoformat()}
-        panels = session["panels"]
-        idx = next((i for i, x in enumerate(panels) if x["id"] == panel["id"]), None)
-        if idx is None:
-            panels.append(panel)
-        else:  # тот же id — замена окна (или скрытие): старый ответ на тест к новому тесту не относится
-            if panels[idx].get("questions") != panel.get("questions"):
-                session["answers"].pop(panel["id"], None)
-                session["fixes"] = {k: v for k, v in session["fixes"].items() if not k.startswith(panel["id"] + ":")}
-            panels[idx] = panel
-
-    def _on_study_answer(self, ev: Event, p: dict, day: Day) -> None:
-        session = self._session(p["task_id"])
-        session["answers"][p["panel_id"]] = {k: p.get(k) for k in ("answers", "results", "score_pct", "scores")} | {"at": ev.at.isoformat()}
-
-    def _on_study_stage(self, ev: Event, p: dict, day: Day) -> None:
-        self._session(p["task_id"])["stage"] = p.get("stage")
-
-    def _on_study_fix(self, ev: Event, p: dict, day: Day) -> None:
-        fixes = self._session(p["task_id"])["fixes"]
-        fixes[p["key"]] = {**fixes.get(p["key"], {}), **{k: v for k, v in p.items() if k not in ("task_id", "key")}}
-
-    def _on_study_shadow(self, ev: Event, p: dict, day: Day) -> None:
-        shadows = self._session(p["task_id"]).setdefault("shadow", {})
-        key = f"{p['panel_id']}:{p['i']}"
-        shadows[key] = {"heard": p.get("heard", ""), "pct": p.get("pct"), "n": int((shadows.get(key) or {}).get("n", 0)) + 1,
-                        "best": max(int(p.get("pct") or 0), int((shadows.get(key) or {}).get("best") or 0))}
-
-    def _on_study_mine(self, ev: Event, p: dict, day: Day) -> None:
-        self._session(p["task_id"]).setdefault("mined", []).append({k: v for k, v in p.items() if k != "task_id"} | {"at": ev.at.isoformat()})
-
-    def _on_review_set(self, ev: Event, p: dict, day: Day) -> None:
-        old = self.reviews.get(p["id"], {})
-        self.reviews[p["id"]] = {**p, "created": old.get("created") or ev.local_date.isoformat()}
-
-    def _on_review_quiz(self, ev: Event, p: dict, day: Day) -> None:
-        self.review_quiz = {**p, "date": ev.local_date.isoformat(), "answer": None}
-
-    def _on_review_answer(self, ev: Event, p: dict, day: Day) -> None:
-        if self.review_quiz and self.review_quiz.get("id") == p.get("quiz_id"):
-            self.review_quiz["answer"] = {k: p.get(k) for k in ("answers", "results", "by_review")}
-
-    def _on_resource_set(self, ev: Event, p: dict, day: Day) -> None:
-        self.resources[p["id"]] = {**p, "date": self.resources.get(p["id"], {}).get("date") or ev.local_date.isoformat()}
-
-    def _on_repo_activity(self, ev: Event, p: dict, day: Day) -> None:
-        # Коммиты — факт из GitHub: дата — день самого коммита (по местному времени), а не синхронизации.
-        self.repos[p["project_id"]] = {**(p.get("meta") or {}), "repo": p.get("repo"), "synced": ev.at.isoformat()}
-        for c in p.get("commits") or []:
-            self.commits.setdefault(c["sha"], {**c, "project_id": p["project_id"], "repo": p.get("repo")})
 
     def _on_day_closed(self, ev: Event, p: dict, day: Day) -> None:
         self.day(date.fromisoformat(p["date"])).closed = dict(p)

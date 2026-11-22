@@ -45,8 +45,8 @@
       "url": "/?tab=notes"
     },
     {
-      "name": "Проекты",
-      "url": "/?tab=projects"
+      "name": "Сегодня",
+      "url": "/?tab=today"
     }
   ],
   "share_target": {

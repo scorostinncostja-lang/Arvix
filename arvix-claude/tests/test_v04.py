@@ -82,14 +82,21 @@ class NoCommandsTest(BotCase):
         self.assertIn("📅 Распорядок недели", self.api.last)
         self.assertEqual(self.api.sent[-1][1], [[("✅ Сохранить", "s:save"), ("✏️ Поправить", "s:edit")]])
 
-    def test_wish_to_study_offers_block_with_length_before_plan(self) -> None:
-        self.brain.answers.append({"reply": "Давай.", "actions": [{"type": "start_lesson", "topic": "Физика", "minutes": 45}]})
+    def test_wish_to_study_becomes_block_steps_and_timer_in_one_answer(self) -> None:
+        """D62: «давай позанимаемся» — не урок в приложении, а блок, шаги в его инструментах и таймер одним ответом."""
+        self.brain.answers.append({"reply": "Начинаем.", "actions": [
+            {"type": "add_task", "title": "Физика", "sphere": "learning", "start": "10:00", "duration_min": 45},
+            {"type": "task_guide", "steps": [{"do": "§44 — правило и пример", "tool": "Учебник", "min": 15},
+                                             {"do": "каталог → №8: 5 задач", "tool": "Решу ОГЭ", "min": 30}],
+             "done": "4 из 5 верно"},
+            {"type": "start_focus", "task": "Физика", "minutes": 45}]})
         self.text("давай позанимаемся физикой 45 минут")
         task = next(t for t in self.core.state.tasks.values() if t.title == "Физика")
         self.assertEqual((task.sphere, task.duration_min), ("learning", 45))
-        self.assertIn("45 мин", self.api.last)
-        self.assertEqual(self.api.sent[-1][1][0][0], ("📚 План урока", f"l:{task.id}:plan"))
-        self.assertEqual(len(self.brain.calls), 1)  # план урока — только по кнопке
+        self.assertEqual([s["tool"] for s in task.guide["steps"]], ["Учебник", "Решу ОГЭ"])  # шаги — к блоку этого ответа
+        self.assertEqual(self.core.store.kv_get("focus")["task_id"], task.id)
+        self.assertTrue(any("🧭 шаги к «Физика»: 2" in t for t in self.api.texts))  # квитанция, следом — строка таймера
+        self.assertEqual(len(self.brain.calls), 1)  # один вызов головы — ни плана урока, ни проверки
 
     def test_timer_in_words_starts_focus(self) -> None:
         self.brain.answers.append({"reply": "Засёк.", "actions": [{"type": "start_focus", "minutes": 30}]})
