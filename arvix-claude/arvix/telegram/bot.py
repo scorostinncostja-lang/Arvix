@@ -21,9 +21,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
-from arvix import interview, load, rules, safety, weather
-from arvix import lesson as lesson_mod
-from arvix import study
+from arvix import guide, interview, load, rules, safety, tools, weather
 from arvix.memory import Memory, export_transcripts
 from arvix.brain import (
     DEBRIEF_SCHEMA,
@@ -54,7 +52,6 @@ AWAIT = "tg_await"
 LAST_TEXT = "tg_last_text"
 PANEL = "tg_panel"
 FOCUS = "focus"
-LESSON = "lesson"
 HISTORY = 14
 DIALOG_DAY = "dialog_day"
 TYPING_EVERY = 4.0  # «печатает…» в Telegram гаснет через 5 с — обновляем чуть чаще
@@ -193,8 +190,6 @@ class Bot:
         self.owner = int(owner_id)
         self.stt = stt if stt is not None else STT(core.cfg)
         self.tts = tts if tts is not None else TTS(core.cfg)
-        self.project: str | None = None  # чат проекта в приложении (D47): своя нить, блок проекта в запросе
-        self.study: str | None = None  # чат учебной сессии (D56): своя нить — разбор дня и «ложись» в неё не попадают
         self.sleep = sleep or time.sleep
         self.voice_notes_per_day = int(core.cfg.section("tts").get("voice_notes_per_day", 3) or 0)
         self.channel = "telegram"  # приложение (arvix/web) создаёт свой Bot с channel="web"
@@ -214,8 +209,7 @@ class Bot:
              keyboard: list[list[str]] | None = None) -> int | None:
         target, tg_reply = self.quote_target()
         message_id = self.api.send(self.owner, text, buttons, keyboard=keyboard, reply_to=tg_reply)
-        self.core.message_out(text, key=key, channel=self.channel, buttons=buttons, project=self.project, study=self.study,
-                              reply_to=target, tg_id=self.tg_id(message_id))
+        self.core.message_out(text, key=key, channel=self.channel, buttons=buttons, reply_to=target, tg_id=self.tg_id(message_id))
         return message_id
 
     def tg_id(self, message_id: Any) -> int | None:
@@ -277,8 +271,7 @@ class Bot:
                 return True
         except Exception:  # noqa: BLE001 — очередь не должна ронять ответ
             pass
-        return any(e.kind in Core.MESSAGE_KINDS and e.payload.get("project") == self.project
-                   and e.payload.get("study") == self.study for e in self.core.store.read(int(event_id)))
+        return any(e.kind in Core.MESSAGE_KINDS and not Core.side_thread(e) for e in self.core.store.read(int(event_id)))
 
     def reply_block(self) -> str:
         """Человек ответил цитатой — голова получает, на что именно, фактом из журнала."""
@@ -332,8 +325,7 @@ class Bot:
         saved = self.answering
         self.answering = {"event": target.id, "force": target.id, "replied": False, "target": None}
         try:
-            with self.in_project(target.payload.get("project")), self.in_study(target.payload.get("study")):  # из нити — ответ туда же
-                self.converse(f"{emoji} (реакция на твоё сообщение: непонятно)", extra=extra)
+            self.converse(f"{emoji} (реакция на твоё сообщение: непонятно)", extra=extra)
         finally:
             self.answering = saved
 
@@ -352,8 +344,7 @@ class Bot:
         seen_upto = max(st.read_upto, last_in.id if last_in else 0)
         if st.read_at:
             lines.append(f"Прочитал ленту в приложении до #{st.read_upto} ({datetime.fromisoformat(st.read_at).astimezone(core.tz):%d.%m %H:%M}).")
-        unread = [e for e in core.store.read(seen_upto) if e.kind == "message_out"
-                  and not e.payload.get("project") and not e.payload.get("study")]
+        unread = [e for e in core.store.read(seen_upto) if e.kind == "message_out" and not Core.side_thread(e)]
         if unread and st.read_at:
             lines.append(f"Не видел в приложении твоих сообщений: {len(unread)} (с {unread[0].at.astimezone(core.tz):%H:%M}); "
                          "в Telegram прочтение не видно — там он мог их видеть.")
@@ -378,26 +369,6 @@ class Bot:
         return at is not None and float(at) < float(ts) - 5
 
     @contextmanager
-    def in_project(self, project_id: str | None) -> Any:
-        """Разговор внутри проекта (D47): сообщения помечены проектом, история — его нить."""
-        saved = self.project
-        self.project = project_id
-        try:
-            yield
-        finally:
-            self.project = saved
-
-    @contextmanager
-    def in_study(self, task_id: str | None) -> Any:
-        """Разговор внутри учебной сессии (D56): сообщения помечены задачей урока, история — нить сессии."""
-        saved = self.study
-        self.study = task_id
-        try:
-            yield
-        finally:
-            self.study = saved
-
-    @contextmanager
     def via(self, channel: str, api: Any) -> Any:
         """Обработать сообщение из приложения тем же кодом, что и из Telegram: ответы идут
         в журнал (приложение их видит), а не в чат. Пауз «печатает…» в приложении нет."""
@@ -418,8 +389,7 @@ class Bot:
     def log_in(self, text: str) -> None:
         inc, self._incoming = self._incoming, None  # одно входящее — одно событие
         target = self.quoted_event(inc) if inc else None
-        event_id = self.core.message_in(text, channel=self.channel, project=self.project, study=self.study,
-                                        reply_to=target.id if target is not None else None,
+        event_id = self.core.message_in(text, channel=self.channel, reply_to=target.id if target is not None else None,
                                         tg_id=(inc or {}).get("tg_id") if self.channel == "telegram" else None)
         self.core.store.kv_set("last_in_at", self.core.now().timestamp())
         if inc is not None:
@@ -436,7 +406,7 @@ class Bot:
         body = "\n\n".join(parts) or "…"
         target, tg_reply = self.quote_target(reply_to)
         message_id = self.api.send(self.owner, fmt.strip_markup(body), keyboard=keyboard, html=fmt.to_html(body), reply_to=tg_reply)
-        self.core.message_out(body, channel=self.channel, key=key, project=self.project, study=self.study, reply_to=target, tg_id=self.tg_id(message_id))
+        self.core.message_out(body, channel=self.channel, key=key, reply_to=target, tg_id=self.tg_id(message_id))
         if note := voice_note_check(voice_note, text):
             self.send_voice_note(note)
 
@@ -456,7 +426,7 @@ class Bot:
             log.info("голосовое не отправлено: %s", exc)
             return
         self.core.store.kv_set("voice_notes", {"day": today, "n": sent + 1})
-        self.core.message_out("🔊 " + note, channel=self.channel, project=self.project, study=self.study, tg_id=self.tg_id(message_id))
+        self.core.message_out("🔊 " + note, channel=self.channel, tg_id=self.tg_id(message_id))
 
     def await_set(self, kind: str, **data: Any) -> None:
         # asked_at: сообщение, отправленное раньше вопроса (очередь после обрыва сети),
@@ -612,10 +582,6 @@ class Bot:
                     self.quick_add(fields)
                 else:  # без времени — пусть голова подберёт окно по контексту
                     self.converse(f"Добавь задачу: {text}")
-            elif kind == "lesson_check":
-                # Из окна сессии — точно ответ; из общего чата или Telegram — голова сперва скажет, ответ ли это
-                if not self.grade_lesson(text, sure=bool(self.study) and self.study == waiting.get("task")):
-                    return False
             elif kind == "focus_note":
                 if text.rstrip().endswith("?") or len(text) > 500:
                     self.await_clear()
@@ -683,13 +649,7 @@ class Bot:
         try:
             if data is None:
                 data = self.api.download(media["file_id"])
-            folder = None
-            if self.project and self.project in self.core.state.projects:
-                from arvix import projects
-
-                folder = projects.folder(self.core, self.core.state.projects[self.project]) + "/Файлы"
-            info = self.core.receive_file(data, name, media.get("mime_type") or "", stt=self.stt, caption=caption,
-                                          source=self.channel, folder=folder)
+            info = self.core.receive_file(data, name, media.get("mime_type") or "", stt=self.stt, caption=caption, source=self.channel)
         except (TelegramError, ArvixError, KeyError) as exc:
             self.send(f"Файл не принял: {exc}")
             return
@@ -791,14 +751,11 @@ class Bot:
                 self.on_focus_button(rest)
             elif kind == "p":
                 self.on_panel_button(rest)
-            elif kind == "l":
-                task_id, _, op = rest.partition(":")
-                self.on_lesson_button(task_id, op)
             elif kind == "r":
                 self.on_return_button(rest)
-            elif kind == "j":
-                project_id, _, op = rest.partition(":")
-                self.on_project_button(project_id, op)
+            elif kind in ("l", "j"):  # кнопки урока и проекта из сообщений до D62
+                self.send("Это кнопка из прежней версии: уроков и проектов в Arvix больше нет — скажи словами, что нужно, "
+                          "и я дам шаги в твоих инструментах.")
             elif kind == "z":
                 self.on_sleep_button(rest)
         except ArvixError as exc:
@@ -808,19 +765,16 @@ class Bot:
         core = self.core
         task = core.resolve_task(task_id)
         if op == "start":
-            if self.is_lesson_task(task):
-                self.begin_lesson(task)
+            core.start_task(task.id, source="telegram")
+            task = core.state.tasks[task.id]
+            if task.guide:  # шаги уже есть — старт вместе с ними: что делать первым
+                self.send_rich(guide.render(task.guide, task, lead=tpl.reminder_start(task)))
             else:
-                core.start_task(task.id, source="telegram")
                 self.send(tpl.reminder_start(task))
         elif op in ("d15", "d30"):
             moved = core.defer_task(task.id, int(op[1:]), source="telegram")
             self.send(f"⏳ «{moved.title}» → {moved.start}")
-        elif op == "yes" and self.lesson_pending(task.id) and (core.store.kv_get(LESSON) or {}).get("check"):
-            self.send_lesson_check()  # отчёт по учебному блоку — ответы на вопросы, а не «что сделано»
         elif op == "yes":
-            if self.lesson_pending(task.id):
-                core.store.kv_del(LESSON)  # план без вопросов (голова молчала): «Да» — обычный отчёт, не второй «Сделано?»
             if task.proof == "confirm":
                 result = core.complete_task(task.id, source="telegram")
                 self.send(tpl.completed(task.title, result["debt_closed"]) + tpl.warn(result["warnings"]))
@@ -927,6 +881,9 @@ class Bot:
         if not core.cfg.vault:
             return
         today = core.today()
+        if getattr(self, "_tools_day", None) != today:  # список инструментов (D62) — в хранилище, если его нет; раз в день
+            tools.ensure(core)
+            self._tools_day = today
         done = sorted(t.id for t in core.state.tasks_on(today) if t.status == "done")
         mark = f"{today.isoformat()}:{','.join(done)}"
         if mark == getattr(self, "_daily_ticked", None):
@@ -1015,21 +972,15 @@ class Bot:
         self._edit_focus(state, final_minutes=active)
         if active >= tpl.FOCUS_MIN_LOGGED:
             self.core.log_focus(active, task_ref=task.id, source="telegram")
-        if self.lesson_pending(task.id):
-            self.core.store.kv_del(LESSON)
 
     def offer_focus(self) -> None:
         """🎯 без слов: не запускать сразу, а спросить длительность (случайное нажатие ничего не стоит)."""
         if self.core.store.kv_get(FOCUS):
             self.send_focus_state()
             return
-        target = self.focus_target()
-        if target is not None and self.is_lesson_task(target):
-            self.begin_lesson(target)  # учебная задача: у урока свой план и длительность (D22)
-            return
         self.send("🎯 Фокус — в приложении: «Сегодня» → Фокус. Или словами: «фокус 45 минут физика».")
 
-    def start_focus(self, minutes: int, task_ref: Any = None, *, lesson: bool = False, topic: str | None = None) -> None:
+    def start_focus(self, minutes: int, task_ref: Any = None, *, topic: str | None = None) -> None:
         self.release_stale_focus()
         if self.core.store.kv_get(FOCUS):
             self.send_focus_state()
@@ -1043,9 +994,6 @@ class Bot:
                 topic = topic or str(task_ref)  # «фокус 45 физика» без такой задачи — это тема, а не ошибка
         elif not topic:
             task = self.focus_target()
-        if task is not None and not lesson and self.is_lesson_task(task):
-            self.begin_lesson(task)  # учебный блок: план, источники, вопросы, и уже потом таймер
-            return
         if task is not None and task.status == "planned":
             self.core.start_task(task.id, source="telegram")
         now = self.core.now()
@@ -1168,322 +1116,50 @@ class Bot:
         self.core.store.kv_del(FOCUS)
         minutes = int(state["minutes"])
         self._edit_focus(state, final_minutes=minutes)
-        if state.get("task_id") and self.lesson_pending(state["task_id"]):
-            # Учебный блок: таймер засчитан целиком, вместо «без прерываний?» — вопросы проверки
-            self.core.log_focus(minutes, task_ref=state["task_id"], source="telegram")
-            self.send_lesson_check(key=f"focus:{state['until']}")
-            self.refresh_panel()
-            return
         # Таймер дошёл до конца — сессия записана целиком, без «Без прерываний?» (D50): прервался — жми паузу.
         # Заметку «что успел» человек добавит в приложении, у сессии в «Сегодня».
         task_id = state.get("task_id") if state.get("task_id") in self.core.state.tasks else None
         self.core.log_focus(minutes, task_ref=task_id, topic=state.get("topic"), source="l0")
         self.refresh_panel()
 
-    # --- учебный блок (06-LEARNING §8) ----------------------------------------------------
+    # --- «Как сделать» (D62): шаги в инструментах человека ------------------------------------
 
-    def is_lesson_task(self, task: Any) -> bool:
-        return task.sphere == "learning" and bool(self.core.cfg.section("learning").get("auto_lesson", True))
+    def guide_auto(self, task: Any) -> bool:
+        """Шаги в начале блока сами — у учебных и глубоких задач ([guide] auto); у остальных — по просьбе."""
+        return bool(self.core.cfg.section("guide").get("auto", True)) and (task.sphere == "learning" or task.deep_work)
 
-    def lesson_running(self, task_id: str) -> bool:
-        """Урок по задаче идёт на таймере: проверку пришлёт конец таймера, а не планировщик."""
-        focus = self.core.store.kv_get(FOCUS) or {}
-        return focus.get("task_id") == task_id
-
-    def lesson_pending(self, task_id: str) -> bool:
-        """Урок по задаче подготовлен и ещё не проверен."""
-        state = self.core.store.kv_get(LESSON) or {}
-        return state.get("task_id") == task_id
-
-    def prepare_lesson(self, task: Any, *, key: str | None = None) -> dict[str, Any]:
-        """Один вызов головы: роадмап, журнал ошибок и метод человека → этапы сессии (D60): задачи
-        диагностики и практики с ответами и похожими, разбор по подтемам, запрос видео, план по минутам,
-        вопросы проверки. Голова молчит — запасной план кодом по тем же этапам, проверка — «Сделано?»."""
+    def prepare_guide(self, task: Any, *, source: str = "l1") -> Any:
+        """Один вызов головы: что сделать и чем — по его инструментам, роадмапу и журналу ошибок → событие task_guide.
+        Голова молчит — ArvixError: шагов из воздуха код не придумывает, «Блок пошёл» работает и без них."""
         core = self.core
-        prior = next((x for x in reversed(core.state.lessons) if x.get("task_id") == task.id), None)
-        if prior and not prior.get("checked") and prior.get("full"):
-            return self.resume_lesson(task, prior, key=key)  # сессию сменила другая — возвращаем её как была
-        section = core.cfg.section("learning")
-        questions = int(section.get("check_questions") or lesson_mod.DEFAULT_QUESTIONS)
-        subject = lesson_mod.subject_of(task.title)
-        paths = core.cfg.vault_paths
-        methods = paths.get("notes") or "03_Resources/Обучение"
-        tools = section.get("tools") or []
-        gaps = [g for x in core.state.lessons if x.get("subject", "").lower() == subject.lower() for g in x.get("gaps") or []][-6:]
-        rules_text = lesson_mod.LESSON_RULES.format(
-            minutes=task.duration_min, title=task.title, sphere=task.sphere, date=core.today().isoformat(),
-            roadmaps=paths.get("roadmaps") or "03_Resources/Роадмапы", methods=methods,
-            history="; ".join(core.lesson_history(subject)) or "нет",
-            gaps=("\nПрошлые пробелы по предмету (дай на них задачи в диагностике): " + "; ".join(gaps)) if gaps else "",
-            tools=(": " + ", ".join(str(t) for t in tools)) if tools else "", questions=questions,
-            hint=("\n" + hint) if (hint := study.lesson_hint(core, task)
-                                    or (f"Этот блок уже начат: тема «{prior['topic']}» — её и держи, сессия продолжается."
-                                        if prior and not prior.get("checked") and prior.get("topic") else "")) else "",
-            panels=study.PANEL_RULES, language=lesson_mod.language_rules(lang := self.lesson_language(task)),
-        )
+        rules_text = guide.RULES.format(
+            title=task.title, minutes=task.duration_min, sphere=task.sphere, date=core.today().isoformat(),
+            methods=core.cfg.vault_paths.get("notes") or "03_Resources/Обучение", path=tools.path(core), tools=tools.table(core))
         system = "\n\n".join([
             constitution(core.state.profile, gentle=True, sections=("identity", "mission", "autonomy_rule", "honesty")),
             rules_text, "<context>\n" + build_context(core) + "\n</context>",
         ])
         with self.typing_kept():
-            result = self.brain.ask(system=system, prompt=f"Подготовь учебную сессию: {task.title}, {task.duration_min} минут.",
-                                    schema=lesson_mod.LESSON_SCHEMA, role="voice", vault_tools=True,
-                                    timeout=int(section.get("prepare_timeout_sec") or 300))
-        if not result or not result.get("plan"):
-            item = study.learn_item_of(core, task)
-            result = {"topic": item["topic"] if item else task.title, "why": (item or {}).get("why", ""), "roadmap_node": "",
-                      "plan": lesson_mod.fallback_plan(task.duration_min), "sources": list((item or {}).get("sources") or []),
-                      "check": [], "fallback": True}
-        result["check"] = [c for c in result.get("check") or [] if c.get("q") and c.get("a")][:questions]
-        stages = study.stage_plan(result["plan"], task.duration_min)  # шаги без этапа (старый ответ) — по порядку
-        note_path = core.concept_skeleton(result.get("note_title") or result["topic"], subject,
-                                          [c["q"] for c in result["check"]], list(result.get("sources") or []))
-        core.lesson_started(task.id, result, note_path=note_path)
-        result["windows"] = self.stage_panels(task, result)
-        lesson = {"task_id": task.id, "topic": result["topic"], "plan": result["plan"], "stages": stages, "check": result["check"],
-                  "note": note_path, "sources": result.get("sources") or [], "started": None}
-        core.store.kv_set(LESSON, lesson)
-        if self.channel == "web" and self.study == task.id:  # открыл в приложении: этапы уже на столе — в нить коротко
-            have = lesson_mod.windows_line(result["windows"])
-            text = (f"Сессия готова: {result['topic']}." + (f"\nНа столе: {have}." if have else "")
-                    + "\nНачни с этапа 1 — диагностики: задачи на столе, ответы проверяются сразу. Застрял — пиши сюда или пришли фото решения.")
-        else:
-            text = lesson_mod.render(result, task, note_path)
-        if result.get("fallback"):
-            text += "\n\nГолова недоступна — план общий, тема по названию задачи." + (" " + self.brain_down_hint() if self.brain_down_hint() else "")
-        buttons = [[(f"▶️ Начать · {task.duration_min} мин", f"l:{task.id}:go")]] if task.status == "planned" else None
-        self.send(text, buttons, key=key)
-        return lesson
-
-    def study_media(self, task: Any, data: bytes, name: str, mime: str) -> None:
-        """Свой ролик или аудио в сессии языка (D61): в хранилище; субтитры — распознаванием с отметками времени
-        на языке урока; окно плеера на разборе и диктант на практике. Голова не нужна."""
-        from arvix import files
-
-        core = self.core
-        self.log_in(f"📎 {files.safe_name(name)}")
-        try:
-            info = core.receive_file(data, name, mime, stt=None, source=self.channel)
-        except ArvixError as exc:
-            self.send(f"Файл не принял: {exc}")
-            return
-        lang = self.lesson_language(task) or "en"
-        panel = study.add_panel(core, {"type": "video", "stage": "learn", "title": info["name"], "media": info["path"], "lang": lang},
-                                task_ref=task.id, by="me", source=self.channel)
-        audio = data if info["kind"] == "audio" else files.audio_track(core.vault.resolve(info["path"]))
-        hint = "Субтитры можно вставить текстом под плеером (SRT, VTT)."
-        if not audio:
-            self.send(f"Ролик на столе, но звук из него не достался (нет ffmpeg или звука). {hint}")
-            return
-        if not self.stt.enabled:
-            self.send(f"Ролик на столе. Субтитры сам не сделал: распознавание речи не настроено. {hint}")
-            return
-        try:
-            segments = self.stt.transcribe_segments(audio, filename="audio.m4a" if info["kind"] == "video" else info["name"], language=lang)
-            video = study.add_transcript(core, panel["id"], segments=segments, task_ref=task.id, source=self.channel)
-        except (STTError, ArvixError) as exc:
-            self.send(f"Ролик на столе, но субтитры не вышли: {exc}. {hint}")
-            return
-        self.send(f"Ролик на столе: «{info['name']}», субтитры — {len(video['transcript'])} строк. Диктант — на этапе «Практика». "
-                  "Нажми на слово в субтитрах: толкование, произношение и «в предложения».")
-
-    def lesson_language(self, task: Any) -> str | None:
-        """Иностранный язык урока (D61) — по названию блока, теме очереди или предмету; иначе None."""
-        from arvix import media
-
-        item = study.learn_item_of(self.core, task)
-        return media.language_of(task.title, (item or {}).get("topic", ""), lesson_mod.subject_of(task.title))
-
-    def resume_lesson(self, task: Any, prior: dict[str, Any], *, key: str | None = None) -> dict[str, Any]:
-        """Урок этого блока уже готовили, потом открыли другой — вернуть его из журнала: план, вопросы проверки
-        с эталонами, заметку. Окна и ответы и так в журнале. Голова не нужна."""
-        full = prior["full"]
-        lesson = {"task_id": task.id, "topic": full.get("topic") or task.title, "plan": full.get("plan") or [],
-                  "stages": study.stage_plan(full.get("plan") or [], task.duration_min), "check": full.get("check") or [],
-                  "note": prior.get("note"), "sources": full.get("sources") or [], "started": None}
-        self.core.store.kv_set(LESSON, lesson)
-        windows = [p for p in study.visible(study.session_of(self.core, task.id)) if p.get("by") == "arvix"]
-        if self.channel == "web" and self.study == task.id:
-            text = f"Сессия на месте: {lesson['topic']}. Продолжай с того этапа, где остановился."
-        else:
-            text = lesson_mod.render({**full, "windows": windows}, task, prior.get("note"))
-        buttons = [[(f"▶️ Начать · {task.duration_min} мин", f"l:{task.id}:go")]] if task.status == "planned" else None
-        self.send(text, buttons, key=key)
-        return lesson
-
-    def stage_panels(self, task: Any, result: dict[str, Any]) -> list[dict[str, Any]]:
-        """Наполнение этапов окнами (D60). Кривое окно отбрасывается, урок — нет. Видео ищет код
-        (videos.search) и без головы — по теме блока. Возвращает поставленные окна."""
-        core = self.core
-        if existing := [p for p in study.visible(study.session_of(core, task.id)) if p.get("by") == "arvix"]:
-            return existing  # сессию готовят второй раз (урок сменился и вернулся) — её задачи и ответы остаются, без дублей
-        windows: list[dict[str, Any]] = []
-        extra = [p for p in result.get("panels") or [] if isinstance(p, dict)]
-        diagnostic = result.get("diagnostic") or next((p.get("questions") for p in extra if p.get("type") == "quiz"), None)
-        if diagnostic:  # тест в panels вместо diagnostic (старый ответ головы) — тоже диагностика
-            windows.append({"type": "quiz", "stage": "diag", "title": "Диагностика: что уже умеешь", "questions": diagnostic})
-        for skill in (result.get("skills") or [])[:4]:
-            if isinstance(skill, dict) and skill.get("name") and skill.get("explain"):
-                text = str(skill["explain"]) + (f"\n\n*Источник:* {skill['source']}" if skill.get("source") else "")
-                windows.append({"type": "text", "stage": "learn", "title": f"Разбор: {skill['name']}", "skill": skill["name"], "text": text})
-        query = str(result.get("video_query") or result.get("topic") or task.title)
-        lang = self.lesson_language(task)
-        found = []
-        if core.cfg.section("learning").get("video_search", True):
-            from arvix import videos
-
-            found = videos.search(query, limit=4 if lang else 3, lang="en" if lang == "en" else "ru")
-        if found or result.get("video_query"):  # ни роликов, ни запроса от головы — окно-пустышку не ставим
-            video: dict[str, Any] = {"type": "video", "stage": "learn", "title": "Видео-объяснение", "query": query, "results": found,
-                                     "ask": "Что в видео объяснили иначе, чем в разборе? Одной фразой — в заметку."}
-            if lang:  # язык: субтитры в плеере на языке урока, вопрос — на понимание (i+1)
-                video.update(title="Ролик на языке урока", lang=lang,
-                             ask="Сначала без субтитров, потом с ними. Понял меньше половины — попроси в чате ролик проще.")
-            windows.append(video)
-        windows += [{**raw, "stage": raw.get("stage") or "learn"} for raw in extra if raw.get("type") in ("board", "diagram")][:2]
-        if result.get("practice"):
-            windows.append({"type": "quiz", "stage": "practice", "title": "Практика", "questions": result["practice"]})
-        accepted: list[dict[str, Any]] = []
-        for raw in windows:
-            try:
-                accepted.append(study.add_panel(core, raw, task_ref=task.id, by="arvix", source=self.channel))
-            except (ArvixError, TypeError, ValueError) as exc:
-                log.info("окно урока отброшено: %s", exc)
-        return accepted
-
-    def begin_lesson(self, task: Any) -> None:
-        """▶️ у учебной задачи: план (если ещё не было) → задача запущена → таймер на всю длительность."""
-        if not self.lesson_pending(task.id):
-            self.prepare_lesson(task)
-        lesson = self.core.store.kv_get(LESSON) or {}
-        if lesson.get("started"):
-            self.send_focus_state() if self.core.store.kv_get(FOCUS) else self.send("Блок уже идёт. Готов отвечать — ✅ на панели.")
-            return
-        task = self.core.resolve_task(task.id)
-        if task.status == "planned":
-            self.core.start_task(task.id, source="telegram")
-        self.core.store.kv_set(LESSON, {**lesson, "started": self.core.now().isoformat()})
-        self.start_focus(task.duration_min, task.id, lesson=True)
-
-    def on_lesson_button(self, task_id: str, op: str) -> None:
-        task = self.core.resolve_task(task_id)
-        if op == "go":
-            self.begin_lesson(task)
-        elif op == "check" and self.lesson_pending(task.id):
-            self.send_lesson_check()
-        elif op == "plan":
-            if self.lesson_pending(task.id):
-                self.send("План уже есть — выше. ▶️ Начать — там же.")
-            else:
-                self.prepare_lesson(task)
-        elif op == "timer":
-            if task.status == "planned":
-                self.core.start_task(task.id, source=self.channel)
-            self.start_focus(task.duration_min, task.id)
-        elif op == "later":
-            self.send("Хорошо, блок остаётся в плане. Скажешь — начнём.")
-
-    def send_lesson_check(self, *, key: str | None = None, early: bool = False) -> None:
-        lesson = self.core.store.kv_get(LESSON) or {}
-        if not lesson.get("check"):
-            task = self.core.resolve_task(lesson["task_id"])
-            self.core.store.kv_del(LESSON)
-            self.send(tpl.reminder_check(task), tpl.task_buttons_check(task.id), key=key)
-            return
-        self.await_set("lesson_check", task=lesson["task_id"])
-        self.send(lesson_mod.render_check(lesson, early=early), key=key)
-
-    def grade_lesson(self, answers: str, *, sure: bool = True) -> bool:
-        """Второй вызов головы: ответы против эталонов → оценка, пробелы, что дочитать.
-        Задача закрывается кодом: done_pct по оценке, отчёт — ответы человека; тема встаёт в повторения.
-        sure=False — сообщение пришло не из окна проверки: «Доброе утро, проснулся» 21.11 было принято за ответ,
-        оценено в 0 % и закрыло блок. Теперь голова сначала говорит, ответ ли это; нет — False, вопрос остаётся."""
-        from arvix import review
-
-        core = self.core
-        lesson = core.store.kv_get(LESSON) or {}
-        task = core.resolve_task(lesson["task_id"])
-        quiz = study.quiz_summary(core, task.id)
-        system = "\n\n".join([
-            constitution(core.state.profile, gentle=True, sections=("identity", "voice", "honesty")),
-            lesson_mod.CHECK_RULES.format(topic=lesson.get("topic", ""), pairs=lesson_mod.check_pairs(lesson),
-                                          quiz=("\nСессия по этапам — учти в оценке, открытые оцени сам:\n" + quiz) if quiz else "",
-                                          where=lesson_mod.CHECK_SURE if sure else lesson_mod.CHECK_MAYBE),
-        ])
-        try:
-            self.api.typing(self.owner)
-        except TelegramError:
-            pass
-        result = self.brain.ask(system=system, prompt=answers, schema=lesson_mod.CHECK_SCHEMA, role="voice")
-        if not sure and (result is None or result.get("is_answer") is False):
-            return False  # не ответ (или голова молчит и не скажет, ответ ли) — разговор, вопрос проверки ждёт
-        self.await_clear()
-        core.store.kv_del(LESSON)
-        score = None if result is None else rules.clamp(int(result.get("score_pct") or 0), 0, 100)
-        gaps = list((result or {}).get("gaps") or [])
-        core.lesson_checked(task.id, score_pct=score, answers=answers, gaps=gaps, next_step=(result or {}).get("next_step", ""))
-        receipt_lines = []
-        if task.is_open or task.status == "debt":
-            pct = 100 if score is None else max(30, score)
-            done = core.complete_task(task.id, done_pct=pct, report=f"проверка {score}%: {answers}" if score is not None else answers, source="telegram")
-            receipt_lines.append(tpl.completed(task.title) + (f" · проверка {score}%" if score is not None else ""))
-            receipt_lines += [f"⚠️ Проверь: {w}" for w in done["warnings"]]
-        if gaps:
-            receipt_lines.append("В карточки и журнал ошибок: " + "; ".join(gaps[:4]))
-        topic_gaps = list(dict.fromkeys([*study.open_gaps(core, task.id), *gaps]))
-        rev = review.after_lesson(core, task, topic=lesson.get("topic") or task.title, subject=lesson_mod.subject_of(task.title),
-                                  score=score, gaps=topic_gaps, source="telegram")
-        receipt_lines.append(f"🔁 Повторение темы — {tpl.when_day(core, rev['due'])}: 2 задачи в «Обучении»")
-        if lesson.get("note"):
-            receipt_lines.append(f"📝 Заметка своими словами: {lesson['note']}")
-        if result is None:
-            feedback = "Оценить не могу — голова недоступна. Ответы записаны, блок закрыт как сделанный."
-        else:
-            feedback = (result.get("feedback") or "").strip()
-            if result.get("next_step"):
-                feedback += f"\n\nСледующий блок: {result['next_step'].strip()}"
-        self.reply(feedback, "\n".join(receipt_lines))
-        self.refresh_panel()
-        return True
-
-    def prepare_review(self) -> dict[str, Any]:
-        """Повторение тем (D60): один короткий вызов головы — по две задачи с новыми числами на тему, которой пора;
-        голова молчит — задачи из банка сессий. Сегодняшний тест без ответа не пересобирается."""
-        from arvix import review
-
-        core = self.core
-        quiz = review.current(core)
-        if quiz and not quiz.get("answer"):
-            return quiz
-        rows = review.due(core)[:review.PER_QUIZ]
-        if not rows:
-            raise ArvixError("Сегодня повторять нечего — темы вернутся в свой день")
-        system = "\n\n".join([
-            constitution(core.state.profile, gentle=True, sections=("identity", "honesty")),
-            review.REVIEW_RULES.format(topics=review.topics_block(core, rows), per=review.PER_TOPIC),
-        ])
-        result = self.brain.ask(system=system, prompt="Собери повторение.", schema=review.REVIEW_SCHEMA, role="voice")
-        return review.build(core, rows, (result or {}).get("items"), source=self.channel)
-
-    def lesson_context(self) -> str:
-        """Блок <lesson> в промпт L1, пока идёт учебный блок: объяснение у доски вместо подсказки."""
-        lesson = self.core.store.kv_get(LESSON) or {}
-        task = self.core.state.tasks.get(lesson.get("task_id") or "")
-        if task is None:
-            return ""
-        session = study.context_block(self.core, task.id, lesson.get("note"))  # окна, ответы, заметка (D55)
-        if not lesson.get("started"):
-            return session  # план готов, ▶ не нажат: окна уже видны человеку — и Arvix
-        elapsed = int((self.core.now() - datetime.fromisoformat(lesson["started"])).total_seconds() // 60)
-        plan = "; ".join(f"{s.get('from_min')}–{s.get('to_min')} {s.get('step')}" for s in lesson.get("plan") or [])
-        return lesson_mod.LESSON_CONTEXT.format(topic=lesson.get("topic", ""), title=task.title, minutes=task.duration_min,
-                                                elapsed=f"{elapsed} мин", plan=plan) + "\n" + session
+            result = self.brain.ask(system=system, prompt=f"Как сделать: {task.title}, {task.duration_min} минут.",
+                                    schema=guide.SCHEMA, role="voice", vault_tools=True,
+                                    timeout=int(core.cfg.section("guide").get("timeout_sec") or 120))
+        if not result:
+            hint = self.brain_down_hint()
+            raise ArvixError("голова сейчас недоступна — шаги не собрал" + (f". {hint}" if hint else ""))
+        return core.set_guide(task.id, result, source=source)
 
     def on_block_start(self, task: Any, *, key: str) -> bool:
-        """T+0 у учебной задачи: вместо «Блок пошёл» — план урока с кнопкой «Начать». False — обычный путь."""
-        if not self.is_lesson_task(task) or self.lesson_pending(task.id):
-            return False
-        self.prepare_lesson(task, key=key)
+        """T+0: шаги есть — «Блок пошёл» вместе с ними; нет, а блок учебный или глубокий — их готовит голова.
+        Голова молчит — False: обычное «Блок пошёл» (L0 работает и без неё)."""
+        if not task.guide:
+            if not self.guide_auto(task):
+                return False
+            try:
+                task = self.prepare_guide(task)
+            except ArvixError as exc:
+                log.info("шаги к блоку не собраны: %s", exc)
+                return False
+        self.send_rich(guide.render(task.guide, task, lead=tpl.reminder_start(task)), key=key)
         return True
 
     def propose_schedule(self, wishes: str = "") -> None:
@@ -1564,11 +1240,7 @@ class Bot:
 
     def history(self, exclude_last: str = "") -> list[str]:
         start = max(0, self.core.state.last_event_id - 400)
-        events = [e for e in self.core.store.read(start) if e.kind in ("message_in", "message_out")]
-        if self.project:  # в окне проекта — его нить: голова не путает проект с разговором о сне
-            events = [e for e in events if e.payload.get("project") == self.project]
-        elif self.study:  # в учебной сессии — её нить (D56)
-            events = [e for e in events if e.payload.get("study") == self.study]
+        events = [e for e in self.core.store.read(start) if e.kind in ("message_in", "message_out") and not Core.side_thread(e)]
         lines: list[tuple[int, str]] = []
         shown = events[-(HISTORY + 1):]
         ids = {e.id for e in shown}
@@ -1621,7 +1293,7 @@ class Bot:
         поздний вечер — пора прощаться. Модель это не угадывает, а получает фактом."""
         now = self.core.now()
         lines = []
-        if self.first_today and not (self.project or self.study):  # в нити проекта или урока разговор уже идёт
+        if self.first_today:
             part = "Доброе утро" if 5 <= now.hour < 12 else "Добрый вечер" if now.hour >= 18 else "Привет"
             lines.append(f"Первое сообщение человека за сегодня: начни ответ с короткого приветствия первой строкой "
                          f"(«{part}» или «Привет», по-своему, без вопросов «как дела?»), дальше в том же сообщении — ответ.")
@@ -1684,12 +1356,6 @@ class Bot:
         today = core.state.days.get(core.today())
         if silent_days >= 2 and today and today.user_actions <= 2:
             extra += "\n" + tpl.RETURN_HINT.format(days=silent_days)
-        if lesson := self.lesson_context():
-            extra += "\n" + lesson
-        if self.project and core.state.projects.get(self.project):
-            from arvix import projects
-
-            extra += "\n" + projects.chat_block(core, self.project)
         if dialog := self.dialog_block(text):
             extra += "\n" + dialog
         if quoted := self.reply_block():
@@ -1760,8 +1426,6 @@ class Bot:
                     self.propose_schedule(action.get("wishes") or action.get("text") or text)
                 elif kind == "show_schedule":
                     self.cmd_schedule("show")
-                elif kind == "start_lesson":
-                    self.offer_lesson(action, text)
                 elif kind == "start_focus":
                     self.start_focus(int(action.get("minutes") or tpl.FOCUS_DEFAULT_MIN), action.get("task") or action.get("title") or None)
                 elif kind == "stop_focus":
@@ -1791,38 +1455,6 @@ class Bot:
                 self.send(f"Не вышло: {exc}")
             except Exception:  # noqa: BLE001 — сбой действия не должен ронять уже отправленный ответ
                 log.exception("действие %s", kind)
-
-    def offer_lesson(self, action: dict[str, Any], text: str) -> None:
-        """«Давай позанимаемся физикой» → карточка: какой блок, какая задача, сколько длится.
-        Подтверждение — кнопкой: план урока стоит отдельного вызова головы, зря его не тратим."""
-        core = self.core
-        minutes = int(action.get("minutes") or 0) or None
-        topic = (action.get("topic") or action.get("title") or "").strip()
-        task = None
-        if ref := action.get("task"):
-            try:
-                task = core.resolve_task(ref)
-            except ArvixError:
-                task = None
-        if task is None:
-            today = [t for t in core.state.tasks_on(core.today()) if t.is_open and t.sphere == "learning"]
-            if topic:
-                today = [t for t in today if topic.lower()[:5] in t.title.lower()] or today
-            task = next((t for t in today if t.status == "active"), None) or (today[0] if today else None)
-        if task is None:
-            if not topic:
-                self.send("Учебных блоков сегодня нет. Скажи предмет и сколько минут — поставлю блок прямо сейчас.")
-                return
-            task = core.add_task(topic, sphere="learning", importance=3, deep_work=True, start=core.now().strftime("%H:%M"),
-                                 duration_min=minutes or lesson_mod.DEFAULT_MINUTES, source=self.channel)
-        when = f"{task.start}–{end_time(task.start, task.duration_min)}" if task.start else "сейчас"
-        lines = [f"📚 **{task.title}**", f"⏱ {task.duration_min} мин · {when}"]
-        history = core.lesson_history(lesson_mod.subject_of(task.title), 1)
-        if history:
-            lines.append(f"Прошлый урок: {history[-1]}")
-        lines.append("Тему возьму из роадмапа, план — по минутам, в конце 3 вопроса.")
-        self.send_rich("\n".join(lines), [[("📚 План урока", f"l:{task.id}:plan"), ("🎯 Просто таймер", f"l:{task.id}:timer")],
-                                          [("✖️ Не сейчас", f"l:{task.id}:later")]])
 
     def send_rich(self, text: str, buttons: list[list[tuple[str, str]]] | None = None, *, key: str | None = None) -> int | None:
         """Сообщение кода с разметкой (жирный, строки) — как ответ головы."""
@@ -2163,41 +1795,6 @@ class Bot:
             return
         self.send("Вернуть план? Мягко: без разгона, первым — самое короткое дело.", tpl.red_buttons(refresh=False))
 
-    def on_project_button(self, project_id: str, op: str) -> None:
-        """Кнопки напоминания о застое проекта (D43): блок в план или честная пауза — решает человек."""
-        from arvix import projects
-
-        project = projects.resolve(self.core, project_id)
-        if op in ("b30", "t60"):
-            task = projects.plan_block(self.core, project["id"], minutes=int(op[1:]), day="tomorrow" if op[0] == "t" else None,
-                                       source="telegram")
-            when = "завтра " if task.local_date > self.core.today() else ""
-            self.send(f"+ «{task.title}» — {when}{task.start}, {task.duration_min} мин. Напомню за 5 минут.")
-            self.refresh_panel()
-        elif op == "pause":
-            projects.set_project(self.core, project_id=project["id"], status="paused", source="telegram")
-            self.send(f"⏸ «{project['title']}» на паузе. Это решение, а не провал: вернуть — во вкладке «Проекты» или словами.")
-
-    def build_project_roadmap(self, goal_id: str) -> None:
-        """Следующий проект к цели (D44 → D56): совет в фоне — один проект идеей или «проект не нужен»."""
-        from arvix import project_roadmap
-
-        try:
-            result = project_roadmap.generate(self.core, self.brain, goal_id, system=self.analyst_system(""))
-        except ArvixError as exc:
-            self.send(f"Проект к цели не предлагаю: {exc}")
-            return
-        text = f"🗺 Цель «{result['goal']['title']}»"
-        if result["created"]:
-            text += f"\n\nСледующий проект: «{result['created'][0]}».\n{clip(result['summary'], 700)}\nЛежит в «Проектах» идеей — в работу берёшь сам, не нужен — «Не нужен»."
-        elif result["not_project"]:
-            text += f"\n\nПроект здесь не нужен. {clip(result['not_project'], 600)}"
-        else:
-            text += "\n\nНового проекта не добавил: предложенный повторял уже существующий."
-        if result["path"]:
-            text += f"\n📝 {result['path']}"
-        self.send(text)
-
     def on_return_button(self, op: str) -> None:
         core = self.core
         if op == "rest":
@@ -2245,23 +1842,6 @@ class Bot:
     def cmd_reason(self, rest: str) -> None:
         result = self.core.declare_reason(rest, source="telegram")
         self.send(f"Причина записана: «{result['reason']}». Невыполненное важное сегодня в долг не уйдёт, причина — в разбор.")
-
-    def cmd_learn(self, rest: str) -> None:
-        """/learn — урок по ближайшей учебной задаче дня; /learn 30 физика — новый блок на 30 минут прямо сейчас."""
-        words = rest.split()
-        minutes = int(words.pop(0)) if words and words[0].isdigit() else None
-        topic = " ".join(words).strip()
-        today = [t for t in self.core.state.tasks_on(self.core.today()) if t.is_open and t.sphere == "learning"]
-        if topic:
-            today = [t for t in today if topic.lower() in t.title.lower()]
-        task = next((t for t in today if t.status == "active"), None) or (today[0] if today else None)
-        if task is None:
-            if not topic:
-                self.send("Учебных задач на сегодня нет. Скажи «физика 30 минут» — начну блок прямо сейчас.")
-                return
-            task = self.core.add_task(topic, sphere="learning", importance=3, deep_work=True, start=self.core.now().strftime("%H:%M"),
-                                      duration_min=minutes or lesson_mod.DEFAULT_MINUTES, source="telegram")
-        self.begin_lesson(task)
 
     def cmd_focus(self, rest: str) -> None:
         """/focus · /focus 45 · /focus 45 физика · /focus физика · /focus stop"""

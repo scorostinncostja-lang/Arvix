@@ -55,15 +55,17 @@ TOOLS: dict[str, dict[str, Any]] = {
         "inputSchema": _obj({"date": {**STR, "description": "ГГГГ-ММ-ДД, today, tomorrow, yesterday"}}),
     },
     "task": {
-        "description": "Задачи: add (новая), complete (отчёт о выполнении, done_pct для частичного), fail (провал с причиной; importance ≥ 4 уходит в долг), defer (сдвиг на minutes), cancel (с причиной), start, write_off (списать долг с обоснованием). Долг и режим решает код; очков и здоровья нет.",
+        "description": "Задачи: add (новая), complete (отчёт о выполнении, done_pct для частичного), fail (провал с причиной; importance ≥ 4 уходит в долг), defer (сдвиг на minutes), cancel (с причиной), start, write_off (списать долг с обоснованием), guide (шаги «что и чем» к задаче, D62: steps — [{do, tool, min}] инструментами человека из context ИНСТРУМЕНТЫ, done — проверяемый критерий, save — куда записать, note — заметка своими словами). Долг и режим решает код; очков и здоровья нет.",
         "inputSchema": _obj({
-            "action": _enum("add", "complete", "fail", "defer", "cancel", "start", "write_off"),
+            "action": _enum("add", "complete", "fail", "defer", "cancel", "start", "write_off", "guide"),
             "task": {**STR, "description": "id задачи (8 символов) или часть названия"},
             "title": STR, "sphere": _enum(*rules.SPHERES), "importance": {**INT, "minimum": 1, "maximum": 5},
             "difficulty": {**INT, "minimum": 1, "maximum": 5}, "start": {**STR, "description": "ЧЧ:ММ; для defer — новое время блока"},
             "duration_min": INT, "deep_work": BOOL, "date": STR, "tags": {"type": "array", "items": STR},
             "done_pct": {**INT, "minimum": 1, "maximum": 100}, "report": {**STR, "description": "что именно сделано — словами человека"},
             "reason": STR, "minutes": INT,
+            "steps": {"type": "array", "items": _obj({"do": STR, "tool": STR, "min": INT}, ["do", "tool"])},
+            "done": {**STR, "description": "для guide: готово, когда — проверяемо"}, "save": STR, "note": STR,
         }, ["action"]),
     },
     "log": {
@@ -130,28 +132,6 @@ TOOLS: dict[str, dict[str, Any]] = {
         "description": "Режимы: status, sos_on / sos_off (ручной 🟥 на 24 ч), resume (человек сам сказал, что отдохнул и возвращается после 🟥: до утра режим не выше 🟨), silent (тихий день сегодня), safety_flag (признаки настоящей беды, level high|critical — выключает ментора до ручного включения человеком; контакт поддержки или «бывает тяжело» — не сюда, а в profile remember).",
         "inputSchema": _obj({"action": _enum("status", "sos_on", "sos_off", "resume", "silent", "safety_flag"), "note": STR, "level": STR}, ["action"]),
     },
-    "project": {
-        "description": (
-            "Проекты (D43, D44, D47): list (активные с цифрами кода и ⚠️), roadmap (проекты по целям), show (project — всё о проекте: "
-            "этапы, учиться, журнал, заметки папки в Obsidian), set (новый: title, why и/или purposes, kind любым словом, expectation, "
-            "deadline, weekly_min, skills, goal_id, order; правка: project + поля; status active|paused|done|dropped, done/dropped — "
-            "с итогом в reason; в работе не больше 3), milestone (project, title, dod — критерий обязателен; отметить: milestone + "
-            "status done), block (блок в свободное окно: project, duration_min, date, start), log (project, text, kind "
-            "update|decision|lesson|blocker|release|feedback|idea, minutes), note (заметка в папке проекта: project, title, text "
-            "Markdown, append), learn (что выучить: project — необязательно, topic, why, sources, kind theory|practice; отметить: learn + status done), resource "
-            "(источник, инструмент, пример чужой работы: project, title, url — только настоящая, kind). Работаешь в папке с кодом "
-            "проекта — веди его отсюда: этапы, журнал, заметки. Код за человека не пишешь."
-        ),
-        "inputSchema": _obj({
-            "action": _enum("list", "roadmap", "show", "set", "milestone", "block", "log", "note", "learn", "resource"),
-            "project": {**STR, "description": "id проекта или часть названия"}, "milestone": STR, "channel": STR,
-            "title": STR, "why": STR, "kind": STR, "expectation": STR, "deadline": STR, "weekly_min": INT,
-            "skills": {"type": "array", "items": STR}, "link": STR, "goal_id": STR, "status": STR, "reason": STR,
-            "dod": STR, "duration_min": INT, "date": STR, "start": STR, "text": STR, "minutes": INT,
-            "purposes": {"type": "array", "items": STR}, "order": INT, "url": STR, "append": BOOL, "topic": STR, "learn": STR,
-            "sources": {"type": "array", "items": STR},
-        }, ["action"]),
-    },
     "export": {
         "description": "Полный экспорт в Obsidian по местам из notes paths: профиль, выводы, журнал событий, итоги в ежедневных отчётах (только в блоках Arvix).",
         "inputSchema": _obj({"days": INT}),
@@ -205,6 +185,11 @@ def t_task(core: Core, a: dict[str, Any]) -> str:
         return f"В работе: {core.start_task(a['task']).title}"
     if action == "write_off":
         return f"Долг списан: {core.write_off_debt(a['task'], justification=a.get('reason', '')).title} (обоснование уйдёт в разбор)"
+    if action == "guide":
+        from arvix import guide
+
+        t = core.set_guide(a["task"], a)
+        return f"Шаги к «{t.title}»:\n" + guide.render_steps(t.guide)
     raise ArvixError(f"Неизвестное действие {action}")
 
 
@@ -423,32 +408,10 @@ def t_export(core: Core, a: dict[str, Any]) -> str:
     return "Экспортировано:\n" + "\n".join(f"  {p}" for p in written)
 
 
-def t_project(core: Core, a: dict[str, Any]) -> str:
-    from arvix import brain, projects
-
-    action = a["action"]
-    if action == "list":
-        lines = projects.context_lines(core)
-        return "ПРОЕКТЫ:\n" + "\n".join(lines) if lines else "Проектов нет. Новый: action=set, title, why, expectation, deadline."
-    if action == "roadmap":
-        return projects.roadmap_text(core)
-    if action == "show":
-        return projects.chat_block(core, a.get("project"))
-    kind = {"set": "set_project", "milestone": "set_milestone", "block": "plan_project", "log": "project_log",
-            "resource": "project_resource", "note": "project_note", "learn": "learn_add"}.get(action)
-    if kind is None:
-        raise ArvixError(f"Неизвестное действие {action}")
-    line, warnings = brain._project_action(core, kind, a, "claude")
-    if kind == "set_project":  # у Claude Code нет панели «План» — несостыковки сразу в ответ
-        target = projects.resolve(core, a.get("project") or a.get("title"))
-        warnings += projects.issues(core, target)[:3]
-    return line + _doubts(warnings)
-
-
 HANDLERS: dict[str, Callable[[Core, dict[str, Any]], str]] = {
     "context": t_context, "day": t_day, "task": t_task, "log": t_log, "profile": t_profile,
     "interview": t_interview, "check_request": t_check_request, "debrief": t_debrief,
-    "analyst": t_analyst, "notes": t_notes, "mode": t_mode, "export": t_export, "project": t_project,
+    "analyst": t_analyst, "notes": t_notes, "mode": t_mode, "export": t_export,
 }
 
 

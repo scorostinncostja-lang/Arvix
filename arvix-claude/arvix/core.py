@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from collections.abc import Iterator
@@ -21,6 +22,7 @@ from arvix.config import Config, load_config
 from arvix.state import State, Task
 from arvix.store import Event, Store
 
+log = logging.getLogger("arvix.core")
 STATUS_RU = {
     "planned": "запланирована", "active": "в работе", "done": "выполнена", "failed": "провалена",
     "debt": "в долге", "cancelled": "отменена", "written_off": "списана",
@@ -425,7 +427,6 @@ class Core:
         day: Any = None,
         tags: list[str] | tuple[str, ...] = (),
         task_source: str = "user",
-        project: str | None = None,
         source: str = "claude",
     ) -> Task:
         title = str(title).strip()
@@ -435,10 +436,6 @@ class Core:
         importance = rules.clamp(int(importance), 1, 5)
         difficulty = rules.clamp(int(difficulty), 1, 5)
         target = self.parse_day(day)
-        if project:
-            from arvix import projects
-
-            project = projects.resolve(self, project)["id"]  # чужой или выдуманный id — отказ, а не задача-сирота
         with self.tx():
             debts = self.state.debts()
             # В 🟥 живые люди — часть восстановления, а не «необязательное»: блок снимается.
@@ -457,7 +454,6 @@ class Core:
                     "duration_min": max(0, int(duration_min or 0)), "deep_work": bool(deep_work),
                     "proof": rules.derive_proof(importance, sphere, bool(deep_work)),
                     "source": task_source, "tags": [str(t) for t in tags],
-                    **({"project": project} if project else {}),
                 },
                 source=source,
                 entity_id=task_id,
@@ -518,14 +514,6 @@ class Core:
             if doubts:
                 payload["doubts"] = doubts  # отчёт записан, но сомнение видно в журнале и разборе
             self.emit("task_completed", payload, source=source, entity_id=task.id)
-            if task.project and report:
-                # Отчёт о блоке проекта — сразу запись журнала проекта (D47): прогресс виден без второго ввода.
-                self.emit("project_logged", {"project_id": task.project, "kind": "update", "text": report[:2000], "minutes": 0,
-                                             "task_id": task.id}, source=source, entity_id=task.project)
-        if task.project:
-            from arvix import projects
-
-            projects.sync_notes(self, task.project)
         self.recompute_mode(source="l0")
         return {"task": task, "debt_closed": task.debt_since is not None, "warnings": doubts}
 
@@ -1112,56 +1100,39 @@ class Core:
         with self.tx():
             self.emit("learning_question", {"question": question[:500], "mode": "direct" if direct else "hint"}, source=source)
 
-    # --- учебный блок (06-LEARNING §8) -----------------------------------------------
+    # --- «Как сделать» у задачи (D62, arvix/guide.py) ---------------------------------------
 
-    def lesson_started(self, task_ref: Any, lesson: dict[str, Any], *, note_path: str | None = None, source: str = "telegram") -> Task:
-        from arvix import lesson as lesson_mod
+    def set_guide(self, ref: Any, raw: dict[str, Any] | None, *, source: str = "claude") -> Task:
+        """Шаги к задаче: что сделать и чем. Ответ модели проверяет код (guide.clean): пустые шаги — отказ,
+        минуты — в рамках блока. Шаг просит заметку своими словами — каркас по шаблону человека в его папку
+        концептов (уже есть — не трогается). Повторный вызов заменяет шаги: журнал хранит обе версии."""
+        from arvix import guide as guide_mod
 
-        task = self.resolve_task(task_ref)
+        task = self.resolve_task(ref)
+        try:
+            clean = guide_mod.clean(raw, task.duration_min)
+        except ValueError as exc:
+            raise ArvixError(str(exc)) from exc
+        if clean["note"]:
+            clean["note_path"] = self.concept_skeleton(clean["note"], guide_mod.subject_of(task.title), [], [])
         with self.tx():
-            self.emit("lesson_started", {
-                "task_id": task.id, "topic": str(lesson.get("topic", ""))[:200], "subject": lesson_mod.subject_of(task.title)[:80],
-                "roadmap_node": str(lesson.get("roadmap_node") or "")[:200], "minutes": task.duration_min,
-                "plan": [str(s.get("step", ""))[:160] for s in lesson.get("plan") or []][:8],
-                "sources": [str(s)[:160] for s in lesson.get("sources") or []][:6],
-                "questions": [str(c.get("q", ""))[:300] for c in lesson.get("check") or []][:6],
-                "note": note_path, "fallback": bool(lesson.get("fallback")),
-                # Урок целиком (D60): сессию, которую сменила другая, можно вернуть как была — без второго вызова головы
-                "lesson": {"topic": str(lesson.get("topic", ""))[:200], "why": str(lesson.get("why") or "")[:300],
-                           "roadmap_node": str(lesson.get("roadmap_node") or "")[:200],
-                           "plan": [{k: s.get(k) for k in ("stage", "from_min", "to_min", "step", "tool") if s.get(k) is not None}
-                                    for s in lesson.get("plan") or [] if isinstance(s, dict)][:8],
-                           "check": [{"q": str(c.get("q", ""))[:400], "a": str(c.get("a", ""))[:400]} for c in lesson.get("check") or []][:6],
-                           "sources": [str(x)[:300] for x in lesson.get("sources") or []][:8], "fallback": bool(lesson.get("fallback"))},
-            }, source=source, entity_id=task.id)
-        return task
+            self.emit("task_guide", {"id": task.id, **clean}, source=source, entity_id=task.id)
+        try:  # шаги — и в заметку дня, где он работает (блок «Как · Arvix»); хранилище недоступно — шаги всё равно в журнале
+            from arvix import daily_note
 
-    def lesson_checked(self, task_ref: Any, *, score_pct: int | None, answers: str, gaps: list[str], next_step: str = "", source: str = "telegram") -> Task:
-        task = self.resolve_task(task_ref)
-        with self.tx():
-            self.emit("lesson_checked", {
-                "task_id": task.id, "score_pct": None if score_pct is None else rules.clamp(int(score_pct), 0, 100),
-                "answers": answers[:3000], "gaps": [str(g)[:200] for g in gaps][:8], "next_step": next_step[:300],
-            }, source=source, entity_id=task.id)
-        return task
-
-    def lesson_history(self, subject: str, limit: int = 5) -> list[str]:
-        """Прошлые уроки по предмету — чтобы следующий блок шёл дальше, а не по кругу."""
-        rows = [x for x in self.state.lessons if x.get("subject", "").lower() == subject.lower()]
-        out = []
-        for x in rows[-limit:]:
-            score = f" — {x['score']}%" if x.get("score") is not None else " — без проверки"
-            out.append(f"{x['date'][8:10]}.{x['date'][5:7]} {x['topic']}{score}")
-        return out
+            daily_note.write_guides(self, task.local_date)
+        except (ArvixError, OSError, ValueError) as exc:
+            log.info("шаги не вписаны в заметку дня: %s", exc)
+        return self.state.tasks[task.id]
 
     def concept_template(self) -> str | None:
-        """Шаблон конспекта человека ([learning] concept_template или Templates/Concept.md); нет — None."""
+        """Шаблон заметки «своими словами» ([guide] concept_template или Templates/Concept.md); нет — None."""
         from arvix.vault import VaultError
 
         if not self.cfg.vault:
             return None
         vault = self.vault
-        rel_tpl = self.cfg.section("learning").get("concept_template") or next(
+        rel_tpl = self.cfg.section("guide").get("concept_template") or next(
             (vault.rel(p) for p in vault.root.rglob("Concept.md") if "emplate" in str(p.parent.name)), None)
         if not rel_tpl:
             return None
@@ -1173,23 +1144,23 @@ class Core:
     def concept_skeleton(self, title: str, subject: str, questions: list[str], sources: list[str]) -> str | None:
         """Каркас заметки по шаблону человека в его папку концептов; чужой файл не трогается.
         Возвращает путь или None (хранилища нет / заметка уже есть)."""
-        from arvix import lesson as lesson_mod
+        from arvix import guide as guide_mod
         from arvix.vault import VaultError
 
         if not self.cfg.vault:
             return None
-        section = self.cfg.section("learning")
+        section = self.cfg.section("guide")
         vault = self.vault
         template = self.concept_template()
         folder = section.get("concept_dir") or next(
             (p.name for p in sorted(vault.root.iterdir()) if p.is_dir() and "concept" in p.name.lower()), None)
         if not folder:
             folder = self.cfg.vault_paths.get("notes") or vault.paths.get("notes") or "Конспекты"
-        rel = f"{folder}/{lesson_mod.safe_name(title)}.md"
+        rel = f"{folder}/{guide_mod.safe_name(title)}.md"
         try:
             if vault.resolve(rel).exists():
                 return rel  # конспект уже есть — это файл человека
-            result = self.write_note(rel, lesson_mod.skeleton(template, title, subject, self.today(), questions, sources), source="telegram")
+            result = self.write_note(rel, guide_mod.skeleton(template, title, subject, self.today(), questions, sources), source="l0")
         except (ArvixError, VaultError):
             return None
         return result["path"]
@@ -1200,15 +1171,10 @@ class Core:
     # Раньше ответ резался до 600 символов — и через неделю он «забывал» собственные объяснения.
     MESSAGE_LIMIT = 16000
 
-    def message_in(self, text: str, *, channel: str = "telegram", project: str | None = None, study: str | None = None,
-                   reply_to: int | None = None, tg_id: int | None = None) -> int:
+    def message_in(self, text: str, *, channel: str = "telegram", reply_to: int | None = None, tg_id: int | None = None) -> int:
         """reply_to — id события-сообщения, на которое человек ответил цитатой (D52);
         tg_id — номер сообщения в Telegram: по нему Arvix отвечает цитатой там же."""
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "channel": channel}
-        if project:
-            payload["project"] = project  # чат проекта (D47): своя нить в общей переписке
-        if study:
-            payload["study"] = study  # чат учебной сессии (D56): нить урока, id учебной задачи
         if reply_to:
             payload["reply_to"] = int(reply_to)
         if tg_id:
@@ -1217,13 +1183,9 @@ class Core:
             return self.emit("message_in", payload, source=channel).id
 
     def message_out(self, text: str, *, key: str | None = None, channel: str = "telegram",
-                    buttons: list[list[tuple[str, str]]] | None = None, project: str | None = None,
-                    study: str | None = None, reply_to: int | None = None, tg_id: int | None = None) -> int:
+                    buttons: list[list[tuple[str, str]]] | None = None, reply_to: int | None = None,
+                    tg_id: int | None = None) -> int:
         payload: dict[str, Any] = {"text": text[: self.MESSAGE_LIMIT], "key": key, "channel": channel}
-        if project:
-            payload["project"] = project
-        if study:
-            payload["study"] = study
         if buttons:  # приложение показывает те же кнопки под сообщением
             payload["buttons"] = [[[t, d] for t, d in row] for row in buttons]
         if reply_to:
@@ -1234,6 +1196,11 @@ class Core:
             return self.emit("message_out", payload, source="bot").id
 
     MESSAGE_KINDS = ("message_in", "message_out")
+
+    @staticmethod
+    def side_thread(event: Any) -> bool:
+        """Сообщение из нити проекта или учебной сессии (до D62): в общую переписку и историю не идёт."""
+        return bool(event.payload.get("project") or event.payload.get("study"))
 
     # --- как в мессенджере: реакции, прочитано, в сети (D52) ---------------------------
     # Набор приложения — немного и самые ходовые. В Telegram человек может поставить любую реакцию — она тоже пишется.

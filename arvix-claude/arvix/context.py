@@ -11,7 +11,7 @@ import re
 from datetime import date, timedelta
 from typing import Any
 
-from arvix import rules
+from arvix import guide, rules, tools
 from arvix.load import CHANNEL_LABELS
 
 WEEKDAYS = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
@@ -151,6 +151,8 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
         lines.append(f"СЕГОДНЯ: {done}/{len(tasks)} задач{pct} · глубокая {hm(day.deep_min if day else 0)} из {hm(deep_target)}{sleep}")
     if tasks:
         lines.append("ЗАДАЧИ:\n" + "\n".join("  " + task_line(t) for t in tasks))
+    if steps := guide.context_lines(tasks):  # «Как сделать» (D62): он спросит про «второй шаг» — ты знаешь, что это
+        lines.append("ШАГИ К ЗАДАЧАМ (что и чем, давал Arvix):\n" + "\n".join(steps))
     if late := core.open_yesterday():
         lines.append("ВЧЕРА НЕ ЗАКРЫТО (день закроется в 04:00; «сделал» сейчас — скорее про них):\n"
                      + "\n".join("  " + task_line(t) for t in late))
@@ -192,14 +194,9 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
 
     if autonomy := autonomy_line(status["autonomy"]):
         lines.append("АВТОНОМНОСТЬ:" + autonomy.split(":", 1)[1])
-    if st.lessons:
-        recent = st.lessons[-4:]
-        lines.append("УРОКИ: " + " · ".join(
-            f"{x['date'][8:10]}.{x['date'][5:7]} {x['subject']}: {x['topic']}" + (f" {x['score']}%" if x.get("score") is not None else "") for x in recent))
-    from arvix import review
-
-    if core.effective_mode() != "red" and (line := review.context_line(core)):  # в 🟥 учёбу не предлагают (правило №5)
-        lines.append(line)
+    lines.append(tools.context_line(core))  # навигатор по его инструментам (D62); в 🟥 сюда не доходит — правило №5
+    if folder := tools.projects_dir(core):
+        lines.append(f"ПРОЕКТЫ: папки и заметки в {folder} — перед советом по проекту прочитай его заметку")
 
     directives = st.active_directives(today)[:5]
     if directives:
@@ -215,10 +212,6 @@ def build_context(core: Any, *, message: str = "", gentle: bool | None = None) -
             done = sum(1 for g in st.goals.values() if g.get("parent_id") == goal["id"] and g.get("status") == "done")
             nxt = min(stages, key=lambda g: g.get("deadline") or "9999")
             lines.append(f"ЭТАПЫ: {done}/{done + len(stages)} пройдено · следующий: [{nxt['id']}] {nxt['title']}" + (f" до {nxt['deadline']}" if nxt.get("deadline") else ""))
-    from arvix import projects
-
-    if project_lines := projects.context_lines(core):  # цифры и несостыковки проектов считает код (D43)
-        lines.append("ПРОЕКТЫ:\n" + "\n".join(project_lines))
     traits = sorted(st.traits.values(), key=lambda t: -int(t.get("severity", 3)))[:4]
     if traits:
         lines.append("ЧЕРТЫ: " + " · ".join(f"{t['kind']}: {t['title']}" + (f" → {t['counter_strategy']}" if t.get("counter_strategy") else "") for t in traits))

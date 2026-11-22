@@ -72,26 +72,7 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `focus_session` | `duration_min, task_id, topic?` — с задачей копится в `Task.focus_min`, без задачи (тема «физика») идёт в глубокую работу дня; сессии дня — `Day.focus` | человек |
 | `focus_noted` | `focus_event_id, date, note` — «что успел» к прошедшей сессии; сама сессия не меняется | человек |
 | `file_received` | `name, kind, size, path, read, caption` — файл от человека в хранилище (`arvix/files.py`) | человек |
-| `lesson_started` | `task_id, topic, subject, roadmap_node, minutes, plan[], sources[], questions[], note, fallback, lesson {topic, why, plan[{stage, from_min, to_min, step, tool}], check[{q, a}], sources}` (урок целиком — вернуть сессию без головы, D60) — учебный блок подготовлен ([06-LEARNING.md §8](06-LEARNING.md#8-учебный-блок-в-telegram-)) | код + модель |
-| `lesson_checked` | `task_id, score_pct (null — голова недоступна), answers, gaps[], next_step` — проверка в конце блока; `State.lessons` (флаг `checked`: пустая оценка без головы — тоже проверка) | код + модель |
 | `expense_logged` | `amount, currency, category, impulse, note` | человек, модель |
-| `project_set` | `id, title, why, kind (подсказка или своё слово), purposes[], expectation, deadline, weekly_min, goal_id, order, weeks, status, skills[], link, folder, by, reason?, started?` — `folder` — папка в Obsidian, фиксируется первым настоящим названием (D47) — проект целиком (правка — новое событие); свёртка добавляет `started`, `closed` (D43, D44); `started` в самом событии — только у проекта, восстановленного из хранилища (дата из карточки, D54) | человек, модель, L2 (роадмап), `restore` |
-| `milestone_set` | `id, project_id, title, dod, due, status (open·done·dropped), order`; свёртка ставит `done_date` | человек, модель |
-| `project_logged` | `project_id, kind (update·decision·lesson·blocker·release·feedback), text, minutes` — журнал проекта | человек, модель |
-| `project_money` | `project_id, amount, direction, …` — касса проекта 0.7; с D44 не пишется и не показывается, старые события в журнале | — |
-| `channel_set` | каналы привлечения 0.7–0.8; с D47 не пишутся, старые события в журнале | — |
-| `resource_set` | `id, project_id, title, url, kind (source·doc·course·video·tool·example·repo·design·note·chat·other), note, status (active·removed), by` — источник, инструмент, пример чужой работы | человек, модель, L2 |
-| `learn_item_set` | `id, topic, why, project_id, goal_id, sources[], status (todo·done·dropped), kind (theory·practice, D55), task_id` — очередь «учиться», общая у проектов и раздела «Обучение» (D47, D55); `project_id` необязателен | человек, модель |
-| `study_panel` | `task_id, panel {id, type (quiz·board·diagram·video·text·note·sources), title, by (arvix·me), stage (diag·learn·practice·fix·check, D60), hidden?, …поля вида}` — окно учебной сессии; тот же `id` — замена, `hidden` — скрыто; у вопроса теста `short`/`accept` (ответ числом), `skill`, `level`, `twin` (похожая задача); у видео `results[]` — ролики, найденные кодом, `lang`, `transcript[{t, d, text}]` (субтитры текстом), `media` (свой ролик в хранилище); у фразы диктанта `mode: dictation`, `listen {panel, t, d}` (D61); `State.study` (D55, D60) | модель, человек |
-| `study_answer` | `task_id, panel_id, answers[] («?» — не знаю), results[] (true·false·null — открытый), score_pct, scores[]? (диктант: % слов по фразе, D61)` — ответ на тест окна; варианты и короткий ответ проверяет код (D55, D60) | человек |
-| `study_stage` | `task_id, stage` — этап сессии, где человек сейчас (D60) | человек |
-| `study_fix` | `task_id, key («окно:вопрос»), kind? (rule·calc·read·start), twin_given?, twin_ok?, closed?, self?` — работа над ошибкой: причина, похожая задача (проверяет код), «разобрался» (D60) | человек |
-| `study_shadow` | `task_id, panel_id, i, heard, pct` — «🎙 Повтори»: строка субтитров вслух, распознано, совпало по словам; `State.study[...].shadow` (D61) | человек + код |
-| `study_mine` | `task_id, word, sentence, cloze, t, url, media, title, lang` — добыча: предложение целиком с пропуском для Anki; копия — блоком в заметке «Предложения из видео» (D61) | человек |
-| `review_set` | `id, topic, subject, learn_id, tasks[], gaps[], step (0–5), due, status (active·done·dropped), history[{date, pct, kind}]` — тема на повторении, снимок целиком; `State.reviews` (D60) | код, человек |
-| `review_quiz` | `id, reviews[], items[{review, q, short·accept │ options·answer, why}], by (head·bank)` — тест повторения на сегодня; `State.review_quiz` (D60) | код + модель |
-| `review_answer` | `quiz_id, answers[], results[], by_review {id: pct}` — ответ на повторение; за ним — `review_set` с новым интервалом (D60) | человек |
-| `repo_activity` | коммиты GitHub 0.8; с D47 не пишется, старые события в журнале | — |
 | `social_contact` | `who` | человек, модель |
 | `reason_declared` | `reason` — причина плохого дня: важное, не сделанное в этот день, не уходит в долг | человек, модель |
 | `silent_day` | `date` | человек, scheduler |
@@ -99,6 +80,12 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | `learning_question` | `question, mode (hint·direct)` | модель |
 | `note_captured` | `text, path` — Inbox | человек, модель |
 | `note_written` | `path, sha, owned, mode, created, backup` — чтобы отличать свои заметки от чужих; `mode = edit \| create` — правка человека из приложения (`owned = false`) | l0, человек |
+
+Шаги к задаче (D62): `task_guide` — `id, steps[{do, tool, min}], done, save, note, note_path` → `Task.guide`; пишет голова
+(источник `l1`, из приложения — `web`), проверяет `guide.clean`.
+
+Старые события проектов и учебных сессий (D43–D61: `channel_set`, `learn_item_set`, `lesson_checked`, `lesson_started`, `milestone_set`, `project_logged`, `project_money`, `project_set`, `repo_activity`, `resource_set`, `review_answer`, `review_quiz`, `review_set`, `study_answer`, `study_fix`, `study_mine`, `study_panel`, `study_shadow`, `study_stage`) остаются в журнале;
+с D62 свёртка их не читает, как XP и HP после D41.
 
 ### Режимы и итоги (пишет только код)
 | kind | payload | источник |

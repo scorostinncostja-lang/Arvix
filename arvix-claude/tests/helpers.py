@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from arvix import clock, media, videos
+from arvix import clock
 from arvix.config import load_config
 from arvix.core import Core
 from arvix.store import Store
@@ -24,10 +24,6 @@ TZ = ZoneInfo("Europe/Moscow")
 
 def moscow(year: int, month: int, day: int, hour: int = 10, minute: int = 0) -> datetime:
     return datetime(year, month, day, hour, minute, tzinfo=TZ)
-
-
-def offline(url: str, accept: str) -> bytes:
-    raise OSError(f"тест без сети: {url}")
 
 
 class ArvixCase(unittest.TestCase):
@@ -43,17 +39,11 @@ class ArvixCase(unittest.TestCase):
         self.vault = self.tmp / "vault"
         (self.vault / ".obsidian").mkdir(parents=True)
         clock.set_now(self.start)
-        self._fetch, self._define = videos.FETCH, media.FETCH
-        videos.FETCH = offline  # тесты не ходят в сеть: поиск видео — пустой, пока тест не подставит свой
-        media.FETCH = lambda url: offline(url, "")  # и словарь тоже
-        videos._cache.clear()
-        media._cache.clear()
         self.core = self.make_core()
 
     def tearDown(self) -> None:
         self.core.close()
         clock.set_now(None)
-        videos.FETCH, media.FETCH = self._fetch, self._define
         for key, value in self._env.items():
             if value is None:
                 os.environ.pop(key, None)

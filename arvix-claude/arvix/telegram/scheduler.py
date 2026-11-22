@@ -62,7 +62,6 @@ class Scheduler:
             if full and not red:  # в 🟥 план — одна маленькая вещь: напоминаний о задачах нет
                 self.reminders(now)
                 self.midday(now)
-                self.projects(now)
                 self.initiative(now)
                 self.curiosity(now)
             if full or back:
@@ -128,16 +127,11 @@ class Scheduler:
                 self.bot.send(tpl.reminder_before(task, minutes), tpl.task_buttons_before(task.id), key=before)
             go = f"rem0:{task.id}:{task.start}"
             if start <= now < start + timedelta(minutes=10) and task.status == "planned" and not core.sent(go):
-                if not self.bot.on_block_start(task, key=go):  # учебная задача — план урока вместо «Блок пошёл»
+                if not self.bot.on_block_start(task, key=go):  # шаги «что и чем» (D62) — вместе с «Блок пошёл»
                     self.bot.send(tpl.reminder_start(task), key=go)
             check = f"remend:{task.id}"
             if end <= now < end + CHECK_WINDOW and not core.sent(check):
-                if not self.bot.lesson_pending(task.id):
-                    self.bot.send(tpl.reminder_check(task), tpl.task_buttons_check(task.id), key=check)
-                elif not self.bot.lesson_running(task.id):
-                    # План урока пришёл, но ▶️ не нажимали — учился без таймера. Без этого проверка не
-                    # приходила вовсе, и в 04:00 задача уходила в долг.
-                    self.bot.send_lesson_check(key=check)
+                self.bot.send(tpl.reminder_check(task), tpl.task_buttons_check(task.id), key=check)
 
     def midday(self, now: datetime) -> None:
         when = self._when("midday")
@@ -145,22 +139,6 @@ class Scheduler:
         due = when and self._once(key, when, now, timedelta(hours=2)) and self.core.effective_mode() != "red"
         if due and (text := tpl.midday(self.core)):
             self.bot.send(text, key=key)
-
-    def projects(self, now: datetime) -> None:
-        """Застой проекта (D43): 7+ дней без движения → одно сообщение в неделю на проект, в окно
-        чек-ина. Проект не умирает молча — но и стены напоминаний нет."""
-        from arvix import projects
-
-        when = self._when("midday")
-        if not when or not (when <= now < when + timedelta(hours=3)):
-            return
-        week = "{}-{:02d}".format(*now.isocalendar()[:2])
-        for project, stats in projects.stalled(self.core):
-            key = f"proj:{project['id']}:{week}"
-            if self.core.sent(key):
-                continue
-            self.bot.send(tpl.project_stall(project, stats, projects.next_step(self.core, project)), tpl.project_buttons(project["id"]), key=key)
-            return  # одно за оборот: два застоя — два сообщения, но не пачкой
 
     def debrief(self, now: datetime) -> None:
         when = self._when("debrief")

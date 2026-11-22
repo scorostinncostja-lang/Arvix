@@ -6,8 +6,8 @@ ensure() создаёт заметку дня из шаблона (папка и
 сделал бы Obsidian; оставшиеся сырыми в уже созданной заметке — чинятся при sync().
 sync() дописывает факты: заполняет только пустые поля frontmatter (сон, подъём,
 фокус, тренировка), ставит [x] у строк задач, которые Arvix сам вписал и которые
-закрыты, и обновляет свой блок «Arvix» с итогами и разбором. Что человек
-написал сам, не трогается никогда.
+закрыты, и обновляет свои блоки: «Как · Arvix» — шаги к задачам дня (D62) и «Итог
+дня · Arvix» — итоги и разбор. Что человек написал сам, не трогается никогда.
 """
 
 from __future__ import annotations
@@ -177,6 +177,25 @@ def summary(core: Any, d: date) -> str:
     return "\n".join(lines)
 
 
+def write_guides(core: Any, d: date) -> str | None:
+    """Шаги к задачам дня (D62) — своим блоком «Как · Arvix» в заметке дня: человек видит их там, где работает.
+    Заметки нет — создаётся только сегодняшняя; шагов нет — блок не пишется."""
+    from arvix import guide
+
+    if not core.cfg.vault:
+        return None
+    block = guide.note_block(core.state.tasks_on(d))
+    if not block:
+        return None
+    rel = core.vault.daily_path(d)
+    if not (core.vault.root / rel).is_file():
+        if d != core.today():
+            return None
+        rel = ensure(core, d) or rel
+    core.write_block(rel, guide.NOTE_BLOCK, block, source="l0")
+    return rel
+
+
 def sync(core: Any, d: date, *, create: bool | None = None) -> str | None:
     """Дописывает факты дня в его заметку. Создаёт заметку только для сегодня."""
     if not core.cfg.vault:
@@ -188,6 +207,7 @@ def sync(core: Any, d: date, *, create: bool | None = None) -> str | None:
             return None
         rel = ensure(core, d) or rel
     repair(core, d, rel)
+    write_guides(core, d)
     values = _fields(core, d)
     if values:
         core.update_note(rel, lambda text: set_frontmatter(text, values, only_empty=True), source="l0")
@@ -201,4 +221,5 @@ def read_fields(core: Any, d: date) -> dict[str, str]:
     return {k: v for k, v in (note or {}).get("fields", {}).items() if v} if note else {}
 
 
-__all__ = ["ensure", "parse_frontmatter", "program_day", "read_fields", "repair", "summary", "sync", "task_at_line", "tick_done"]
+__all__ = ["ensure", "parse_frontmatter", "program_day", "read_fields", "repair", "summary", "sync", "task_at_line", "tick_done",
+           "write_guides"]

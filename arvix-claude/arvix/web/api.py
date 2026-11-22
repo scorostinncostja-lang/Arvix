@@ -13,13 +13,12 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-from arvix import rules
+from arvix import rules, tools
 from arvix.context import DAY_TYPES_RU, QUOTA_RU, end_time
 from arvix.core import ArvixError, Core
 from arvix.telegram import templates as tpl
 
 FOCUS = "focus"
-LESSON = "lesson"
 SPHERES_RU = {"learning": "учёба", "work": "работа", "sport": "спорт", "social": "люди", "health": "здоровье",
               "finance": "деньги", "project": "проект", "chore": "быт"}
 
@@ -31,8 +30,16 @@ def task_view(task: Any) -> dict[str, Any]:
         "duration_min": task.duration_min, "importance": task.importance, "difficulty": task.difficulty,
         "deep_work": task.deep_work, "status": task.status, "done_pct": task.done_pct,
         "focus_min": task.focus_min, "report": task.report, "proof": task.proof, "open": task.is_open,
-        "project": task.project, "photos": list(task.report_photos),
+        "photos": list(task.report_photos), "guide": guide_view(task.guide),
     }
+
+
+def guide_view(g: dict[str, Any] | None) -> dict[str, Any] | None:
+    """«Как сделать» (D62) для экрана: шаги, «готово, когда», куда записать, заметка своими словами."""
+    if not g:
+        return None
+    return {"steps": list(g.get("steps") or []), "done": g.get("done") or "", "save": g.get("save") or "",
+            "note_path": g.get("note_path") or None}
 
 
 def gentle(core: Any) -> bool:
@@ -44,13 +51,12 @@ def state_view(core: Any, *, thinking: str = "") -> dict[str, Any]:
     now = core.now()
     today = now.date()
     focus = core.store.kv_get(FOCUS)
-    lesson = core.store.kv_get(LESSON)
     base: dict[str, Any] = {
         "now": now.isoformat(), "date": today.isoformat(), "weekday": tpl.WEEKDAYS_FULL[today.weekday()],
         "name": st.profile.get("name") or "", "mode": core.effective_mode(), "mode_label": rules.MODE_LABELS[core.effective_mode()],
         "gentle": gentle(core), "thinking": thinking, "version": st.last_event_id,
-        "focus": focus_view(core, focus), "focus_choices": list(tpl.FOCUS_CHOICES), "lesson": {"task_id": lesson.get("task_id"), "topic": lesson.get("topic"),
-                                                    "started": lesson.get("started")} if lesson else None,
+        "focus": focus_view(core, focus), "focus_choices": list(tpl.FOCUS_CHOICES),
+        "tools_note": tools.path(core),  # список инструментов в Obsidian (D62): «Мои инструменты» открывает его
     }
     tasks = st.tasks_on(today)
     if base["gentle"]:
@@ -128,9 +134,9 @@ def live_buttons(core: Any, rows: list[Any]) -> list[Any]:
 def messages_view(core: Any, *, before: int | None = None, limit: int = 60) -> list[dict[str, Any]]:
     """Переписка из журнала — все каналы: Telegram, приложение, терминал."""
     start = max(0, (before or core.state.last_event_id + 1) - 3000)
-    # Нити чатов проектов (D47) и учебных сессий (D56) живут в своих окнах — в общем чате их нет
+    # Нити чатов проектов (D47) и учебных сессий (D56) до D62 жили в своих окнах — в общем чате их нет и теперь
     events = [e for e in core.store.read(start) if e.kind in ("message_in", "message_out") and (before is None or e.id < before)
-              and not e.payload.get("project") and not e.payload.get("study")]
+              and not Core.side_thread(e)]
     out = []
     near = {e.id: e for e in events}
     for event in events[-limit:]:
@@ -176,7 +182,6 @@ def history_view(core: Any, days: int = 30) -> dict[str, Any]:
             "quotas": [{"key": k, "label": QUOTA_RU.get(k, k), "done": week["quotas"].get(k, 0), "need": v} for k, v in quotas.items()],
             "spent": sum(week["expenses"].values()),
         },
-        "lessons": st.lessons[-10:],
     }
 
 
@@ -216,552 +221,6 @@ def heatmap_view(core: Any, weeks: int = 53) -> dict[str, Any]:
         active += 1 if level else 0
         d += timedelta(days=1)
     return {"days": days, "active": active, "start": start.isoformat()}
-
-
-# --- проекты (D43, D44, D47): окна над папкой проекта в Obsidian и чатом проекта --------------------------
-
-def _project_card(core: Any, p: dict[str, Any]) -> dict[str, Any]:
-    from arvix import projects
-
-    s = projects.stats(core, p)
-    step = projects.next_step(core, p)
-    goal = core.state.goals.get(p.get("goal_id") or "")
-    return {
-        "id": p["id"], "title": p["title"], "why": p.get("why", ""), "kind": p.get("kind"), "kind_ru": projects.kind_label(p.get("kind")),
-        "purposes_ru": [projects.purpose_label(x) for x in projects.purposes_of(p)],
-        "status": p["status"], "status_ru": projects.STATUSES[p["status"]], "group": projects.group(p["status"]),
-        "expectation": p.get("expectation", ""), "deadline": p.get("deadline"), "weekly_min": s["weekly_target"],
-        "week_min": s["week_min"], "minutes": s["minutes"], "milestones_done": s["milestones_done"],
-        "milestones_total": s["milestones_total"], "idle_days": s["idle_days"], "last_move": s["last_move"],
-        "pace": s["pace"], "forecast": s["forecast"], "learn_todo": s["learn_todo"],
-        "next": {"id": step["id"], "title": step["title"], "dod": step["dod"]} if step else None,
-        "issues": projects.issues(core, p, s), "skills": p.get("skills") or [], "link": p.get("link", ""),
-        "started": p.get("started"), "goal_id": p.get("goal_id"), "goal_title": goal["title"] if goal else None,
-        "weeks": p.get("weeks"), "by": p.get("by", ""), "folder": projects.folder(core, p), "main_note": projects.main_note(core, p),
-    }
-
-
-def obsidian_vault(core: Any) -> str:
-    """Имя хранилища для ссылок obsidian://: на сервере папка называется иначе, чем у человека в Obsidian."""
-    from pathlib import Path
-
-    return str(core.cfg.section("obsidian").get("vault") or (Path(core.cfg.vault).name if core.cfg.vault else ""))
-
-
-def projects_view(core: Any) -> dict[str, Any]:
-    """Список проектов по целям (это и есть роадмап), отложенные и завершённые. В 🟥 — без цифр (правило №5).
-    Цели без проектов — отдельным списком: пятнадцать пустых групп с «предложить» прятали сами проекты (D56)."""
-    from arvix import project_roadmap, projects
-
-    if gentle(core):
-        return {"gentle": True, "groups": [], "note": "Проекты подождут. Сегодня — восстановление; если тянет к проекту, "
-                                                      "сделай самое приятное в нём, без плана и цифр."}
-    cards = {p["id"]: _project_card(core, p) for p in core.state.projects.values()}
-    groups, idle = [], []
-    for block in projects.roadmap(core):
-        # в работе — сверху, неначатые — под ними: порядок роадмапа внутри каждой части сохраняется
-        items = sorted((cards[p["id"]] for p in block["projects"] if cards[p["id"]]["group"] != "closed"),
-                       key=lambda c: c["status"] != "active")
-        goal = block["goal"]
-        if items:
-            groups.append({"goal": {k: goal.get(k) for k in ("id", "title", "kind", "deadline")} if goal else None, "projects": items})
-        elif goal:  # цель без проектов — одной строкой внизу, а не пустой группой с кнопкой (D56)
-            idle.append({k: goal.get(k) for k in ("id", "title", "kind", "deadline")})
-    closed = sorted((c for c in cards.values() if c["group"] == "closed"), key=lambda c: c["title"])
-    active = [c for c in cards.values() if c["status"] == "active"]
-    return {
-        "gentle": False, "groups": groups, "idle_goals": idle, "closed": closed, "count": len(cards), "max_active": projects.max_active(core),
-        "ideas": sum(1 for c in cards.values() if c["status"] == "idea"), "ideas_max": project_roadmap.IDEAS_MAX,
-        "active": len(active), "load_issue": projects.load_issue(core), "vault": obsidian_vault(core),
-        "goals": [{"id": g["id"], "title": g["title"]} for g in core.state.goals.values() if g.get("status", "active") == "active"],
-        "log_kinds": projects.LOG_KINDS, "resource_kinds": projects.RESOURCE_KINDS, "kinds": projects.KIND_PRESETS,
-    }
-
-
-def project_messages(core: Any, project_id: str, limit: int = 80, *, key: str = "project") -> list[dict[str, Any]]:
-    """Нить чата из общей переписки: проекта — payload.project (D47), учебной сессии — payload.study (D56)."""
-    start = max(0, core.state.last_event_id - 6000)
-    out = []
-    thread = [e for e in core.store.read(start) if e.kind in ("message_in", "message_out") and e.payload.get(key) == project_id]
-    near = {e.id: e for e in thread}
-    for event in thread[-limit:]:
-        out.append({"id": event.id, "at": event.at.astimezone(core.tz).isoformat(), "who": "me" if event.kind == "message_in" else "arvix",
-                    "text": str(event.payload.get("text") or ""), "reply_to": quote_view(core, event, near),
-                    "reaction": (core.state.reactions.get(event.id) or {}).get("emoji", "")})
-    return out
-
-
-def project_view(core: Any, project_id: str) -> dict[str, Any]:
-    from arvix import projects
-
-    if gentle(core):
-        return {"gentle": True}
-    p = projects.resolve(core, project_id)
-    st = core.state
-    tasks = sorted((t for t in st.tasks.values() if t.project == p["id"] and t.status != "cancelled"),
-                   key=lambda t: (t.local_date, t.start or "99"), reverse=True)
-    log = [x for x in st.project_log if x["project_id"] == p["id"]]
-    return {
-        **_project_card(core, p), "gentle": False,
-        "milestones": [{k: m.get(k) for k in ("id", "title", "dod", "due", "status", "done_date")} for m in projects.milestones(core, p["id"])],
-        "learn": projects.learn_items(core, p["id"]), "files": projects.note_files(core, p),
-        "tasks": [task_view(t) for t in tasks[:30]], "log": list(reversed(log[-40:])),
-        "resources": projects.resources(core, p["id"]), "messages": project_messages(core, p["id"]),
-        "task_min": projects.stats(core, p)["task_min"],
-    }
-
-
-KICKOFF = """<new_project>Человек только что начал этот проект одной фразой (она — его сообщение). Карточка — черновик кода.
-Заполни проект сам, не устраивая анкету: set_project (project=id) — короткое название, kind словом, purposes, why, expectation
-(проверяемо), deadline и weekly_min по его нагрузке, goal_id, если проект ведёт к цели из контекста; 3–6 этапов set_milestone
-с dod; 2–5 тем learn_add — что придётся выучить; project_note «План» — коротко: результат, этапы, первый шаг, риски; источники
-project_resource — только настоящие ссылки. Чего не знаешь — реши сам по данным и скажи, как поправить. В ответе: что
-создал и один первый шаг; если стоит — предложи блок в план. Один вопрос — только если без ответа нельзя.</new_project>"""
-
-
-def project_new(text: str, goal_id: str | None) -> Any:
-    def run(bot: Any) -> dict[str, Any]:
-        from arvix import projects
-
-        pid = projects.start(bot.core, text, goal_id=goal_id or None, source="web")
-        return {"project": _project_card(bot.core, bot.core.state.projects[pid])}
-    return run
-
-
-def project_chat(project_id: str, text: str, *, kickoff: bool = False) -> Any:
-    """Сообщение в чат проекта: тот же путь, что у обычного (safety, голова, actions), но в нити проекта
-    и с блоком <project> в запросе. Ожидаемые ответы (сон, отчёт) здесь не перехватываются — это разговор о проекте."""
-    def run(bot: Any) -> None:
-        from arvix import safety
-
-        bot.core.refresh()
-        with bot.via("web", SINK), bot.in_project(project_id), bot.incoming():
-            bot.log_in(text)
-            if safety.detect(text):
-                bot.safety_protocol(text)
-                return
-            bot.converse(text, extra=KICKOFF if kickoff else "")
-    return run
-
-
-def project_upload(project_id: str, data: bytes, name: str, mime: str, caption: str) -> Any:
-    """Файл в чат проекта — в папку проекта «Файлы» (код, скриншот, PDF): Arvix читает и отвечает."""
-    def run(bot: Any) -> None:
-        bot.core.refresh()
-        with bot.via("web", SINK), bot.in_project(project_id), bot.incoming():
-            bot.on_file({"file_name": name, "mime_type": mime}, caption=caption, data=data)
-    return run
-
-
-def project_roadmap(goal_id: str) -> Any:
-    """«Arvix, предложи проекты к цели» — фоновая задача: ответ придёт сообщением, проекты — отложенными."""
-    def run(bot: Any) -> None:
-        with bot.via("web", SINK):
-            bot.build_project_roadmap(goal_id)
-    return run
-
-
-def project_op(project_id: str, op: str, body: dict[str, Any]) -> Any:
-    """save · milestone · log · block · status · move · learn · learn_start · resource — кнопки вкладки «Проекты»."""
-    def run(bot: Any) -> dict[str, Any]:
-        from arvix import projects
-
-        core = bot.core
-        pid = projects.resolve(core, project_id)["id"]
-        out: dict[str, Any] = {}
-        if op == "save":
-            projects.set_project(core, str(body.get("title") or ""), project_id=pid, expectation=str(body.get("expectation") or ""),
-                                 deadline=body.get("deadline") or None, weekly_min=body.get("weekly_min"),
-                                 goal_id=body.get("goal_id") if "goal_id" in body else None, kind=str(body.get("kind") or "") or None,
-                                 why=str(body.get("why") or ""), source="web")
-        elif op == "milestone":
-            projects.set_milestone(core, pid, str(body.get("title") or ""), milestone_id=body.get("milestone") or None,
-                                   due=body.get("due") or None, dod=str(body.get("dod") or ""), status=body.get("status") or None,
-                                   source="web")
-        elif op == "log":
-            projects.log_entry(core, pid, str(body.get("text") or ""), kind=str(body.get("kind") or "update"),
-                               minutes=body.get("minutes") or 0, source="web")
-        elif op == "block":
-            task = projects.plan_block(core, pid, minutes=int(body.get("minutes") or 60), day=body.get("date") or None,
-                                       start=body.get("start") or None, source="web")
-            out = {"task": task_view(task), "warnings": core.task_warnings(task)}
-            bot.refresh_panel()
-        elif op == "status":
-            projects.set_project(core, project_id=pid, status=str(body.get("status") or ""), reason=str(body.get("reason") or ""),
-                                 source="web")
-        elif op == "move":
-            projects.move(core, pid, int(body.get("step") or 1), source="web")
-        elif op == "learn":
-            projects.set_learn(core, str(body.get("topic") or ""), item_id=body.get("item") or None, project_ref=pid,
-                               status=body.get("status") or None, kind=body.get("kind") or None, source="web")
-        elif op == "learn_start":
-            task = projects.learn_start(core, str(body.get("item") or ""), minutes=int(body.get("minutes") or 45))
-            out = {"task": task_view(task)}
-            bot.refresh_panel()
-        elif op == "resource":
-            projects.set_resource(core, pid, resource_id=body.get("resource") or None, status=body.get("status") or None, source="web")
-        else:
-            raise ArvixError(f"Неизвестное действие проекта: {op}")
-        return {**out, "project": project_view(core, pid)}
-    return run
-
-
-# --- Обучение (D55): учебная сессия = урок §8 + окна; очередь тем — общая с проектами -------------------
-
-AWAIT = "tg_await"  # чего бот ждёт (Bot.await_set): проверка урока — ответом из окна сессии
-STUDY_ASK = {  # подсказки чата — под этап: что обычно спрашивают именно здесь
-    "diag": ["Не понимаю условие задачи", "С чего начать эту тему?"],
-    "learn": ["Объясни с начала, по шагам", "Покажи ещё пример", "Нарисуй чертёж", "Схема темы", "Найди другое видео", "Проверь мою заметку"],
-    "practice": ["Дай подсказку к задаче, не решение", "Проверь моё решение по фото", "Ещё 3 задачи посложнее"],
-    "fix": ["Почему мой ответ неверный?", "Дай ещё похожую задачу", "Где я обычно ошибаюсь?"],
-    "check": ["Что повторить перед проверкой?"],
-}
-LANG_ASK = {  # урок иностранного языка (D61): про звук, фразы и ролики, а не чертежи
-    "diag": ["Explain the task more simply", "Что значит эта фраза?"],
-    "learn": ["Explain it more simply, in English", "Дай ещё 3 примера из жизни", "Найди ролик проще", "Найди сцену из сериала на эту тему"],
-    "practice": ["Дай подсказку, не ответ", "Ещё 5 заданий на этот паттерн", "Дай 3 фразы для shadowing"],
-    "fix": ["Почему я не расслышал эту фразу?", "Как это звучит в быстрой речи?", "Дай ещё похожую"],
-    "check": ["Проверь мой пересказ — пришлю голосом"],
-}
-
-
-def _lesson_row(core: Any, task_id: str) -> dict[str, Any] | None:
-    return next((x for x in reversed(core.state.lessons) if x.get("task_id") == task_id), None)
-
-
-def session_view(core: Any, task_id: str) -> dict[str, Any]:
-    """Рабочий стол сессии по этапам (D60): этапы с минутами и шагом, уровень по диагностике, окна этапов,
-    ошибки для работы над ними, таймер, чат урока. Эталоны теста и проверки сюда не уходят."""
-    from arvix import lesson as lesson_mod
-    from arvix import review, study
-
-    task = core.resolve_task(task_id)
-    if task.sphere != "learning":
-        raise ArvixError("Это не учебный блок")
-    lesson = core.store.kv_get(LESSON) or {}
-    live = lesson.get("task_id") == task.id
-    row = _lesson_row(core, task.id) or {}
-    data = study.session_of(core, task.id)
-    panels = [{**study.public_panel(p, data["answers"].get(p["id"])), "stage": study.panel_stage(p, data)} for p in study.visible(data)]
-    plan = study.stage_plan(lesson.get("plan") or [], task.duration_min) if live else {}
-    stage = study.current_stage(data)
-    errs = study.public_errors(data)
-    stages = []
-    for key in study.STAGES:
-        span = plan.get(key) or {}
-        mine = [p for p in panels if p["stage"] == key]
-        done = {"diag": bool(mine) and all(p.get("done") for p in mine if p["type"] == "quiz") and any(p["type"] == "quiz" for p in mine),
-                "practice": any(p["type"] == "quiz" and p.get("done") for p in mine),
-                "fix": bool(errs) and all(e["closed"] for e in errs), "check": bool(row.get("checked"))}.get(key, False)
-        stages.append({"id": key, "name": study.STAGE_RU[key], "short": study.STAGE_SHORT[key], "goal": study.STAGE_GOAL[key],
-                       "from": span.get("from"), "to": span.get("to"),
-                       "steps": span.get("steps") or [], "done": done, "panels": len(mine),
-                       "errors": sum(1 for e in errs if not e["closed"]) if key == "fix" else None})
-    rev = next((r for r in core.state.reviews.values() if task.id in (r.get("tasks") or [])), None)
-    waiting = core.store.kv_get(AWAIT) or {}
-    check = [c["q"] for c in lesson.get("check") or []] if live and waiting.get("kind") == "lesson_check" else []
-    focus = core.store.kv_get(FOCUS) or {}
-    # Своя нить сессии (D56): раньше чат урока был общим чатом с начала урока — туда попадали вечерний
-    # разбор и «ложись», если урок не закрыли. Теперь — только то, что написано в окне сессии.
-    messages = project_messages(core, task.id, limit=60, key="study")
-    item = study.learn_item_of(core, task)
-    project = core.state.projects.get(task.project or "")
-    return {
-        "task": task_view(task), "live": live, "prepared": bool(row), "topic": (lesson.get("topic") if live else row.get("topic")) or task.title,
-        "plan": (lesson.get("plan") or []) if live else [], "sources": (lesson.get("sources") or []) if live else [],
-        "note": (lesson.get("note") if live else row.get("note")) or None, "started": lesson.get("started") if live else None,
-        "focus": focus_view(core, focus) if focus.get("task_id") == task.id else None,
-        "check": check, "result": {k: row.get(k) for k in ("score", "gaps", "next_step")} if row.get("checked") else None,
-        "roadmap_node": row.get("roadmap_node", ""), "fallback": row.get("fallback", False),
-        "panels": panels, "messages": messages,
-        "asks": (LANG_ASK if bot_language(core, task) else STUDY_ASK).get(stage, STUDY_ASK["learn"]),
-        "item": {"id": item["id"], "topic": item["topic"], "kind": item.get("kind") or "theory"} if item else None,
-        "project": {"id": project["id"], "title": project["title"]} if project else None,
-        "stage": stage, "stages": stages, "route": study.route(data), "errors": errs, "error_kinds": study.ERROR_KINDS,
-        "check_asked": bool(check), "subject": lesson_mod.subject_of(task.title),
-        "note_own": study.note_own(core, (lesson.get("note") if live else row.get("note")) or None),
-        "lang": bot_language(core, task), "mined": data.get("mined") or [], "shadow": data.get("shadow") or {},
-        "lang_kinds": study.LANG_KINDS,
-        "review": {"due": rev.get("due"), "step": rev.get("step"), "status": rev.get("status")} if rev else None,
-    }
-
-
-def bot_language(core: Any, task: Any) -> str | None:
-    """Язык урока для приложения — то же правило, что у бота (Bot.lesson_language)."""
-    from arvix import lesson as lesson_mod
-    from arvix import media, study
-
-    item = study.learn_item_of(core, task)
-    return media.language_of(task.title, (item or {}).get("topic", ""), lesson_mod.subject_of(task.title))
-
-
-def study_view(core: Any, task_id: str | None = None) -> dict[str, Any]:
-    """Раздел «Обучение»: сессия (идёт или открыта), учебные блоки дня, очередь тем (общая с проектами),
-    пройденное с оценками и пробелами. В 🟥 — без цифр и без очереди (правило №5)."""
-    from arvix import projects, study
-
-    if gentle(core):
-        return {"gentle": True, "note": "Учёба подождёт. Если тянет — почитай что-нибудь по теме без плана, теста и таймера."}
-    st = core.state
-    lesson = core.store.kv_get(LESSON) or {}
-    current = task_id or lesson.get("task_id")
-    session = None
-    if current and current in st.tasks:
-        try:
-            session = session_view(core, current)
-        except ArvixError:
-            session = None
-    today = core.today()
-    day_tasks = [t for t in [*core.open_yesterday(), *st.tasks_on(today)] if t.sphere == "learning" and t.status != "cancelled"]
-    blocks = []
-    for t in day_tasks:
-        row = _lesson_row(core, t.id) or {}
-        blocks.append({**task_view(t), "lesson": bool(row), "score": row.get("score") if row.get("checked") else None,
-                       "live": lesson.get("task_id") == t.id})
-    titles = {pid: p["title"] for pid, p in st.projects.items()}
-    queue = [{**x, "kind_ru": study.LEARN_KINDS.get(x["kind"], x["kind"]), "project": titles.get(x.get("project_id") or ""),
-              "goal": (st.goals.get(x.get("goal_id") or "") or {}).get("title")}
-             for x in projects.learn_items(core) if x["status"] != "dropped"]
-    history = []
-    for x in reversed(st.lessons[-30:]):
-        task = st.tasks.get(x.get("task_id") or "")
-        history.append({"task_id": x.get("task_id"), "date": x["date"], "subject": x.get("subject", ""), "topic": x.get("topic", ""),
-                        "score": x.get("score"), "checked": bool(x.get("checked")), "gaps": x.get("gaps") or [],
-                        "next_step": x.get("next_step", ""), "status": task.status if task else None,
-                        "panels": len([p for p in (st.study.get(x.get("task_id") or "") or {}).get("panels", []) if not p.get("hidden")])})
-    subjects: dict[str, dict[str, Any]] = {}
-    for x in st.lessons:  # по предметам — только факты: сколько блоков и средняя оценка проверок
-        s = subjects.setdefault(x.get("subject") or "—", {"subject": x.get("subject") or "—", "lessons": 0, "scores": []})
-        s["lessons"] += 1
-        if x.get("score") is not None:
-            s["scores"].append(x["score"])
-    from arvix import review
-
-    return {
-        "gentle": False, "session": session, "blocks": blocks, "queue": queue, "history": history, "review": review.public(core),
-        "subjects": [{"subject": s["subject"], "lessons": s["lessons"], "avg": round(sum(s["scores"]) / len(s["scores"])) if s["scores"] else None}
-                     for s in sorted(subjects.values(), key=lambda s: -s["lessons"])],
-        "projects": [{"id": p["id"], "title": p["title"]} for p in st.projects.values() if p["status"] == "active"],
-        "kinds": study.LEARN_KINDS, "panel_types": study.PANEL_RU, "vault": obsidian_vault(core),
-    }
-
-
-def study_open(task_id: str | None = None, item_id: str | None = None, minutes: int = 45) -> Any:
-    """«Открыть сессию»: тема из очереди → учебный блок в свободное окно (projects.learn_start); у блока
-    готовится план с окнами (голова). Таймер не стартует — ▶ на рабочем столе. Идёт урок по другой
-    задаче — не трогаем: у бота один урок за раз, его проверку нельзя потерять."""
-    def run(bot: Any) -> dict[str, Any]:
-        from arvix import projects
-
-        core = bot.core
-        lesson = core.store.kv_get(LESSON) or {}
-        busy = lesson.get("task_id") if lesson.get("started") or (core.store.kv_get(AWAIT) or {}).get("kind") == "lesson_check" else None
-
-        def refuse() -> None:
-            other = core.state.tasks.get(busy)
-            raise ArvixError(f"Сейчас идёт урок «{other.title if other else lesson.get('topic')}» — сначала закончи его: "
-                             "открой его здесь и ответь на проверку")
-        if item_id:
-            item = core.state.learn_items.get(item_id) or {}
-            if busy and item.get("task_id") != busy:
-                refuse()  # до learn_start: раньше блок вставал в план, а сессия не открывалась (D61, стенд)
-            task = projects.learn_start(core, item_id, minutes=minutes, source="web")
-        else:
-            task = core.resolve_task(task_id)
-        if task.sphere != "learning":
-            raise ArvixError("Сессия бывает только у учебного блока")
-        if not task.is_open and not (lesson.get("task_id") == task.id):
-            return {"task_id": task.id, "queued": False}  # прошлая сессия — только посмотреть, даже когда идёт другой урок
-        if busy and busy != task.id:
-            refuse()
-        bot.refresh_panel()
-        return {"task_id": task.id, "queued": not bot.lesson_pending(task.id)}
-    return run
-
-
-def study_chat(task_id: str, text: str) -> Any:
-    """Сообщение из окна учебной сессии: ответ Arvix — в её нить, не в общий чат (D56)."""
-    def run(bot: Any) -> None:
-        bot.core.refresh()
-        task = bot.core.resolve_task(task_id)
-        with bot.via("web", SINK), bot.in_study(task.id), bot.incoming():
-            bot.on_text(text)
-    return run
-
-
-def study_prepare(task_id: str) -> Any:
-    """Фоном (голова думает): план урока с окнами, без таймера."""
-    def run(bot: Any) -> None:
-        task = bot.core.resolve_task(task_id)
-        with bot.via("web", SINK), bot.in_study(task.id):  # план — в нить сессии: на столе он уже есть, общий чат не засоряем
-            if task.is_open and not bot.lesson_pending(task.id):
-                bot.prepare_lesson(task)
-    return run
-
-
-def study_op(task_id: str, op: str, body: dict[str, Any]) -> Any:
-    """answer · stage · fix · panel · hide — этапы и окна сессии. Ответ на тест и похожую задачу проверяет код сразу."""
-    def run(bot: Any) -> dict[str, Any]:
-        from arvix import study
-
-        core = bot.core
-        out: dict[str, Any] = {}
-        if op == "answer":
-            answers = body.get("answers")
-            if not isinstance(answers, list):
-                raise ArvixError("Нет ответов")
-            out = study.answer_quiz(core, str(body.get("panel") or ""), answers, task_ref=task_id, source="web")
-            task = core.resolve_task(task_id)
-            lesson = core.store.kv_get(LESSON) or {}
-            if lesson.get("task_id") == task.id and not lesson.get("started") and task.is_open:
-                with bot.via("web", SINK), bot.in_study(task.id):
-                    bot.begin_lesson(task)  # ответил на задачи — значит, начал: таймер блока идёт сам, без ▶
-        elif op == "stage":
-            out = {"stage": study.set_stage(core, str(body.get("stage") or ""), task_ref=task_id, source="web")}
-        elif op == "fix":
-            twin = body.get("twin") if "twin" in body else None
-            key = str(body.get("key") or "")
-            study.fix_error(core, key, task_ref=task_id, kind=body.get("kind") or None, twin=twin, done=bool(body.get("done")), source="web")
-            # наружу — публичный вид: ответ похожей задачи виден только после попытки
-            out = {"fixed": next(e for e in study.public_errors(study.session_of(core, core.resolve_task(task_id).id)) if e["key"] == key)}
-        elif op == "panel":
-            raw = body.get("panel")
-            if not isinstance(raw, dict) or raw.get("type") not in ("video", "note", "sources"):
-                raise ArvixError("Сам можно добавить видео, заметку или источники; тест и доску попроси у Arvix")
-            out = {"panel": study.add_panel(core, raw, task_ref=task_id, by="me", source="web")}
-        elif op == "hide":
-            out = {"panel": study.hide_panel(core, str(body.get("panel") or ""), task_ref=task_id, source="web")}
-        else:
-            raise ArvixError(f"Неизвестное действие сессии: {op}")
-        return {**out, "session": session_view(core, task_id)}
-    return run
-
-
-def study_check(task_id: str) -> Any:
-    """«К проверке»: таймер этого блока останавливается (прошедшие минуты — в журнал), вопросы — в нить сессии."""
-    def run(bot: Any) -> dict[str, Any]:
-        core = bot.core
-        task = core.resolve_task(task_id)
-        lesson = core.store.kv_get(LESSON) or {}
-        if lesson.get("task_id") != task.id:
-            raise ArvixError("Проверка бывает только у идущей сессии")
-        with bot.via("web", SINK), bot.in_study(task.id):
-            if (core.store.kv_get(FOCUS) or {}).get("task_id") == task.id:
-                bot.stop_focus()
-            if (core.store.kv_get(AWAIT) or {}).get("kind") != "lesson_check":
-                bot.send_lesson_check(early=True)
-        return {"session": session_view(core, task.id)}
-    return run
-
-
-def study_upload(task_id: str, data: bytes, name: str, mime: str, caption: str) -> Any:
-    """Файл в чат сессии — фото решения из тетради, скриншот, PDF: Arvix смотрит его с блоком <study>.
-    Ролик или аудио на уроке языка (D61) — в плеер на стол, с субтитрами из распознавания и диктантом."""
-    def run(bot: Any) -> None:
-        from arvix import files
-
-        bot.core.refresh()
-        task = bot.core.resolve_task(task_id)
-        with bot.via("web", SINK), bot.in_study(task.id), bot.incoming():
-            if files.classify(name, mime) in ("audio", "video") and bot.lesson_language(task):
-                bot.study_media(task, data, name, mime)
-            else:
-                bot.on_file({"file_name": name, "mime_type": mime}, caption=caption, data=data)
-    return run
-
-
-def study_media_op(task_id: str, op: str, body: dict[str, Any]) -> Any:
-    """Язык через видео (D61): transcript {panel, text} · mine {panel, i, word} · shadow {panel, i, heard}
-    (распознавание уже сделано в потоке HTTP) · video {panel} (ролики уже найдены там же)."""
-    def run(bot: Any) -> dict[str, Any]:
-        from arvix import study
-
-        core = bot.core
-        task = core.resolve_task(task_id)
-        panel, i = str(body.get("panel") or ""), body.get("i")
-        if op == "transcript":
-            out: dict[str, Any] = {"panel": study.add_transcript(core, panel, text=str(body.get("text") or "")[:300_000], task_ref=task.id)}
-        elif op == "mine":
-            out = {"mined": study.mine(core, panel, i, str(body.get("word") or ""), task_ref=task.id)}
-        elif op == "shadow":
-            out = {"shadow": study.shadow(core, panel, i, str(body.get("heard") or ""), task_ref=task.id)}
-        elif op == "pick":
-            out = {"panel": study.pick_video(core, panel, body.get("j"), task_ref=task.id)}
-        elif op == "video":
-            raw = body.get("panel")
-            if not isinstance(raw, dict):
-                raise ArvixError("Нет видео")
-            out = {"panel": study.add_panel(core, {**raw, "type": "video"}, task_ref=task.id, by="me", source="web")}
-        else:
-            raise ArvixError(f"Неизвестное действие: {op}")
-        return {**out, "session": session_view(core, task.id)}
-    return run
-
-
-def study_voice(task_id: str, audio: bytes, filename: str) -> Any:
-    """Голосовое в чат сессии: распознать и ответить в нити урока (как вопрос текстом)."""
-    def run(bot: Any) -> None:
-        from arvix.stt import STTError
-
-        task = bot.core.resolve_task(task_id)
-        with bot.via("web", SINK), bot.in_study(task.id), bot.incoming():
-            if not bot.stt.enabled:
-                bot.log_in("[голосовое — распознавание не настроено]")
-                bot.send(tpl.VOICE_OFF)
-                return
-            try:
-                text = bot.stt.transcribe(audio, filename=filename, browser=True)
-            except STTError as exc:
-                bot.log_in("[голосовое — не распознано]")
-                bot.send(f"Голосовое не распознал: {exc}. Напиши текстом.")
-                return
-            if text.strip():
-                bot.core.refresh()
-                bot.on_text(text, voice=True)
-    return run
-
-
-def review_start() -> Any:
-    """«Начать повторение»: задачи по темам, которым пора (голова; молчит — банк сессий). Ждём ответа здесь же."""
-    def run(bot: Any) -> dict[str, Any]:
-        from arvix import review
-
-        if gentle(bot.core):
-            raise ArvixError("Сейчас без учёбы")
-        with bot.via("web", SINK):
-            bot.prepare_review()
-        return {"review": review.public(bot.core)}
-    return run
-
-
-def review_op(op: str, body: dict[str, Any]) -> Any:
-    def run(bot: Any) -> dict[str, Any]:
-        from arvix import review
-
-        core = bot.core
-        if op == "answer":
-            answers = body.get("answers")
-            if not isinstance(answers, list):
-                raise ArvixError("Нет ответов")
-            review.answer(core, answers, source="web")
-        elif op == "drop":
-            review.drop(core, str(body.get("review") or ""), source="web")
-        else:
-            raise ArvixError(f"Неизвестное действие повторения: {op}")
-        return {"review": review.public(core)}
-    return run
-
-
-def study_learn(body: dict[str, Any]) -> Any:
-    """Тема в общую очередь «учиться» из раздела «Обучение»: та же, что из проекта (projects.set_learn)."""
-    def run(bot: Any) -> dict[str, Any]:
-        from arvix import projects
-
-        item = projects.set_learn(bot.core, str(body.get("topic") or ""), item_id=body.get("item") or None,
-                                  project_ref=body.get("project") or None, why=str(body.get("why") or ""),
-                                  status=body.get("status") or None, kind=body.get("kind") or None, source="web")
-        return {"item": item, "study": study_view(bot.core)}
-    return run
 
 
 # --- изменения: выполняются в главном потоке (fn(bot)) ------------------------------------
@@ -821,8 +280,7 @@ def task_photo(task_id: str, data: bytes, name: str, mime: str) -> Any:
 def focus_start(minutes: int, task_id: str | None, topic: str | None = None) -> Any:
     def run(bot: Any) -> dict[str, Any]:
         with bot.via("web", SINK):
-            # Человек сам выбрал минуты — это таймер, а не урок (урок — кнопкой ▶ у учебной задачи).
-            bot.start_focus(minutes, task_id or None, lesson=True, topic=(topic or "").strip() or None)
+            bot.start_focus(minutes, task_id or None, topic=(topic or "").strip() or None)
         return {"focus": focus_view(bot.core, bot.core.store.kv_get(FOCUS))}
     return run
 
@@ -940,12 +398,15 @@ def claim_pair(code: str) -> Any:
     return run
 
 
-def lesson(task_id: str) -> Any:
-    """Учебный блок из приложения: план урока (вызов головы), задача запущена, таймер."""
-    def run(bot: Any) -> None:
+def task_guide(task_id: str) -> Any:
+    """«Как сделать» из приложения (D62): голова пишет шаги по его инструментам, код проверяет и пишет в журнал.
+    В чат не уходит — шаги видны у задачи, в заметке дня и в контексте головы."""
+    def run(bot: Any) -> dict[str, Any]:
         task = bot.core.resolve_task(task_id)
-        with bot.via("web", SINK), bot.in_study(task.id):
-            bot.begin_lesson(task)
+        with bot.via("web", SINK):
+            task = bot.prepare_guide(task, source="web")
+        bot.refresh_panel()
+        return {"task": task_view(task)}
     return run
 
 

@@ -64,11 +64,11 @@ class GraphTest(ArvixCase):
         self.assertEqual(graph.link_target(vault, "Физика/Закон Ома.md"), "Закон Ома")
         self.assertEqual(graph.link_line("x [[Б|алиас]]\n", "Б"), "x [[Б|алиас]]\n")
 
-    def test_lesson_skeleton_renders_obsidian_vars_with_spaces(self) -> None:
+    def test_concept_skeleton_renders_obsidian_vars_with_spaces(self) -> None:
         from datetime import date
 
-        from arvix import lesson
-        text = lesson.skeleton("---\ncreated: {{ date:YYYY-MM-DD }}\n---\n# {{title}}\n", "Ток", "Физика", date(2026, 11, 18), ["?"], [])
+        from arvix import guide
+        text = guide.skeleton("---\ncreated: {{ date:YYYY-MM-DD }}\n---\n# {{title}}\n", "Ток", "Физика", date(2026, 11, 18), ["?"], [])
         self.assertIn("created: 2026-11-18", text)
         self.assertIn("# Ток", text)
 
