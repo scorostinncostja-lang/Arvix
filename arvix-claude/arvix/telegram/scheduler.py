@@ -145,8 +145,18 @@ class Scheduler:
         if not when:
             return
         until = self.core.at(now.date() + timedelta(days=1), self.core.rollover())
-        if when <= now < until and not self.core.sent(f"debrief:{now.date().isoformat()}"):
+        if not (when <= now < until) or self.core.sent(f"debrief:{now.date().isoformat()}"):
+            return
+        # Разбор зовёт голову. Не дошёл (бот заблокирован, сеть) — следующая попытка через час,
+        # а не на каждом тике: иначе каждые 5 с вызов модели впустую (как у ретро).
+        attempt = self.core.store.kv_get("debrief_attempt")
+        if attempt and datetime.fromisoformat(attempt) > now - RETRY_AFTER:
+            return
+        self.core.store.kv_set("debrief_attempt", now.isoformat())
+        try:
             self.bot.send_debrief()
+        except TelegramError as exc:
+            log.warning("разбор не отправлен — повтор через час: %s", exc)
 
     def sleep_question(self, now: datetime, day: Any) -> None:
         """Сон не записан, человек уже что-то сделал этим утром — спросить с догадкой (D48).
