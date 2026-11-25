@@ -541,6 +541,30 @@ class SchedulerTest(BotCase):
         self.text("не составил план")
         self.assertTrue(self.core.state.days[self.core.today()].debrief)
 
+    def test_failed_debrief_does_not_call_the_head_every_tick(self) -> None:
+        """Бот заблокирован (403): разбор не дошёл. Раньше каждый тик (5 с) снова звал голову и падал —
+        лимит подписки уходил впустую. Теперь попытка раз в час, тик не падает."""
+        from arvix.telegram.api import TelegramError
+
+        def blocked(*a: Any, **k: Any) -> int:
+            raise TelegramError("Forbidden: bot was blocked by the user")
+
+        real_send = self.api.send
+        self.api.send = blocked  # type: ignore[method-assign]
+        for second in (0, 5, 10, 15):
+            self.at(moscow(2026, 11, 2, 22, 31) + timedelta(seconds=second))
+            self.scheduler.tick()
+        debriefs = [c for c in self.brain.calls if c.get("role") == "analyst"]
+        self.assertEqual(len(debriefs), 1)
+        self.api.send = real_send  # type: ignore[method-assign]
+        self.at(moscow(2026, 11, 2, 23, 0))
+        self.scheduler.tick()
+        self.assertFalse(any("Два вопроса" in t for t in self.api.texts))  # час ещё не прошёл
+        self.at(moscow(2026, 11, 2, 23, 32))
+        self.scheduler.tick()
+        self.assertTrue(any("Два вопроса" in t for t in self.api.texts))
+        self.assertTrue(self.core.sent(f"debrief:{self.core.today().isoformat()}"))
+
     def test_missed_brief_is_not_sent_hours_later(self) -> None:
         self.core.profile_set("wake_target", "07:30")
         self.at(moscow(2026, 11, 2, 13, 0))
