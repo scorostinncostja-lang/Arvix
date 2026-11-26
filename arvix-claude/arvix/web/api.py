@@ -473,7 +473,10 @@ def note_view(core: Any, path: str) -> dict[str, Any]:
         for i, line in enumerate(text.split("\n")):
             if task := daily_note.task_at_line(core, d, line):
                 tasks[str(i)] = task_view(task)
-    return {"path": path, "text": text, "sha": sha(text), "daily": d.isoformat() if d else None, "tasks": tasks}
+    from arvix import ink
+
+    return {"path": path, "text": text, "sha": sha(text), "daily": d.isoformat() if d else None, "tasks": tasks,
+            "ink": ink.status(core, path)}
 
 
 def note_save(path: str, text: str, base_sha: str | None) -> Any:
@@ -545,6 +548,46 @@ def graph_link(a: str, b: str) -> Any:
         if new != text:
             bot.core.save_note(a_rel, new, base_sha=sha(text), source="web")
         return {"linked": True, "a": a_rel, "b": b_rel}
+    return run
+
+
+# --- конспекты от руки (D66): холст в приложении, расшифровка в фоне ---------------------------------
+
+def ink_create(folder: str, name: str) -> Any:
+    def run(bot: Any) -> dict[str, Any]:
+        from arvix import ink
+
+        return ink.create(bot.core, folder, name)
+    return run
+
+
+def ink_save(body: dict[str, Any]) -> Any:
+    def run(bot: Any) -> dict[str, Any]:
+        from arvix import ink
+
+        return ink.save(bot.core, str(body.get("path") or ""), str(body.get("rev") or ""), body.get("pages"), body.get("png"))
+    return run
+
+
+def ink_prepare(path: str) -> Any:
+    """Главный поток: какие страницы отдать голове, и своя копия головы для потока разбора."""
+    def run(bot: Any) -> tuple[Any, dict[str, Any]] | None:
+        import copy
+
+        from arvix import ink
+
+        bot.core.refresh()
+        job = ink.prepare(bot.core, path)
+        return (copy.copy(bot.brain), job) if job else None
+    return run
+
+
+def ink_apply(job: dict[str, Any], answer: dict[str, Any] | None, error: str) -> Any:
+    def run(bot: Any) -> Any:
+        from arvix import ink
+
+        bot.core.refresh()
+        return ink.apply(bot.core, job, answer, error)
     return run
 
 

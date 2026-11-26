@@ -84,6 +84,12 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 Шаги к задаче (D62): `task_guide` — `id, steps[{do, tool, min}], done, save, note, note_path` → `Task.guide`; пишет голова
 (источник `l1`, из приложения — `web`), проверяет `guide.clean`.
 
+Конспект от руки (D66, `arvix/ink.py`): `ink_saved` — `path, dir, pages, png{номер→sha картинки}, empty{номер→bool}, rev`
+(человек сохранил холст; `png` — только страницы, пришедшие в этот раз); `ink_transcribing` — `path, pages[]` (голова
+начала разбор); `ink_transcribed` — `path, ok, pages{номер→{sha, text}}, summary, error` (источник `l0`). Свёртка —
+`State.ink[path]`: страница не расшифрована, пока sha её PNG не совпал с sha расшифрованной; «разбираю» дольше 10 минут
+считается прерванным (служба перезапустилась).
+
 Учебная тема (D64): `study_focus_step` хранит ключ и видимое название темы, связанный ID задачи (если есть),
 результат, обратную связь, источник, схему, следующий шаг, заметку и дату повторения. Свёртка использует
 последний шаг темы в `State.study_focus`. События D63 остаются читаемыми.
@@ -129,7 +135,7 @@ profile{}            goals{id→}        traits{id→}       facts{id→}       
 insights[]           templates{weekday→{day_type, blocks}}                 tasks{id→Task}
 days{date→Day}       interview{qid→answer}  interview_skipped{}
 xp_total  hp  mode  mode_trigger  mentor_enabled  sos_until  zero_until
-shields[dates]  expenses[]  learning[]  safety[]  penalized{once_key}  notes{path→sha}  budget{}
+shields[dates]  expenses[]  learning[]  safety[]  penalized{once_key}  notes{path→sha}  budget{}  ink{path→страницы, расшифровка}
 reactions{message_id→{emoji, at, channel}}  read_upto  read_at
 last_user_at  last_event_id  first_date
 ```

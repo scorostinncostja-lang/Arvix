@@ -104,6 +104,11 @@ const ICON_PATHS = {
   list: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>',
   calendar: '<rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+  pen: '<path d="M12 20h9"/><path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.854z"/>',
+  marker: '<path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>',
+  eraser: '<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+  redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
   sidebar: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/>',
 };
 const icon = (name, cls = "") => `<svg class="ic${cls ? " " + cls : ""}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ""}</svg>`;
@@ -1257,7 +1262,7 @@ function notesListHtml(withCapture) {
   } else if (list) {
     const parts = state.notesDir ? state.notesDir.split("/") : [];
     html += `<div class="crumbs-row"><div class="crumbs"><button data-dir="">Хранилище</button>${parts.map((p, i) => ` / <button data-dir="${esc(parts.slice(0, i + 1).join("/"))}">${esc(p)}</button>`).join("")}</div>
-      <button class="pill" id="n-new">+ Заметка</button></div>`;
+      <span class="crumbs-actions"><button class="pill" id="n-ink-new" title="Конспект стилусом на планшете">✍ От руки</button><button class="pill" id="n-new">+ Заметка</button></span></div>`;
     html += list.dirs.map((d) => `<button class="list-item" data-dir="${esc(d.path)}"><span class="li-ic folder">${icon("folder")}</span><span class="grow">${esc(d.name)}</span><span class="muted">${icon("chevron")}</span></button>`).join("");
     html += list.files.map((f) => `<button class="list-item${on(f.path)}" data-path="${esc(f.path)}"><span class="li-ic">${icon("file")}</span><span class="grow">${esc(f.name)}</span>
       <span class="muted small">${new Date(f.modified * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}</span></button>`).join("");
@@ -1278,6 +1283,8 @@ function bindNotesList(root) {
   clear && (clear.onclick = () => { state.notesResults = null; state.notesQuery = ""; refreshNotesList(); });
   const add = root.querySelector("#n-new");
   add && (add.onclick = newNote);
+  const inkNew = root.querySelector("#n-ink-new");
+  inkNew && (inkNew.onclick = newInkNote);
   bindCapture(root);
   root.querySelectorAll("[data-dir]").forEach((b) => b.addEventListener("click", async () => {
     state.notesDir = b.dataset.dir; state.notesList = null; refreshNotesList();
@@ -1549,19 +1556,26 @@ function renderNote() {
   const n = state.note;
   const root = noteRoot();
   const doc = obsidian(n.text, n.tasks || {});
+  const props = n.ink ? doc.props.filter((p) => p.key !== "ink") : doc.props;  // служебная ссылка на папку страниц
   const folder = n.path.includes("/") ? n.path.slice(0, n.path.lastIndexOf("/")) : "Хранилище";
   root.innerHTML = `<div class="note-bar"><button id="n-back" class="note-back" title="Esc">${isWide() ? icon("x") + " Закрыть" : icon("back") + " " + esc(folder.split("/").pop())}</button>
       ${isWide() ? `<span class="note-bar-title muted small">${esc(folder)}</span>` : ""}
+      ${n.ink ? `<button id="n-ink" class="pill primary small-pill" title="Писать стилусом">✍ Писать</button>` : ""}
       <button id="n-ask" class="pill small-pill" title="Спросить Arvix про эту заметку: что с ней делать и чем">${icon("chat")} Спросить Arvix</button>
       <button id="n-edit" class="icon-btn" aria-label="Править" title="Править (E)">${icon("pencil")}</button></div>
-    <article class="obs">
+    <article class="obs${n.ink ? " ink-view" : ""}">
       <h1 class="obs-title">${esc(noteName(n.path))}</h1>
-      ${doc.props.length ? propsHtml(doc.props) : ""}
+      ${n.ink ? inkStatusHtml(n.ink) : ""}
+      ${props.length ? propsHtml(props) : ""}
       ${doc.html || `<p class="muted">Пустая заметка. ✎ — написать.</p>`}
     </article>`;
   $("#n-back").onclick = closeNote;
   $("#n-edit").onclick = () => { state.noteEdit = true; renderNote(); };
   $("#n-ask").onclick = () => askAboutNote(n.path);
+  if (n.ink) {
+    $("#n-ink").onclick = () => openInk(n.path);
+    const retry = $("#ink-retry"); if (retry) retry.onclick = () => inkRetry(n.path);
+  }
   bindNote(root);
 }
 
@@ -1604,7 +1618,7 @@ function bindNote(root = view) {
   }));
   root.querySelectorAll(".obs-prop").forEach((row) => row.addEventListener("click", () => editProp(row)));
   root.querySelectorAll(".callout.foldable > .callout-title").forEach((t) => t.addEventListener("click", () => t.parentElement.classList.toggle("folded")));
-  hydrateAssets(root);
+  hydrateAssets(root, n.ink ? n.ink.version : "");
 }
 
 /* «Спросить Arvix» (D62): чат с готовым началом — путь заметки голова откроет сама (Read) и ответит,
@@ -1749,14 +1763,433 @@ async function newNote() {
   } catch (err) { toast(err.message); }
 }
 
+// --- Конспект от руки (D66): стилус на планшете, почерк остаётся почерком -----------------------
+/* Страница — 1000×1414 единиц (A4); точки штрихов — целые десятые доли единицы, нажим — 0…1000.
+ * Холст рисует браузер; на сохранение уходят штрихи (чтобы дописать позже) и PNG изменённых страниц
+ * (их видят Obsidian и голова). «Только стилус»: перо пишет, палец листает — ладонь не оставляет следов. */
+const INK_W = 1000, INK_H = 1414, INK_EXPORT = 1.4;
+const INK_COLORS = [["#1b1f3b", "Чёрная"], ["#2346d6", "Синяя"], ["#d6334a", "Красная"], ["#1f9d55", "Зелёная"]];
+const INK_WIDTHS = [[1.3, "Тонкая"], [2.3, "Средняя"], [4, "Толстая"]];
+const INK_HL = { c: "#ffd43b", w: 20 };
+const INK_BG = { grid: "Клетка", lines: "Линейка", blank: "Чистый" };
+const INK_ERASER = 14;
+const inkKey = (path) => "arvix_ink:" + path;
+const inkPref = (key, fallback) => { try { const v = localStorage.getItem("arvix_ink_" + key); return v === null ? fallback : JSON.parse(v); } catch (_) { return fallback; } };
+const inkSetPref = (key, v) => { try { localStorage.setItem("arvix_ink_" + key, JSON.stringify(v)); } catch (_) { /* приватный режим */ } };
+const ink = { note: null, page: 0, tool: "pen", color: inkPref("color", INK_COLORS[0][0]), width: inkPref("width", 1),
+  penOnly: inkPref("pen_only", null), dirty: new Set(), undo: [], redo: [], cur: null, pointers: new Map(), pan: null,
+  raf: 0, lastPen: 0, saving: false, idle: 0, draft: 0, scale: 1, dpr: 1, el: null };
+const inkOpen = () => !!ink.el;
+
+function inkBg(ctx, bg) {
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, INK_W, INK_H);
+  ctx.lineWidth = 0.9;
+  if (bg === "grid") {
+    ctx.strokeStyle = "#d9e2ee"; ctx.beginPath();
+    for (let x = 23.8; x < INK_W; x += 23.8) { ctx.moveTo(x, 0); ctx.lineTo(x, INK_H); }
+    for (let y = 23.8; y < INK_H; y += 23.8) { ctx.moveTo(0, y); ctx.lineTo(INK_W, y); }
+    ctx.stroke();
+  } else if (bg === "lines") {
+    ctx.strokeStyle = "#cfdcec"; ctx.beginPath();
+    for (let y = 110; y < INK_H - 20; y += 38) { ctx.moveTo(0, y); ctx.lineTo(INK_W, y); }
+    ctx.stroke();
+    ctx.strokeStyle = "#f2b8c0"; ctx.beginPath(); ctx.moveTo(90, 0); ctx.lineTo(90, INK_H); ctx.stroke();
+  }
+}
+
+/* Перо — отрезки по средним точкам (гладко), толщина — от нажима. Маркер — один путь с умножением:
+ * перекрытия не темнеют, текст под ним остаётся чёрным. */
+function inkStroke(ctx, s) {
+  const p = s.p, n = p.length / 3;
+  if (!n) return;
+  const X = (i) => p[i * 3] / 10, Y = (i) => p[i * 3 + 1] / 10, P = (i) => p[i * 3 + 2] / 1000;
+  ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = s.c; ctx.fillStyle = s.c;
+  if (s.t === "hl") {
+    ctx.save(); ctx.globalCompositeOperation = "multiply"; ctx.globalAlpha = 0.55; ctx.lineWidth = s.w;
+    ctx.beginPath(); ctx.moveTo(X(0), Y(0));
+    for (let i = 1; i < n; i++) ctx.lineTo(X(i), Y(i));
+    if (n === 1) ctx.lineTo(X(0) + 0.1, Y(0));
+    ctx.stroke(); ctx.restore();
+    return;
+  }
+  const width = (i) => s.w * (0.45 + 0.85 * P(i));
+  if (n === 1) { ctx.beginPath(); ctx.arc(X(0), Y(0), width(0) / 2, 0, Math.PI * 2); ctx.fill(); return; }
+  let mx = X(0), my = Y(0);
+  for (let i = 1; i < n; i++) {
+    const nx = i < n - 1 ? (X(i) + X(i + 1)) / 2 : X(i), ny = i < n - 1 ? (Y(i) + Y(i + 1)) / 2 : Y(i);
+    ctx.beginPath(); ctx.lineWidth = (width(i - 1) + width(i)) / 2;
+    ctx.moveTo(mx, my); ctx.quadraticCurveTo(X(i), Y(i), nx, ny); ctx.stroke();
+    mx = nx; my = ny;
+  }
+}
+
+function inkPaint(ctx, page) {
+  inkBg(ctx, page.bg);
+  for (const s of page.strokes) inkStroke(ctx, s);
+}
+
+function inkPage() { return ink.note.pages[ink.page]; }
+
+function inkHtml() {
+  const n = ink.note;
+  const tool = (t, label, ic) => `<button type="button" class="ink-btn${ink.tool === t ? " on" : ""}" data-tool="${t}" title="${label}" aria-label="${label}">${ic}</button>`;
+  return `<div class="ink-bar">
+    <button type="button" class="ink-btn" id="ink-close" title="Сохранить и закрыть (Esc)" aria-label="Закрыть">${icon("x")}</button>
+    <span class="ink-title">${esc(n.title)}</span>
+    <div class="ink-tools">
+      ${tool("pen", "Ручка (P)", icon("pen"))}
+      <span class="ink-colors">${INK_COLORS.map(([c, name]) => `<button type="button" class="ink-color${ink.color === c ? " on" : ""}" data-color="${c}" style="--c:${c}" title="${name}" aria-label="${name}"></button>`).join("")}</span>
+      <span class="ink-widths">${INK_WIDTHS.map(([w, name], i) => `<button type="button" class="ink-width${ink.width === i ? " on" : ""}" data-width="${i}" title="${name}" aria-label="${name}"><i style="--d:${3 + i * 3}px"></i></button>`).join("")}</span>
+      ${tool("hl", "Маркер (H)", icon("marker"))}
+      ${tool("eraser", "Ластик (E) — стирает штрих целиком", icon("eraser"))}
+      <span class="ink-sep"></span>
+      <button type="button" class="ink-btn" id="ink-undo" title="Отменить (Ctrl+Z)" aria-label="Отменить">${icon("undo")}</button>
+      <button type="button" class="ink-btn" id="ink-redo" title="Вернуть (Ctrl+Shift+Z)" aria-label="Вернуть">${icon("redo")}</button>
+      <button type="button" class="ink-btn ink-text" id="ink-bg" title="Фон страницы">${INK_BG[inkPage().bg]}</button>
+      <button type="button" class="ink-btn ink-text${ink.penOnly ? " on" : ""}" id="ink-pen" title="Только стилус: пальцем — листать, ладонь не рисует">✍ Стилус</button>
+    </div>
+    <div class="ink-nav">
+      <button type="button" class="ink-btn" id="ink-prev" aria-label="Предыдущая страница"${ink.page ? "" : " disabled"}>‹</button>
+      <span class="ink-count">${ink.page + 1}/${n.pages.length}</span>
+      <button type="button" class="ink-btn" id="ink-next" aria-label="Следующая страница"${ink.page < n.pages.length - 1 ? "" : " disabled"}>›</button>
+      <button type="button" class="ink-btn ink-text" id="ink-add" title="Новая страница">+ стр.</button>
+    </div>
+    <button type="button" class="pill primary" id="ink-done" title="Сохранить — Arvix расшифрует">Готово</button>
+  </div>
+  <div class="ink-scroll" id="ink-scroll"><div class="ink-paper" id="ink-paper"><canvas id="ink-base"></canvas><canvas id="ink-live"></canvas></div>
+    <p class="ink-foot muted small">Стр. ${ink.page + 1} · ${ink.penOnly ? "пишет только стилус, пальцем — листать" : "пишет палец и стилус · двумя пальцами — листать"} · <span id="ink-saved">${ink.dirty.size ? "не сохранено" : "сохранено"}</span></p></div>`;
+}
+
+async function openInk(path) {
+  try {
+    const n = await api("ink?path=" + encodeURIComponent(path));
+    ink.note = n; ink.page = 0; ink.dirty = new Set(); ink.undo = []; ink.redo = []; ink.cur = null; ink.saved = n.pages.length;
+    const draft = (() => { try { return JSON.parse(localStorage.getItem(inkKey(n.path)) || "null"); } catch (_) { return null; } })();
+    if (draft && draft.rev === n.rev && Array.isArray(draft.pages) && draft.pages.length >= n.pages.length) {
+      n.pages = draft.pages; ink.dirty = new Set(draft.dirty || []); toast("Восстановил несохранённое с этого устройства");
+    }
+    ink.page = n.pages.length - 1;  // продолжить с последней страницы
+    if (!ink.el) {
+      ink.el = Object.assign(document.createElement("section"), { id: "ink", className: "ink" });
+      ink.el.setAttribute("role", "dialog"); ink.el.setAttribute("aria-label", "Конспект от руки");
+      document.body.appendChild(ink.el);
+      document.documentElement.classList.add("ink-on");
+      window.addEventListener("resize", inkLayout);
+      document.addEventListener("visibilitychange", inkHidden);
+    }
+    try { TG && TG.disableVerticalSwipes && TG.disableVerticalSwipes(); } catch (_) { /* старый клиент */ }
+    if (TG) { TG.BackButton.show(); TG.BackButton.offClick(noteBack); TG.BackButton.onClick(closeInk); }
+    inkRender();
+  } catch (err) { toast(err.message); }
+}
+
+function inkRender() {
+  const top = $("#ink-scroll") ? $("#ink-scroll").scrollTop : 0;
+  ink.el.innerHTML = inkHtml();
+  inkBind(); inkLayout();
+  $("#ink-scroll").scrollTop = top;
+}
+
+function inkLayout() {
+  if (!ink.el) return;
+  const scroll = $("#ink-scroll"), paper = $("#ink-paper"), base = $("#ink-base"), live = $("#ink-live");
+  const cssW = Math.max(280, Math.min(scroll.clientWidth - 16, 980));
+  ink.dpr = Math.min(window.devicePixelRatio || 1, 2); ink.scale = cssW / INK_W;
+  paper.style.width = cssW + "px"; paper.style.height = cssW * INK_H / INK_W + "px";
+  for (const c of [base, live]) {
+    c.width = Math.round(cssW * ink.dpr); c.height = Math.round(cssW * INK_H / INK_W * ink.dpr);
+    c.getContext("2d").setTransform(ink.dpr * ink.scale, 0, 0, ink.dpr * ink.scale, 0, 0);
+  }
+  inkRedraw();
+}
+
+function inkRedraw() {
+  const base = $("#ink-base"); if (!base) return;
+  inkPaint(base.getContext("2d"), inkPage());
+}
+
+function inkLive() {
+  ink.raf = 0;
+  const live = $("#ink-live"); if (!live) return;
+  const ctx = live.getContext("2d");
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, live.width, live.height); ctx.restore();
+  if (ink.cur && ink.cur.s) inkStroke(ctx, ink.cur.s);
+  if (ink.cur && ink.cur.eraser && ink.cur.at) {
+    ctx.beginPath(); ctx.strokeStyle = "#8a94a6"; ctx.lineWidth = 1.2;
+    ctx.arc(ink.cur.at[0], ink.cur.at[1], INK_ERASER, 0, Math.PI * 2); ctx.stroke();
+  }
+}
+const inkFrame = () => { if (!ink.raf) ink.raf = requestAnimationFrame(inkLive); };
+
+function inkPoint(e, rect) {
+  const x = (e.clientX - rect.left) / rect.width * INK_W, y = (e.clientY - rect.top) / rect.width * INK_W;
+  const pressure = e.pointerType === "pen" ? (e.pressure || 0.5) : 0.5;
+  return [Math.round(Math.max(0, Math.min(INK_W, x)) * 10), Math.round(Math.max(0, Math.min(INK_H, y)) * 10), Math.round(pressure * 1000)];
+}
+
+function inkSnapshot() {
+  ink.undo.push({ page: ink.page, strokes: inkPage().strokes.slice() });
+  if (ink.undo.length > 120) ink.undo.shift();
+  ink.redo = [];
+}
+
+function inkChanged() {
+  ink.dirty.add(ink.page);
+  const mark = $("#ink-saved"); if (mark) mark.textContent = "не сохранено";
+  clearTimeout(ink.draft);
+  ink.draft = setTimeout(() => {
+    try { localStorage.setItem(inkKey(ink.note.path), JSON.stringify({ rev: ink.note.rev, pages: ink.note.pages, dirty: [...ink.dirty] })); } catch (_) { /* места нет — сохранит сервер */ }
+  }, 800);
+  clearTimeout(ink.idle);
+  ink.idle = setTimeout(() => inkSave(false, true), 20000);  // пауза 20 с — тихо сохранить на сервер
+}
+
+/* Стёрка — штрих целиком: попал в его рамку и прошёл ближе радиуса к любому отрезку. */
+function inkErase(at) {
+  const [x, y] = at, r = INK_ERASER, page = inkPage();
+  const hit = (s) => {
+    const p = s.p, pad = r + s.w / 2;
+    if (!s.box) {
+      let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+      for (let i = 0; i < p.length; i += 3) { a = Math.min(a, p[i]); b = Math.min(b, p[i + 1]); c = Math.max(c, p[i]); d = Math.max(d, p[i + 1]); }
+      Object.defineProperty(s, "box", { value: [a / 10, b / 10, c / 10, d / 10], enumerable: false });
+    }
+    if (x < s.box[0] - pad || x > s.box[2] + pad || y < s.box[1] - pad || y > s.box[3] + pad) return false;
+    for (let i = 0; i < p.length; i += 3) {
+      const ax = p[i] / 10, ay = p[i + 1] / 10, bx = i + 3 < p.length ? p[i + 3] / 10 : ax, by = i + 3 < p.length ? p[i + 4] / 10 : ay;
+      const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy;
+      const t = len ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len)) : 0;
+      if (Math.hypot(ax + t * dx - x, ay + t * dy - y) <= pad) return true;
+    }
+    return false;
+  };
+  const keep = page.strokes.filter((s) => !hit(s));
+  if (keep.length === page.strokes.length) return;
+  if (!ink.cur.erased) { inkSnapshot(); ink.cur.erased = true; }
+  page.strokes = keep; inkRedraw(); inkChanged();
+}
+
+function inkPanMove() {
+  const ys = [...ink.pointers.values()].map((p) => p.y), y = ys.reduce((a, b) => a + b, 0) / ys.length;
+  // ладонь, лежащая на экране, пока пишет перо, страницу не двигает
+  const palm = (ink.cur && !ink.cur.touch) || performance.now() - ink.lastPen < 400;
+  if (ink.pan !== null && !palm) $("#ink-scroll").scrollTop -= y - ink.pan;
+  ink.pan = y;
+}
+
+function inkBind() {
+  const live = $("#ink-live");
+  live.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "pen") ink.lastPen = performance.now();
+    if (e.pointerType === "pen" && ink.penOnly === null) {
+      ink.penOnly = true; inkSetPref("pen_only", true);
+      toast("Стилус найден: пишет только он, пальцем — листать"); setTimeout(inkRender, 0);
+    }
+    if (e.pointerType === "touch") {
+      ink.pointers.set(e.pointerId, { y: e.clientY });
+      if (ink.penOnly || ink.pointers.size > 1) {
+        if (ink.cur && ink.cur.touch) { ink.cur = null; inkFrame(); }  // второй палец — это прокрутка, а не штрих
+        ink.pan = null; inkPanMove(); return;
+      }
+    }
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (ink.cur) return;
+    e.preventDefault();
+    try { live.setPointerCapture(e.pointerId); } catch (_) { /* уже отпущен */ }
+    const rect = live.getBoundingClientRect(), pt = inkPoint(e, rect);
+    const eraser = ink.tool === "eraser" || (e.pointerType === "pen" && (e.buttons & 32));  // обратный конец пера — ластик
+    ink.cur = { id: e.pointerId, rect, touch: e.pointerType === "touch", eraser };
+    if (eraser) { ink.cur.at = [pt[0] / 10, pt[1] / 10]; inkErase(ink.cur.at); }
+    else {
+      const hl = ink.tool === "hl";
+      ink.cur.s = { t: hl ? "hl" : "pen", c: hl ? INK_HL.c : ink.color, w: hl ? INK_HL.w : INK_WIDTHS[ink.width][0], p: pt };
+    }
+    inkFrame();
+  });
+  live.addEventListener("pointermove", (e) => {
+    if (e.pointerType === "pen") ink.lastPen = performance.now();
+    if (ink.pointers.has(e.pointerId) && (ink.penOnly || ink.pointers.size > 1)) { ink.pointers.get(e.pointerId).y = e.clientY; inkPanMove(); return; }
+    if (!ink.cur || ink.cur.id !== e.pointerId) return;
+    e.preventDefault();
+    const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    for (const ev of events.length ? events : [e]) {
+      const pt = inkPoint(ev, ink.cur.rect);
+      if (ink.cur.eraser) { ink.cur.at = [pt[0] / 10, pt[1] / 10]; inkErase(ink.cur.at); continue; }
+      const p = ink.cur.s.p, n = p.length;
+      if (Math.abs(p[n - 3] - pt[0]) + Math.abs(p[n - 2] - pt[1]) < 6) { p[n - 1] = Math.max(p[n - 1], pt[2]); continue; }  // < 0,6 ед. — та же точка
+      p.push(...pt);
+    }
+    inkFrame();
+  });
+  const end = (e) => {
+    if (ink.pointers.delete(e.pointerId)) { ink.pan = null; if (ink.pointers.size) inkPanMove(); }
+    if (!ink.cur || ink.cur.id !== e.pointerId) return;
+    const cur = ink.cur; ink.cur = null;
+    if (cur.s && e.type !== "pointercancel") {
+      inkSnapshot(); inkPage().strokes.push(cur.s);
+      inkStroke($("#ink-base").getContext("2d"), cur.s); inkChanged();
+    }
+    inkFrame();
+  };
+  live.addEventListener("pointerup", end);
+  live.addEventListener("pointercancel", end);
+  live.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  ink.el.querySelectorAll("[data-tool]").forEach((b) => b.addEventListener("click", () => { ink.tool = b.dataset.tool; haptic("soft"); inkRender(); }));
+  ink.el.querySelectorAll("[data-color]").forEach((b) => b.addEventListener("click", () => {
+    ink.color = b.dataset.color; ink.tool = "pen"; inkSetPref("color", ink.color); haptic("soft"); inkRender();
+  }));
+  ink.el.querySelectorAll("[data-width]").forEach((b) => b.addEventListener("click", () => {
+    ink.width = +b.dataset.width; if (ink.tool === "eraser") ink.tool = "pen"; inkSetPref("width", ink.width); haptic("soft"); inkRender();
+  }));
+  $("#ink-undo").onclick = () => inkUndo(ink.undo, ink.redo);
+  $("#ink-redo").onclick = () => inkUndo(ink.redo, ink.undo);
+  $("#ink-bg").onclick = () => {
+    const keys = Object.keys(INK_BG), page = inkPage();
+    page.bg = keys[(keys.indexOf(page.bg) + 1) % keys.length]; inkSetPref("bg", page.bg); inkChanged(); inkRender();
+  };
+  $("#ink-pen").onclick = () => { ink.penOnly = !ink.penOnly; inkSetPref("pen_only", ink.penOnly); toast(ink.penOnly ? "Пишет только стилус, пальцем — листать" : "Пишут палец и стилус"); inkRender(); };
+  $("#ink-prev").onclick = () => inkGo(ink.page - 1);
+  $("#ink-next").onclick = () => inkGo(ink.page + 1);
+  $("#ink-add").onclick = () => {
+    const pages = ink.note.pages;
+    if (pages.length >= 60) { toast("В одном конспекте до 60 страниц — начни новый"); return; }
+    pages.push({ bg: inkPref("bg", inkPage().bg), strokes: [] }); ink.dirty.add(pages.length - 1); inkGo(pages.length - 1);
+  };
+  $("#ink-done").onclick = async () => { if (await inkSave(true)) closeInk(true); };
+  $("#ink-close").onclick = () => closeInk();
+}
+
+function inkUndo(from, to) {
+  const step = from.pop(); if (!step) return;
+  const page = ink.note.pages[step.page];
+  to.push({ page: step.page, strokes: page.strokes.slice() });
+  page.strokes = step.strokes;
+  if (step.page !== ink.page) { ink.page = step.page; inkRender(); } else inkRedraw();
+  inkChanged(); haptic("soft");
+}
+
+function inkGo(i) {
+  if (i < 0 || i >= ink.note.pages.length) return;
+  ink.page = i; inkRender(); $("#ink-scroll").scrollTop = 0;
+}
+
+function inkPng(page) {
+  const c = document.createElement("canvas");
+  c.width = Math.round(INK_W * INK_EXPORT); c.height = Math.round(INK_H * INK_EXPORT);
+  const ctx = c.getContext("2d"); ctx.setTransform(INK_EXPORT, 0, 0, INK_EXPORT, 0, 0);
+  inkPaint(ctx, page);
+  return c.toDataURL("image/png").split(",")[1];
+}
+
+/* Сохранить: лишние пустые страницы в конце (новые) отбрасываются, PNG — только изменённых. */
+async function inkSave(transcribe, quiet = false) {
+  if (!ink.note || ink.saving) return false;
+  clearTimeout(ink.idle);
+  const n = ink.note;
+  while (n.pages.length > Math.max(1, ink.saved) && !n.pages[n.pages.length - 1].strokes.length) { n.pages.pop(); ink.dirty.delete(n.pages.length); }
+  if (ink.page >= n.pages.length) ink.page = n.pages.length - 1;
+  if (!ink.dirty.size && !transcribe) return true;
+  ink.saving = true;
+  const mark = $("#ink-saved"); if (mark) mark.textContent = "сохраняю…";
+  const send = async (rev) => {
+    const png = {};
+    for (const i of ink.dirty) if (n.pages[i]) png[i] = inkPng(n.pages[i]);
+    return api("ink", { json: { path: n.path, rev, pages: n.pages, png, transcribe } });
+  };
+  try {
+    let r;
+    try { r = await send(n.rev); }
+    catch (err) {
+      if (!(err.data && err.data.conflict) || quiet) throw err;
+      if (!confirm("Конспект изменился на другом устройстве. Сохранить версию с этого? Отмена — открыть ту версию.")) {
+        try { localStorage.removeItem(inkKey(n.path)); } catch (_) { /* нет */ }
+        ink.saving = false; await openInk(n.path); return false;
+      }
+      r = await send(err.data.sha);
+    }
+    n.rev = r.rev; n.status = r.status; ink.saved = r.pages.length; ink.dirty.clear();
+    try { localStorage.removeItem(inkKey(n.path)); } catch (_) { /* нет */ }
+    for (const key of [...assetCache.keys()]) if (key.startsWith(n.dir + "/")) { URL.revokeObjectURL(assetCache.get(key)); assetCache.delete(key); }
+    const m2 = $("#ink-saved"); if (m2) m2.textContent = "сохранено";
+    if (!quiet) notify("success");
+    return true;
+  } catch (err) {
+    const m3 = $("#ink-saved"); if (m3) m3.textContent = "не сохранено";
+    if (!quiet) { notify("error"); toast(err.message); }
+    return false;
+  } finally { ink.saving = false; }
+}
+
+function inkHidden() { if (document.visibilityState === "hidden" && ink.dirty.size) inkSave(false, true); }
+
+async function closeInk(saved = false) {
+  if (!ink.el) return;
+  if (!saved && ink.dirty.size && !(await inkSave(false)) && !confirm("Не сохранилось. Закрыть? Черновик останется на этом устройстве.")) return;
+  const path = ink.note.path;
+  clearTimeout(ink.idle); clearTimeout(ink.draft);
+  window.removeEventListener("resize", inkLayout);
+  document.removeEventListener("visibilitychange", inkHidden);
+  ink.el.remove(); ink.el = null; ink.note = null; ink.pointers.clear(); ink.cur = null;
+  document.documentElement.classList.remove("ink-on");
+  try { TG && TG.enableVerticalSwipes && TG.enableVerticalSwipes(); } catch (_) { /* старый клиент */ }
+  if (TG) TG.BackButton.offClick(closeInk);
+  if (state.tab !== "notes") setTab("notes");
+  await openNote(path, { keepScroll: true });
+  if (saved) toast("Сохранено. Arvix расшифрует в фоне — почерк останется почерком");
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!inkOpen()) return;
+  e.stopImmediatePropagation();
+  const mod = e.ctrlKey || e.metaKey;
+  if (e.key === "Escape") { e.preventDefault(); closeInk(); }
+  else if (mod && e.code === "KeyZ") { e.preventDefault(); e.shiftKey ? inkUndo(ink.redo, ink.undo) : inkUndo(ink.undo, ink.redo); }
+  else if (mod && e.code === "KeyY") { e.preventDefault(); inkUndo(ink.redo, ink.undo); }
+  else if (mod && e.code === "KeyS") { e.preventDefault(); inkSave(false); }
+  else if (!mod && !e.altKey && { KeyP: "pen", KeyH: "hl", KeyE: "eraser" }[e.code]) { ink.tool = { KeyP: "pen", KeyH: "hl", KeyE: "eraser" }[e.code]; inkRender(); }
+  else if (!mod && (e.code === "PageDown" || e.code === "ArrowRight")) inkGo(ink.page + 1);
+  else if (!mod && (e.code === "PageUp" || e.code === "ArrowLeft")) inkGo(ink.page - 1);
+}, true);
+
+/* Новый конспект от руки — в открытой папке (в корне — в папке конспектов из настроек). */
+async function newInkNote() {
+  const d = new Date();
+  const name = prompt("Название конспекта", `Конспект ${d.toLocaleDateString("ru-RU")}`);
+  if (!name || !name.trim()) return;
+  try {
+    const n = await api("ink/new", { json: { dir: state.notesDir, name: name.trim() } });
+    state.notesList = null;
+    await openInk(n.path);
+  } catch (err) { toast(err.message); }
+}
+
+/* Строка над рукописной заметкой: идёт ли разбор, что не расшифровано, кнопка повтора. */
+function inkStatusHtml(st) {
+  if (!st) return "";
+  let line;
+  if (st.pending) line = `<span class="spin"></span> Arvix расшифровывает страницы…`;
+  else if (st.error && st.stale.length) line = `⚠ Не расшифровал: ${esc(st.error)} <button class="pill small-pill" id="ink-retry">Повторить</button>`;
+  else if (st.stale.length) line = `${st.stale.length} ${plural(st.stale.length, "страница", "страницы", "страниц")} без расшифровки <button class="pill small-pill" id="ink-retry">Расшифровать</button>`;
+  else if (st.pages) line = `✓ Arvix прочитал${st.summary ? ": " + esc(st.summary) : ""} · текст — в «Расшифровке» внизу`;
+  else line = `Пока пусто — нажми «✍ Писать»`;
+  return `<div class="ink-status muted small">${line}</div>`;
+}
+
+async function inkRetry(path) {
+  try { await api("ink/transcribe", { json: { path } }); state.note.ink = { ...state.note.ink, pending: true, error: "" }; renderNote(); }
+  catch (err) { toast(err.message); }
+}
+
 // --- вложения ![[…]]: картинка грузится с ключом в заголовке, а не в URL -----------------------
 const assetCache = new Map();
-function hydrateAssets(root) {
+function hydrateAssets(root, version = "") {
   root.querySelectorAll("[data-asset]").forEach(async (el) => {
     const path = el.dataset.asset;
     try {
       if (!assetCache.has(path)) {
-        const res = await fetch("/api/file?path=" + encodeURIComponent(path), { headers: authHeaders() });
+        // version — у страниц конспекта от руки: тот же файл после дописывания не берётся из кэша браузера
+        const res = await fetch("/api/file?path=" + encodeURIComponent(path) + (version ? "&v=" + version : ""), { headers: authHeaders() });
         if (!res.ok) throw new Error();
         assetCache.set(path, URL.createObjectURL(await res.blob()));
       }
@@ -2040,6 +2473,11 @@ function onChange(ev) {
         if (last && last.id > state.seen && last.who === "arvix") $("#chat-dot").classList.remove("hidden");
         if (state.tab === "today") renderToday();
         if (state.tab === "progress") { state.history = await api("history?days=30"); renderProgress(); }
+        if (state.tab === "notes" && state.note && state.note.ink && !state.noteEdit && !inkOpen()) {
+          const r = await api("note?path=" + encodeURIComponent(state.note.path));  // идёт расшифровка — статус и текст обновятся сами
+          if (state.note && r.path === state.note.path && !state.noteEdit && !inkOpen()
+              && (r.sha !== state.note.sha || JSON.stringify(r.ink) !== JSON.stringify(state.note.ink))) { state.note = r; renderNote(); }
+        }
       }
     } catch (err) { if (err.auth) renderLogin(); }
   }, 250);
@@ -2051,6 +2489,7 @@ function onChange(ev) {
  * Ctrl+S — сохранить, Esc — закрыть окно, заметку или разговор. На телефоне клавиатуры нет — ничего не мешает. */
 const TABS = ["today", "chat", "notes", "progress", "study"];
 document.addEventListener("keydown", (e) => {
+  if (inkOpen()) return;  // у холста свои клавиши
   const typing = e.target instanceof Element && !!e.target.closest("input, textarea, select, [contenteditable]");
   if ((e.ctrlKey || e.metaKey) && e.code === "KeyS" && $("#e-text")) { e.preventDefault(); saveEditor(); return; }
   if (e.key === "Escape") {

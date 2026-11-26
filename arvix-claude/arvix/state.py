@@ -100,6 +100,7 @@ class State:
     expenses: list[dict[str, Any]] = field(default_factory=list)
     learning: list[dict[str, Any]] = field(default_factory=list)
     study_focus: dict[str, dict[str, Any]] = field(default_factory=dict)
+    ink: dict[str, dict[str, Any]] = field(default_factory=dict)  # конспекты от руки (D66): путь заметки → страницы и расшифровка
     safety: list[dict[str, Any]] = field(default_factory=list)
     notes: dict[str, str] = field(default_factory=dict)  # заметки Arvix: путь → хэш последней записи
     budget: dict[str, Any] = field(default_factory=dict)
@@ -195,6 +196,25 @@ class State:
 
     def _on_study_focus_step(self, ev: Event, p: dict, day: Day) -> None:
         self.study_focus[p["topic"]] = {**p, "revision": ev.id}
+
+    def _on_ink_saved(self, ev: Event, p: dict, day: Day) -> None:
+        entry = self.ink.setdefault(p["path"], {"png": {}, "text": {}})
+        entry.update(dir=p.get("dir"), pages=int(p.get("pages") or 0), rev=p.get("rev"), empty=dict(p.get("empty") or {}),
+                     png={**entry.get("png", {}), **(p.get("png") or {})})
+
+    def _on_ink_transcribing(self, ev: Event, p: dict, day: Day) -> None:
+        entry = self.ink.setdefault(p["path"], {"png": {}, "text": {}})
+        entry.update(pending=True, pending_at=ev.at.isoformat())
+
+    def _on_ink_transcribed(self, ev: Event, p: dict, day: Day) -> None:
+        entry = self.ink.setdefault(p["path"], {"png": {}, "text": {}})
+        entry["pending"] = False
+        if p.get("ok"):
+            entry["text"] = {**entry.get("text", {}), **(p.get("pages") or {})}
+            entry["summary"] = p.get("summary") or entry.get("summary") or ""
+            entry["error"] = ""
+        else:
+            entry["error"] = p.get("error") or "не расшифровал"
 
     def _on_task_guide(self, ev: Event, p: dict, day: Day) -> None:
         if task := self._task(p):

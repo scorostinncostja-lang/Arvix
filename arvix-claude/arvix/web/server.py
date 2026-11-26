@@ -20,6 +20,8 @@ POST /api/tasks {…} · /api/tasks/<id>/<op> · /api/tasks/<id>/photo (фото
     · /api/tasks/<id>/guide — «Как сделать» (D62): шаги в инструментах человека, пишет голова, ждём здесь же
 POST /api/focus {minutes, task | topic} · /api/focus/<pause|resume|stop|cancel> · /api/focus/note {event, note}
 POST /api/capture {text}      мысль в Inbox
+GET  /api/ink?path=…          конспект от руки (D66): страницы со штрихами · POST /api/ink {path, rev, pages, png}
+POST /api/ink/new {dir, name} · /api/ink/transcribe {path} — расшифровка в фоне (поток), запись — главным потоком
 POST /api/note {path, text, sha} · /api/note/new {dir, name} · /api/note/toggle {path, line, sha} · /api/note/link {a, b}
                               правка заметки человеком; файл изменился после открытия — 409 и текущий текст
 """
@@ -67,6 +69,8 @@ class WebApp:
         self.hub = hub
         self.core = core or Core(cfg, Store(cfg.db_path, shared=True))
         self.lock = threading.RLock()
+        self._ink_busy: set[str] = set()
+        self._ink_again: set[str] = set()
         tg = cfg.section("telegram")
         self.bot_token = str(tg.get("token") or "")
         self.owner_id = int(tg.get("owner_id") or 0)
@@ -85,6 +89,42 @@ class WebApp:
             focus = self.core.store.kv_get(api.FOCUS)
         raw = json.dumps([row[0], focus, self.hub.busy], default=str, sort_keys=True)
         return hashlib.sha1(raw.encode()).hexdigest()[:12]
+
+    def transcribe_ink(self, path: str) -> None:
+        """Расшифровка конспекта от руки (D66) в своём потоке: модель думает 30–90 с, а чат и
+        приложение в это время работают. Готовит и записывает главный поток; на один конспект —
+        один поток, а страницы, дописанные во время разбора, он заберёт следующим проходом."""
+        with self.lock:
+            if path in self._ink_busy:
+                self._ink_again.add(path)
+                return
+            self._ink_busy.add(path)
+
+        def work() -> None:
+            try:
+                for _ in range(5):
+                    prepared = self.hub.call(api.ink_prepare(path), timeout=60)
+                    if prepared is None:
+                        with self.lock:
+                            if path not in self._ink_again:
+                                return
+                            self._ink_again.discard(path)
+                        continue
+                    from arvix import ink
+
+                    brain, job = prepared
+                    answer, error = ink.ask(brain, job)
+                    status = self.hub.call(api.ink_apply(job, answer, error), timeout=120)
+                    if answer is None or (status or {}).get("error"):
+                        return
+            except Exception:  # noqa: BLE001 — сбой разбора не роняет сервер; статус покажет «не расшифровано»
+                log.exception("расшифровка конспекта %s", path)
+            finally:
+                with self.lock:
+                    self._ink_busy.discard(path)
+                    self._ink_again.discard(path)
+
+        threading.Thread(target=work, name="ink", daemon=True).start()
 
     def vault(self) -> Any:
         from arvix.vault import Vault
@@ -178,6 +218,11 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 elif url.path == "/api/note":
                     app.vault()
                     self.send_json(app.read(lambda c: api.note_view(c, query.get("path") or "")))
+                elif url.path == "/api/ink":
+                    from arvix import ink
+
+                    app.vault()
+                    self.send_json(app.read(lambda c: ink.view(c, query.get("path") or "")))
                 elif url.path == "/api/file":
                     self.send_asset(app.vault().asset(query.get("path") or ""))
                 elif url.path == "/api/graph":
@@ -296,6 +341,21 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     if not text:
                         raise ArvixError("Пустая мысль")
                     self.send_json(app.hub.call(api.capture(text)))
+                elif parts[:1] == ["ink"]:
+                    app.vault()
+                    body = self.body_json()
+                    if parts == ["ink"]:
+                        result = app.hub.call(api.ink_save(body), timeout=60, label="сохраняю конспект")
+                        if body.get("transcribe"):
+                            app.transcribe_ink(result["path"])
+                        self.send_json(result)
+                    elif parts == ["ink", "new"]:
+                        self.send_json(app.hub.call(api.ink_create(str(body.get("dir") or ""), str(body.get("name") or ""))))
+                    elif parts == ["ink", "transcribe"]:
+                        app.transcribe_ink(str(body.get("path") or ""))
+                        self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
+                    else:
+                        self.fail(HTTPStatus.NOT_FOUND, "Нет такого адреса")
                 elif parts[:1] == ["note"]:
                     app.vault()
                     body = self.body_json()
