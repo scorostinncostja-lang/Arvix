@@ -408,6 +408,22 @@ def claim_pair(code: str) -> Any:
     return run
 
 
+def study_transcribe(audio: bytes, filename: str) -> Any:
+    def run(bot: Any) -> dict[str, Any]:
+        from arvix.stt import STTError
+
+        if not bot.stt.enabled:
+            raise ArvixError("Распознавание голоса выключено. Введи свой ход текстом.")
+        try:
+            text = bot.stt.transcribe(audio, filename=filename, browser=True).strip()
+        except STTError as exc:
+            raise ArvixError(f"Запись не разобрал: {exc}") from exc
+        if not text:
+            raise ArvixError("В записи не разобрал слов.")
+        return {"text": text[:3000]}
+    return run
+
+
 def task_study(task_id: str, body: dict[str, Any]) -> Any:
     def run(bot: Any) -> dict[str, Any]:
         task = bot.core.resolve_task(task_id)

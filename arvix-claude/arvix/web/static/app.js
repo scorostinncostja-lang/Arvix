@@ -492,6 +492,50 @@ function drawStudyTriangle(root) {
   draw();
 }
 
+function bindStudyRecorder(button, input) {
+  let stop;
+  button.onclick = async () => {
+    if (stop) { stop(); return; }
+    button.disabled = true;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!button.isConnected || $("#sheet").classList.contains("hidden")) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const type = ["audio/ogg", "audio/webm", "audio/mp4"].find((format) => MediaRecorder.isTypeSupported(format));
+      const recording = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+      const audio = [];
+      const active = () => button.isConnected && !$("#sheet").classList.contains("hidden");
+      stop = () => { if (recording.state === "recording") recording.stop(); };
+      recording.ondataavailable = (event) => { if (event.data.size) audio.push(event.data); };
+      recording.onstop = async () => {
+        clearInterval(watch);
+        stream.getTracks().forEach((track) => track.stop());
+        stop = null;
+        if (!active()) return;
+        button.disabled = true;
+        button.textContent = "Распознаю…";
+        try {
+          const blob = new Blob(audio, { type: recording.mimeType || "audio/webm" });
+          if (!blob.size) throw new Error("Пустая запись");
+          const r = await api("study-transcribe", { body: blob, headers: { "Content-Type": blob.type } });
+          if (active()) input.value = [input.value.trim(), r.text].filter(Boolean).join(" ").slice(0, 3000);
+        } catch (err) { if (active()) toast(err.message); }
+        finally { button.disabled = false; button.textContent = "Надиктовать"; }
+      };
+      recording.start();
+      button.textContent = "Готово, распознать";
+      const started = Date.now();
+      const watch = setInterval(() => { if (!active() || Date.now() - started >= 60000) stop?.(); }, 300);
+    } catch (err) {
+      stream?.getTracks().forEach((track) => track.stop());
+      toast(err.message);
+    } finally { button.disabled = false; }
+  };
+}
+
 function openStudy(id) {
   let step;
   const task = findTask(id);
@@ -508,6 +552,7 @@ function openStudy(id) {
         <textarea id="study-attempt" rows="3" maxlength="3000" placeholder="Первый шаг или объяснение своими словами">${esc(draft)}</textarea>
         <div class="pills">
           <button class="pill primary" data-study="attempt">Проверить</button>
+          ${navigator.mediaDevices?.getUserMedia && window.MediaRecorder ? '<button class="pill" id="study-mic">Надиктовать</button>' : ""}
           <button class="pill" data-study="hint">Нужна подсказка</button>
           <button class="pill" data-study="solution">Показать разбор</button>
           <button class="pill" data-study="finish">Подвести итог</button>
@@ -523,6 +568,8 @@ function openStudy(id) {
       <p class="muted small" id="study-status" role="status"></p>
     </div>`, (root) => {
       drawStudyTriangle(root);
+      const mic = root.querySelector("#study-mic");
+      if (mic) bindStudyRecorder(mic, root.querySelector("#study-attempt"));
       root.querySelectorAll("[data-study]").forEach((button) => {
         button.onclick = () => submit(button.dataset.study);
       });

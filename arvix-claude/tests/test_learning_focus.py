@@ -75,3 +75,12 @@ class LearningFocusTest(BotCase):
         self.at(self.core.now() + timedelta(days=1))
         next_task = self.start_learning()
         self.assertEqual(self.step(next_task)["stage"], "practice")
+
+    def test_voice_transcription_is_a_draft(self):
+        from tests.test_telegram import FakeSTT
+
+        self.bot.stt = FakeSTT("  скорость равна нулю  ")
+        self.assertEqual(api.study_transcribe(b"voice", "voice.webm")(self.bot),
+                         {"text": "скорость равна нулю"})
+        self.assertEqual(self.brain.calls, [])
+        self.assertEqual(self.core.state.study_focus, {})
