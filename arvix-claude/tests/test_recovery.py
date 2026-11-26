@@ -156,15 +156,15 @@ class BotRecoveryTest(BotCase):
         self.assertEqual(self.core.state.mode, "red")  # модель режим не меняет
         self.assertEqual(self.api.sent[-1][1], tpl.red_buttons(refresh=False))
 
-    def test_advice_becomes_a_task_in_the_plan(self) -> None:
-        """«Что советуешь» → задача в плане, а не «скажи, что берёшь»."""
+    def test_advice_does_not_create_a_task_in_the_plan(self) -> None:
+        """Просьба о совете не выдаёт модели разрешение изменить план."""
         self.brain.answers.append({
             "reply": "Начинаем сейчас: 25 минут математики.",
             "actions": [{"type": "add_task", "title": "Математика: задание 21", "start": "10:05", "duration_min": 25, "sphere": "learning"}],
         })
         self.text("Ну так напиши, что нужно и что ты реально советуешь")
         titles = [t.title for t in self.core.state.tasks_on(self.core.today())]
-        self.assertIn("Математика: задание 21", titles)
+        self.assertNotIn("Математика: задание 21", titles)
         self.assertEqual(self.brain.calls[-1]["effort"], "medium")
 
     def test_system_prompt_is_static_and_the_rest_goes_to_the_request(self) -> None:

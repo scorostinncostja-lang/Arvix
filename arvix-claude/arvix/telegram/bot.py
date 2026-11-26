@@ -21,7 +21,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
-from arvix import guide, interview, load, rules, safety, tools, weather
+from arvix import action_intent, guide, interview, load, rules, safety, tools, weather
 from arvix.memory import Memory, export_transcripts
 from arvix.brain import (
     DEBRIEF_SCHEMA,
@@ -29,6 +29,7 @@ from arvix.brain import (
     RETRO_SCHEMA,
     TEMPLATES_SCHEMA,
     UI_ACTIONS,
+    ACTION_TYPES,
     VOICE_SCHEMA,
     Brain,
     apply_actions,
@@ -504,6 +505,10 @@ class Bot:
         if waiting and sent_at and sent_at < waiting.get("asked_at", 0):
             if text == previous:
                 return  # повтор, отправленный, пока бот был без сети
+            self.converse(text, voice=voice)
+            return
+        if (waiting and waiting.get("kind") in {"report", "partial", "fail_reason", "focus_note"}
+                and action_intent.asks_for_conversation(text)):
             self.converse(text, voice=voice)
             return
         if waiting and self.on_await(waiting, text):
@@ -1367,6 +1372,11 @@ class Bot:
         history = self.history(exclude_last=text)  # до блока <messenger>: реакции из истории в нём не повторяются
         if seen := self.messenger_block():
             extra += "\n" + seen
+        allowed = action_intent.allowed_actions(text, ACTION_TYPES)
+        blocked = sorted(set(ACTION_TYPES) - allowed)
+        if blocked:
+            extra += ("\n<action_permissions>На эту реплику код отклонит: " + ", ".join(blocked)
+                      + ". Не включай их в actions, не обещай выполнение и не пересказывай это ограничение пользователю.</action_permissions>")
         # Статичная часть — системный промпт (из кэша), всё живое — в запросе (D40).
         system, prompt = voice_prompt(core, channel=self.channel if self.channel == "telegram" else "telegram",
                                       message=text, history=history, extra=extra.strip())
@@ -1399,11 +1409,19 @@ class Bot:
                     result, reply = retry, retry["reply"].strip()
                 else:
                     reply += "\n\n(Первоисточник не назван — сверь тему с учебником или официальной документацией.)"
-        actions = result.get("actions") or []
+        proposed = [action for action in (result.get("actions") or []) if isinstance(action, dict)]
+        actions = [action for action in proposed if action.get("type") in allowed]
+        blocked_changes = len(actions) != len(proposed)
         voice_note = str(result.get("voice_note") or "")
         if core.effective_mode() == "red" and gentle_violation(voice_note):
             voice_note = ""  # правило №5 и для голоса: в 🟥 про дисциплину не говорят ни текстом, ни вслух
         done, failed, warnings = apply_actions(core, actions, source=self.channel, fallback_report=text)
+        if blocked_changes:
+            voice_note = ""
+            failed.append("для изменения плана, таймера или записи нужна прямая просьба")
+            # Текст головы мог сообщить об уже выполненном действии, которое код отклонил.
+            reply = ("Давай сначала разберём, что мешает начать."
+                     if action_intent.asks_for_conversation(text) else "")
         self.reply(reply, self.receipt(done, failed, warnings), voice_note=voice_note, reply_to=result.get("reply_to"))
         if done:
             self.refresh_panel()
@@ -1524,8 +1542,7 @@ class Bot:
         return True
 
     def send_initiative(self, reasons: list[str]) -> bool:
-        """Arvix пишет первым по поводу, который нашёл код (D59): тот же голос и те же actions, что в ответе,
-        но вместо сообщения человека — повод. Пустой reply — голова решила, что писать незачем."""
+        """Arvix пишет первым по поводу, который нашёл код (D59). План при этом не меняется."""
         from arvix import initiative
 
         core = self.core
@@ -1540,10 +1557,9 @@ class Bot:
         reply = ((result or {}).get("reply") or "").strip()
         if not reply:
             return False
-        done, failed, warnings = apply_actions(core, result.get("actions") or [], source=self.channel)
-        self.reply(reply, self.receipt(done, failed, warnings), key=f"initiative:{core.now():%Y-%m-%dT%H:%M}")
-        if done:
-            self.refresh_panel()
+        if result.get("actions"):
+            reply = "По блоку пока нет отчёта. Ты успел сделать часть или так и не начал?"
+        self.reply(reply, key=f"initiative:{core.now():%Y-%m-%dT%H:%M}")
         return True
 
     def brain_down_hint(self) -> str:
@@ -1609,7 +1625,12 @@ class Bot:
         conclusion = (result or {}).get("reply", "").strip()
         receipt = ""
         if result:
-            receipt = self.receipt(*apply_actions(core, result.get("actions") or [], source="telegram"))
+            allowed = action_intent.allowed_actions(text, ACTION_TYPES)
+            proposed = result.get("actions") or []
+            actions = [action for action in proposed if action.get("type") in allowed]
+            if len(actions) != len(proposed):
+                conclusion = "Итог сохранил. Если хочешь поменять завтрашний план, скажи, что именно."
+            receipt = self.receipt(*apply_actions(core, actions, source="telegram"))
         core.complete_debrief(text, conclusion=conclusion, source="telegram")
         try:
             from arvix import daily_note
