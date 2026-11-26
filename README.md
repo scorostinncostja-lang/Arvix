@@ -47,7 +47,8 @@ archive/v1-docker/   прототип v1 на Docker/Postgres/Redis — не и�
 - [docs/09-DECISIONS.md](docs/09-DECISIONS.md) — журнал решений и открытые вопросы
 - [arvix-claude/GUIDE.md](arvix-claude/GUIDE.md) — руководство пользователя
 
-Правила для ИИ-ассистента, который правит этот репозиторий, — [CLAUDE.md](CLAUDE.md).
+Правила для ИИ-агентов (Codex и Claude Code), которые правят этот репозиторий, — [AGENTS.md](AGENTS.md);
+карта кода — [ARCHITECTURE.md](ARCHITECTURE.md), планы больших задач — [PLANS.md](PLANS.md).
 
 ## Разработка
 
