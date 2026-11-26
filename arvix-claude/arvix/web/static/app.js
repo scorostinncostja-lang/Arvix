@@ -536,8 +536,23 @@ function bindStudyRecorder(button, input) {
   };
 }
 
+async function encodeStudyPhoto(file) {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const scale = Math.min(1, 1800 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.88).split(",")[1];
+  } finally { bitmap.close(); }
+}
+
 function openStudy(id) {
-  let step;
+  let step, photo;
   const task = findTask(id);
   const title = task?.title || state.data?.focus?.title || "Занятие";
   const draw = (error = "", draft = "") => {
@@ -550,6 +565,8 @@ function openStudy(id) {
       ${step?.source ? `<p class="muted small">${esc(step.source)}</p>` : ""}
       ${step && step.stage !== "finish" ? `<label for="study-attempt">Твой ход</label>
         <textarea id="study-attempt" rows="3" maxlength="3000" placeholder="Первый шаг или объяснение своими словами">${esc(draft)}</textarea>
+        <label class="study-slider">Фото решения <input id="study-photo" type="file" accept="image/*"></label>
+        <div id="study-file" class="muted small">${esc(photo?.name || "")}</div>
         <div class="pills">
           <button class="pill primary" data-study="attempt">Проверить</button>
           ${navigator.mediaDevices?.getUserMedia && window.MediaRecorder ? '<button class="pill" id="study-mic">Надиктовать</button>' : ""}
@@ -570,6 +587,11 @@ function openStudy(id) {
       drawStudyTriangle(root);
       const mic = root.querySelector("#study-mic");
       if (mic) bindStudyRecorder(mic, root.querySelector("#study-attempt"));
+      const picker = root.querySelector("#study-photo");
+      if (picker) picker.onchange = () => {
+        photo = picker.files[0] || photo;
+        root.querySelector("#study-file").textContent = photo?.name || "";
+      };
       root.querySelectorAll("[data-study]").forEach((button) => {
         button.onclick = () => submit(button.dataset.study);
       });
@@ -580,7 +602,7 @@ function openStudy(id) {
   const submit = async (action) => {
     const panel = $(".study-session");
     const attempt = panel.querySelector("#study-attempt")?.value || "";
-    if (action === "attempt" && !attempt.trim()) {
+    if (action === "attempt" && !attempt.trim() && !photo) {
       panel.querySelector("#study-attempt").focus();
       return;
     }
@@ -588,7 +610,9 @@ function openStudy(id) {
     panel.querySelector("#study-status").textContent = "Arvix разбирает шаг…";
     const stillOpen = () => panel.isConnected && !$("#sheet").classList.contains("hidden");
     try {
-      step = await api(`tasks/${encodeURIComponent(id)}/study`, { json: { action, attempt, revision: step?.revision } });
+      const image = action === "attempt" && photo ? await encodeStudyPhoto(photo) : undefined;
+      step = await api(`tasks/${encodeURIComponent(id)}/study`, { json: { action, attempt, photo: image, revision: step?.revision } });
+      if (action === "attempt") photo = undefined;
       if (stillOpen() && action === "note") openNoteFromToday(step.note_path);
       else if (stillOpen()) draw();
     } catch (err) {

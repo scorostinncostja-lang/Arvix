@@ -325,11 +325,15 @@ class Brain:
         return cmd
 
     def ask(self, *, system: str, prompt: str, schema: dict[str, Any], role: str = "voice", vault_tools: bool = False,
-            web: bool = False, skills: str = "off", effort: str | None = None, timeout: int | None = None) -> dict[str, Any] | None:
+            web: bool = False, skills: str = "off", effort: str | None = None, timeout: int | None = None,
+            image: Path | None = None) -> dict[str, Any] | None:
         """None — голова недоступна (лимит подписки, сеть, таймаут). Вызывающий
         отвечает шаблоном L0: напоминания и учёт от этого не ломаются. timeout — для длинной работы
         в фоне (сессия урока целиком), не меньше общего [brain] timeout_sec."""
         self._timeout = max(self.timeout, int(timeout or 0))
+        if image and not (vault_tools and self.vault_tools):
+            self.last_error = "Доступ к фото в хранилище выключен"
+            return None
         result = self._ask(system=system, prompt=prompt, schema=schema, role=role, vault_tools=vault_tools, web=web,
                            skills=skills, effort=effort)
         if result is None and self.effort_level(effort) and "effort" in self.last_error.lower():

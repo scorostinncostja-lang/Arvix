@@ -84,3 +84,14 @@ class LearningFocusTest(BotCase):
                          {"text": "скорость равна нулю"})
         self.assertEqual(self.brain.calls, [])
         self.assertEqual(self.core.state.study_focus, {})
+
+    def test_photo_is_visible_to_the_model(self):
+        from base64 import b64encode
+
+        task = self.start_learning()
+        step = self.step(task)
+        self.brain.answers.append({"instruction": "Какая подпись на оси Y?", "assessment": "unclear"})
+        photo = b64encode(b"\xff\xd8\xff" + b"test").decode()
+        result = api.task_study(task.id, {"action": "attempt", "photo": photo, "revision": step["revision"]})(self.bot)
+        self.assertEqual(result["stage"], "recall")
+        self.assertTrue(self.brain.calls[-1]["image"].is_file())
