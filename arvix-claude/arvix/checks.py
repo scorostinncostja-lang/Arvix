@@ -14,7 +14,6 @@ import re
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from arvix import rules
 
 TOP_KINDS = ("main", "yearly")
 MAX_TOP_GOALS = 3          # больше трёх целей года — распыление (02-MECHANICS §13)

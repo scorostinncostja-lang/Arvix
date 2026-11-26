@@ -84,6 +84,10 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 Шаги к задаче (D62): `task_guide` — `id, steps[{do, tool, min}], done, save, note, note_path` → `Task.guide`; пишет голова
 (источник `l1`, из приложения — `web`), проверяет `guide.clean`.
 
+Учебный фокус (D63): `study_focus_step` хранит ключ темы, ID задачи, начало фокуса, этап, инструкцию,
+обратную связь, источник, схему, вопрос для конспекта, следующий шаг, уровень помощи и дату повторения.
+Свёртка оставляет последний шаг каждой темы в `State.study_focus`.
+
 Старые события проектов и учебных сессий (D43–D61: `channel_set`, `learn_item_set`, `lesson_checked`, `lesson_started`, `milestone_set`, `project_logged`, `project_money`, `project_set`, `repo_activity`, `resource_set`, `review_answer`, `review_quiz`, `review_set`, `study_answer`, `study_fix`, `study_mine`, `study_panel`, `study_shadow`, `study_stage`) остаются в журнале;
 с D62 свёртка их не читает, как XP и HP после D41.
 

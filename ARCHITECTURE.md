@@ -123,6 +123,9 @@ telegram/bot.py      Bot.handle → владелец? (owner_id) → core.refres
 `tests/` (unittest, без сети и ИИ; база — `tests/helpers.py:ArvixCase`), `GUIDE.md` (руководство пользователя).
 Корень репозитория: `docs/` (спецификация), `README.md` (витрина, местами устарел — правда в `docs/`).
 
+Учебный фокус у задачи проходит через `web/api.py:task_study` и `learning_focus.py`.
+Событие `study_focus_step` хранит последний шаг темы и срок следующей проверки.
+
 ## 6. Инварианты и кто их держит
 
 | Инвариант | Где держится | Тест |

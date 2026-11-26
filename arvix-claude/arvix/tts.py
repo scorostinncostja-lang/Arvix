@@ -148,7 +148,9 @@ class TTS:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 data = json.loads(response.read())
         except urllib.error.HTTPError as exc:
-            raise TTSError(gemini_error(exc.code, exc.read())) from exc
+            with exc:
+                detail = gemini_error(exc.code, exc.read())
+            raise TTSError(detail) from exc
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             raise TTSError(f"Gemini недоступен: {exc}") from exc
         audio = find_audio(data)

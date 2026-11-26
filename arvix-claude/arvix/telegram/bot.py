@@ -36,7 +36,6 @@ from arvix.brain import (
     effort_for,
     gentle_violation,
     has_source,
-    mode_shift,
 )
 from arvix.context import build_context, end_time, hm, task_line
 from arvix.core import ArvixError, Core, is_goodnight, parse_sleep_text
@@ -980,7 +979,7 @@ class Bot:
             return
         self.send("🎯 Фокус — в приложении: «Сегодня» → Фокус. Или словами: «фокус 45 минут физика».")
 
-    def start_focus(self, minutes: int, task_ref: Any = None, *, topic: str | None = None) -> None:
+    def start_focus(self, minutes: int, task_ref: Any = None, *, topic: str | None = None, source: str = "telegram") -> None:
         self.release_stale_focus()
         if self.core.store.kv_get(FOCUS):
             self.send_focus_state()
@@ -995,7 +994,7 @@ class Bot:
         elif not topic:
             task = self.focus_target()
         if task is not None and task.status == "planned":
-            self.core.start_task(task.id, source="telegram")
+            self.core.start_task(task.id, source=source)
         now = self.core.now()
         state = {"until": (now + timedelta(minutes=minutes)).isoformat(), "started": now.isoformat(), "minutes": minutes,
                  "task_id": task.id if task else None, "topic": (topic or "").strip()[:120] or None, "left": minutes,

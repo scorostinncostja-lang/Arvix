@@ -16,6 +16,7 @@ class CodexBrainTest(unittest.TestCase):
         def answer(command, **kwargs):
             self.assertIn("shell_tool", command)
             self.assertIn("fixture", command)
+            self.assertEqual(command[command.index("--image") + 1], "/fixture.jpg")
             self.assertNotIn("текст задачи", command)
             self.assertIn("текст задачи", kwargs["input"])
             Path(command[command.index("--output-last-message") + 1]).write_text(
@@ -23,7 +24,7 @@ class CodexBrainTest(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0)
 
         with patch("arvix.codex_brain.subprocess.run", side_effect=answer):
-            reply = brain.ask(system="объясни", prompt="текст задачи", schema=schema, role="learning")
+            reply = brain.ask(system="объясни", prompt="текст задачи", schema=schema, role="learning", image=Path("/fixture.jpg"))
         self.assertEqual(reply, {"instruction": "Первый шаг"})
 
     def test_codex_failure_does_not_trigger_a_second_model(self):

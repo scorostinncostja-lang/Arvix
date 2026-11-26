@@ -761,3 +761,10 @@ a { color: var(--accent); }
   .task .acts { gap: 4px; }
   .task .icon-btn { width: 34px; height: 34px; border-radius: 10px; }
 }
+
+.study-session { display: grid; gap: .75rem; }
+.study-session h2, .study-session p, .study-visual { margin: 0; white-space: pre-wrap; }
+.study-session textarea { width: 100%; padding: .65rem; font: inherit; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: .65rem; }
+.study-visual { overflow-x: auto; padding: .5rem 0; }
+.study-diagram { display: block; margin: auto; max-width: 100%; height: auto; }
+.study-slider { display: grid; gap: .4rem; }

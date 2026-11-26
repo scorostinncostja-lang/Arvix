@@ -18,7 +18,7 @@ class CodexBrain:
     def available(self):
         return bool(shutil.which(self.bin))
 
-    def ask(self, system, prompt, schema, timeout):
+    def ask(self, system, prompt, schema, timeout, *, image=None):
         with tempfile.TemporaryDirectory(prefix="arvix-codex-") as workdir:
             root = Path(workdir)
             schema_file, answer = root / "schema.json", root / "answer.json"
@@ -31,6 +31,8 @@ class CodexBrain:
             ]
             if self.model:
                 cmd.extend(["--model", self.model])
+            if image:
+                cmd.extend(["--image", str(image)])
             try:
                 proc = subprocess.run(
                     [*cmd, "-"], input=system + "\n\n" + prompt, cwd=root,
