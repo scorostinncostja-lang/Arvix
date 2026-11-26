@@ -286,6 +286,12 @@ def brief(core: Any) -> str:
         lines += ["", f"Сегодня {len(tasks)}:"] + [f"{i}. {_task_short(t)}" for i, t in enumerate(tasks[:6], 1)]
     else:
         lines.append("Плана на сегодня нет. Напиши, что делаешь, — соберу.")
+    if st.mentor_enabled:
+        from arvix.learning_focus import reviews_due
+
+        due = reviews_due(core)
+        if due:
+            lines.append("Пора повторить: " + ", ".join(topic["title"] for topic in due[:3]) + " · приложение → Обучение")
     debts = st.debts()
     if debts:
         lines.append("Долг: " + ", ".join(t.title for t in debts[:3]))
