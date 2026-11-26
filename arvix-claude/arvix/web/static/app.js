@@ -275,7 +275,7 @@ function focusCard(d) {
       <div class="focus-body"><div class="muted small">${paused ? `Пауза · до ${f.max_pause_min} мин, потом сессия закроется` : `Фокус · ${f.minutes} мин`}</div>
         <div class="focus-title">${esc(f.title || "глубокая работа")}</div>
         ${(() => { const t = f.task_id && findTask(f.task_id); return t && t.guide ? guideHtml(t.guide, true) : ""; })()}
-        <div class="pills">${paused ? `<button class="pill primary" data-act="focus-op" data-op="resume">${icon("play")} Дальше</button>` : `<button class="pill" data-act="focus-op" data-op="pause">${icon("pause")} Пауза</button>`}
+        <div class="pills">${f.study ? `<button class="pill primary" data-act="study" data-id="${esc(f.task_id)}">Продолжить занятие</button>` : ""}${paused ? `<button class="pill primary" data-act="focus-op" data-op="resume">${icon("play")} Дальше</button>` : `<button class="pill" data-act="focus-op" data-op="pause">${icon("pause")} Пауза</button>`}
           <button class="pill" data-act="focus-op" data-op="stop">${icon("stop")} Закончить</button>
           <button class="pill danger" data-act="focus-op" data-op="cancel" aria-label="Отменить, не записывать">${icon("x")}</button></div></div></div>${list}</div>`;
   }
@@ -427,7 +427,11 @@ function bindToday() {
     haptic();
     try {
       if (act === "start") {
-        await api(`tasks/${id}/start`, { json: {} }); toast("Пошло. Удачи.");
+        const r = await api(`tasks/${id}/start`, { json: {} });
+        await load("today");
+        if (r.study) openStudy(id);
+        else toast("Пошло. Удачи.");
+        return;
       } else if (act === "done") {
         const t = findTask(id);
         if (t && t.proof && t.proof !== "confirm") { openReportSheet(t); return; }
@@ -435,10 +439,15 @@ function bindToday() {
         notify("success"); toast("✓ Записал" + (r.debt_closed ? " · долг закрыт" : "") + (r.warnings && r.warnings.length ? "\n" + r.warnings.join("\n") : ""));
       } else if (act === "more") { openTaskSheet(findTask(id)); return; }
       else if (act === "guide") { askGuide(findTask(id)); return; }
+      else if (act === "study") { openStudy(id); return; }
       else if (act === "focus-go") {
         const f = state.focusForm, topic = f.target === "topic" ? ($("#focus-topic") ? $("#focus-topic").value.trim() : f.topic) : "";
-        await api("focus", { json: { minutes: +f.minutes, task: f.target === "topic" ? null : f.target, topic: topic || null } });
-        f.topic = ""; toast("Фокус пошёл. Таймер есть и в Telegram.");
+        const r = await api("focus", { json: { minutes: +f.minutes, task: f.target === "topic" ? null : f.target, topic: topic || null } });
+        f.topic = "";
+        await load("today");
+        if (r.focus?.study) openStudy(r.focus.task_id);
+        else toast("Фокус пошёл. Таймер есть и в Telegram.");
+        return;
       } else if (act === "focus-op") {
         const op = el.dataset.op;
         if (op === "cancel" && !confirm("Отменить фокус? Ничего не запишется.")) return;
@@ -450,6 +459,97 @@ function bindToday() {
       await load("today");
     } catch (err) { notify("error"); toast(err.message); }
   }));
+}
+
+const STUDY_STAGES = { recall: "На старте", practice: "Практика", check: "Самостоятельная проверка", finish: "Итог занятия" };
+
+function studyVisual(visual) {
+  if (visual === "triangle_area") {
+    return `<canvas class="study-diagram" id="study-diagram" width="360" height="155" aria-label="Треугольник ABC на основании AB"></canvas>
+      <label class="study-slider">Положение вершины C <input id="study-vertex" type="range" min="50" max="310" value="150"></label>`;
+  }
+  return visual ? `<pre class="study-visual">${esc(visual)}</pre>` : "";
+}
+
+function drawStudyTriangle(root) {
+  const input = root.querySelector("#study-vertex");
+  if (!input) return;
+  const ctx = root.querySelector("#study-diagram").getContext("2d");
+  const draw = () => {
+    const x = Number(input.value);
+    ctx.clearRect(0, 0, 360, 155);
+    ctx.strokeStyle = getComputedStyle(root).color;
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.font = "15px sans-serif";
+    ctx.beginPath();
+    ctx.moveTo(55, 120); ctx.lineTo(x, 30); ctx.lineTo(305, 120); ctx.closePath(); ctx.stroke();
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(x, 30); ctx.lineTo(x, 120); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillText("A", 47, 141); ctx.fillText("B", 300, 141); ctx.fillText("C", x - 5, 21);
+  };
+  input.oninput = draw;
+  draw();
+}
+
+function openStudy(id) {
+  let step;
+  const task = findTask(id);
+  const title = task?.title || state.data?.focus?.title || "Занятие";
+  const draw = (error = "", draft = "") => {
+    openSheet(`<div class="study-session">
+      <div class="muted small">${esc(STUDY_STAGES[step?.stage] || "Учебный фокус")} · <span id="study-time">${esc($("#focus-left")?.textContent || "Фокус")}</span></div>
+      <h2>${esc(title)}</h2>
+      ${error ? `<p role="alert">${esc(error)}</p>` : ""}
+      ${step?.feedback ? `<p>${esc(step.feedback)}</p>` : ""}
+      ${step?.stage !== "finish" && step?.instruction ? `<p><strong>${esc(step.instruction)}</strong></p>${studyVisual(step.visual)}` : ""}
+      ${step?.source ? `<p class="muted small">${esc(step.source)}</p>` : ""}
+      ${step && step.stage !== "finish" ? `<label for="study-attempt">Твой ход</label>
+        <textarea id="study-attempt" rows="3" maxlength="3000" placeholder="Первый шаг или объяснение своими словами">${esc(draft)}</textarea>
+        <div class="pills">
+          <button class="pill primary" data-study="attempt">Проверить</button>
+          <button class="pill" data-study="hint">Нужна подсказка</button>
+          <button class="pill" data-study="solution">Показать разбор</button>
+          <button class="pill" data-study="finish">Подвести итог</button>
+        </div>` : ""}
+      ${step?.stage === "finish" ? `<p>${esc(step.note)}</p><p>${esc(step.next_step)}</p>
+        ${step.review_due ? `<p class="muted small">Повторение с ${esc(step.review_due)}</p>` : ""}` : ""}
+      ${task?.guide ? `<details><summary>План и инструменты</summary>${guideHtml(task.guide)}</details>` : ""}
+      <div class="pills">
+        ${!step && error ? '<button class="pill primary" data-study="open">Повторить</button>' : ""}
+        <button class="pill" id="study-note" ${step ? 'data-study="note"' : ""}>Моя заметка</button>
+        <button class="pill" id="study-back">К таймеру</button>
+      </div>
+      <p class="muted small" id="study-status" role="status"></p>
+    </div>`, (root) => {
+      drawStudyTriangle(root);
+      root.querySelectorAll("[data-study]").forEach((button) => {
+        button.onclick = () => submit(button.dataset.study);
+      });
+      root.querySelector("#study-back").onclick = closeSheet;
+      if (!step) root.querySelector("#study-note").onclick = () => { closeSheet(); setTab("notes"); };
+    });
+  };
+  const submit = async (action) => {
+    const panel = $(".study-session");
+    const attempt = panel.querySelector("#study-attempt")?.value || "";
+    if (action === "attempt" && !attempt.trim()) {
+      panel.querySelector("#study-attempt").focus();
+      return;
+    }
+    panel.querySelectorAll("[data-study]").forEach((button) => { button.disabled = true; });
+    panel.querySelector("#study-status").textContent = "Arvix разбирает шаг…";
+    const stillOpen = () => panel.isConnected && !$("#sheet").classList.contains("hidden");
+    try {
+      step = await api(`tasks/${encodeURIComponent(id)}/study`, { json: { action, attempt, revision: step?.revision } });
+      if (stillOpen() && action === "note") openNoteFromToday(step.note_path);
+      else if (stillOpen()) draw();
+    } catch (err) {
+      if (stillOpen()) draw(err.message, attempt);
+    }
+  };
+  draw();
+  submit("open");
 }
 
 let focusTimer;
@@ -464,6 +564,7 @@ function tickFocus() {
     const m = Math.floor(left / 60000), s = Math.floor((left % 60000) / 1000);
     const el = $("#focus-left"); if (!el) return clearInterval(focusTimer);
     el.textContent = `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    if (state.data?.focus?.study && $("#study-time")) $("#study-time").textContent = el.textContent;
     $("#focus-ring").style.setProperty("--p", String(Math.min(1, 1 - left / total)));
     if (!left && !pausedAt) { clearInterval(focusTimer); notify("success"); setTimeout(() => load("today"), 1500); }
   };

@@ -269,6 +269,9 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     name = urllib.parse.unquote(self.headers.get("X-File-Name") or "фото.jpg")
                     kind = (self.headers.get("Content-Type") or "").split(";")[0]
                     self.send_json(app.hub.call(api.task_photo(parts[1], data, name, kind)))
+                elif len(parts) == 3 and parts[0] == "tasks" and parts[2] == "study":
+                    self.send_json(app.hub.call(api.task_study(parts[1], self.body_json()),
+                                               timeout=200, label="разбираю занятие"))
                 elif len(parts) == 3 and parts[0] == "tasks" and parts[2] == "guide":
                     # Шаги пишет голова (10–60 с): ждём ответа здесь, приложение покажет их у задачи
                     self.send_json(app.hub.call(api.task_guide(parts[1]), timeout=200, label="собираю шаги"))

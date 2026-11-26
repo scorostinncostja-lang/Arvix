@@ -14,10 +14,10 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from arvix import clock
-from arvix.config import load_config
-from arvix.core import Core
-from arvix.store import Store
+from arvix import clock  # noqa: E402
+from arvix.config import load_config  # noqa: E402
+from arvix.core import Core  # noqa: E402
+from arvix.store import Store  # noqa: E402
 
 TZ = ZoneInfo("Europe/Moscow")
 

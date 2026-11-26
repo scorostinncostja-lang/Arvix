@@ -99,6 +99,7 @@ class State:
     recovery_until: str | None = None  # «Вернуться к плану» после 🟥: до этого момента режим не выше 🟨 (D38)
     expenses: list[dict[str, Any]] = field(default_factory=list)
     learning: list[dict[str, Any]] = field(default_factory=list)
+    study_focus: dict[str, dict[str, Any]] = field(default_factory=dict)
     safety: list[dict[str, Any]] = field(default_factory=list)
     notes: dict[str, str] = field(default_factory=dict)  # заметки Arvix: путь → хэш последней записи
     budget: dict[str, Any] = field(default_factory=dict)
@@ -191,6 +192,9 @@ class State:
             source=p.get("source") or ev.source,
             tags=tuple(p.get("tags") or ()),
         )
+
+    def _on_study_focus_step(self, ev: Event, p: dict, day: Day) -> None:
+        self.study_focus[p["topic"]] = {**p, "revision": ev.id}
 
     def _on_task_guide(self, ev: Event, p: dict, day: Day) -> None:
         if task := self._task(p):
