@@ -75,6 +75,7 @@ function toast(text) {
 }
 // --- иконки: контурный набор в стиле Lucide (ISC), встроены — без зависимостей ------------------
 const ICON_PATHS = {
+  study: '<path d="M3 5h6a3 3 0 0 1 3 3v13a4 4 0 0 0-4-3H3zM21 5h-6a3 3 0 0 0-3 3v13a4 4 0 0 1 4-3h5z"/>',
   reply: '<path d="m9 17-5-5 5-5"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   chevronDown: '<path d="m6 9 6 6 6-6"/>',
@@ -156,7 +157,7 @@ $("#tabs").addEventListener("click", (e) => {
 
 async function load(tab = state.tab) {
   try {
-    if (tab === "today" || !state.data) state.data = await api("state");
+    if (tab === "today" || tab === "study" || !state.data) state.data = await api("state");
     if (tab === "chat") {
       const r = await api("messages");
       const last = r.messages.length ? r.messages[r.messages.length - 1].id : 0;
@@ -194,6 +195,7 @@ function render() {
   if (state.tab === "today") renderToday();
   else if (state.tab === "chat") renderChat();
   else if (state.tab === "notes") renderNotes();
+  else if (state.tab === "study") renderStudy();
   else renderProgress();
   $(".fab") && $(".fab").remove();
   $(".composer") && state.tab !== "chat" && $(".composer").remove();
@@ -236,6 +238,9 @@ function renderToday() {
     html += `<div class="card install-card"><div><b>Arvix как приложение</b><div class="muted small">Иконка на экране, своё окно, без адресной строки</div></div>
       <button class="pill primary" id="install-now">Установить</button></div>`;
   }
+  const due = (d.study_topics || []).filter((topic) => topic.review_due && topic.review_due <= d.date);
+  if (due.length) html += '<button id="study-due" class="card study-topic"><strong>Пора повторить</strong><span class="muted small">' +
+    esc(due.slice(0, 3).map((topic) => topic.title).join(" · ")) + '</span></button>';
   html += focusCard(d);
   html += `</div><div class="today-main">`;
   const items = [...(d.tasks || []).map((t) => ({ ...t, kind: "task" })), ...(d.busy || []).map((b) => ({ ...b, kind: "busy" }))]
@@ -256,6 +261,7 @@ function renderToday() {
   html += `</div></div>`;
   view.innerHTML = html;
   bindToday();
+  if ($("#study-due")) $("#study-due").onclick = () => setTab("study");
   $("#install-now") && ($("#install-now").onclick = installApp);
   tickFocus();
 }
@@ -275,7 +281,7 @@ function focusCard(d) {
       <div class="focus-body"><div class="muted small">${paused ? `Пауза · до ${f.max_pause_min} мин, потом сессия закроется` : `Фокус · ${f.minutes} мин`}</div>
         <div class="focus-title">${esc(f.title || "глубокая работа")}</div>
         ${(() => { const t = f.task_id && findTask(f.task_id); return t && t.guide ? guideHtml(t.guide, true) : ""; })()}
-        <div class="pills">${f.study ? `<button class="pill primary" data-act="study" data-id="${esc(f.task_id)}">Продолжить занятие</button>` : ""}${paused ? `<button class="pill primary" data-act="focus-op" data-op="resume">${icon("play")} Дальше</button>` : `<button class="pill" data-act="focus-op" data-op="pause">${icon("pause")} Пауза</button>`}
+        <div class="pills">${f.study ? `<button class="pill primary" data-act="study" data-id="${esc(f.task_id)}">Разобрать с Arvix</button>` : ""}${paused ? `<button class="pill primary" data-act="focus-op" data-op="resume">${icon("play")} Дальше</button>` : `<button class="pill" data-act="focus-op" data-op="pause">${icon("pause")} Пауза</button>`}
           <button class="pill" data-act="focus-op" data-op="stop">${icon("stop")} Закончить</button>
           <button class="pill danger" data-act="focus-op" data-op="cancel" aria-label="Отменить, не записывать">${icon("x")}</button></div></div></div>${list}</div>`;
   }
@@ -427,10 +433,9 @@ function bindToday() {
     haptic();
     try {
       if (act === "start") {
-        const r = await api(`tasks/${id}/start`, { json: {} });
+        await api(`tasks/${id}/start`, { json: {} });
         await load("today");
-        if (r.study) openStudy(id);
-        else toast("Пошло. Удачи.");
+        toast("Начали");
         return;
       } else if (act === "done") {
         const t = findTask(id);
@@ -442,11 +447,10 @@ function bindToday() {
       else if (act === "study") { openStudy(id); return; }
       else if (act === "focus-go") {
         const f = state.focusForm, topic = f.target === "topic" ? ($("#focus-topic") ? $("#focus-topic").value.trim() : f.topic) : "";
-        const r = await api("focus", { json: { minutes: +f.minutes, task: f.target === "topic" ? null : f.target, topic: topic || null } });
+        await api("focus", { json: { minutes: +f.minutes, task: f.target === "topic" ? null : f.target, topic: topic || null } });
         f.topic = "";
         await load("today");
-        if (r.focus?.study) openStudy(r.focus.task_id);
-        else toast("Фокус пошёл. Таймер есть и в Telegram.");
+        toast("Фокус пошёл. Таймер есть и в Telegram.");
         return;
       } else if (act === "focus-op") {
         const op = el.dataset.op;
@@ -461,35 +465,42 @@ function bindToday() {
   }));
 }
 
-const STUDY_STAGES = { recall: "На старте", practice: "Практика", check: "Самостоятельная проверка", finish: "Итог занятия" };
-
-function studyVisual(visual) {
-  if (visual === "triangle_area") {
-    return `<canvas class="study-diagram" id="study-diagram" width="360" height="155" aria-label="Треугольник ABC на основании AB"></canvas>
-      <label class="study-slider">Положение вершины C <input id="study-vertex" type="range" min="50" max="310" value="150"></label>`;
-  }
-  return visual ? `<pre class="study-visual">${esc(visual)}</pre>` : "";
-}
-
-function drawStudyTriangle(root) {
-  const input = root.querySelector("#study-vertex");
-  if (!input) return;
-  const ctx = root.querySelector("#study-diagram").getContext("2d");
-  const draw = () => {
-    const x = Number(input.value);
-    ctx.clearRect(0, 0, 360, 155);
-    ctx.strokeStyle = getComputedStyle(root).color;
-    ctx.fillStyle = ctx.strokeStyle;
-    ctx.font = "15px sans-serif";
-    ctx.beginPath();
-    ctx.moveTo(55, 120); ctx.lineTo(x, 30); ctx.lineTo(305, 120); ctx.closePath(); ctx.stroke();
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath(); ctx.moveTo(x, 30); ctx.lineTo(x, 120); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillText("A", 47, 141); ctx.fillText("B", 300, 141); ctx.fillText("C", x - 5, 21);
+function renderStudy() {
+  const data = state.data;
+  if (!data) return;
+  const oldInput = view.querySelector("#new-study-topic");
+  const draft = oldInput?.value || "";
+  const restoreFocus = oldInput && document.activeElement === oldInput;
+  const topics = data.study_topics || [];
+  const due = topics.filter((topic) => topic.review_due && topic.review_due <= data.date);
+  const tasks = (data.tasks || []).filter((task) => task.sphere === "learning" && task.open);
+  const topicList = (items) => items.map((topic) => `<button class="study-topic" data-topic="${esc(topic.title)}">
+    <strong>${esc(topic.title)}</strong>${topic.next_step ? `<span class="muted small">${esc(topic.next_step)}</span>` : ""}</button>`).join("");
+  view.innerHTML = `<section class="study-home">
+    <h1>Обучение</h1>
+    <form class="card study-topic-form"><label for="new-study-topic">Что изучаешь?</label>
+      <input required id="new-study-topic" class="field-input" maxlength="160" value="${esc(draft)}" placeholder="Например, графики движения">
+      <button class="btn primary">Открыть тему</button>
+    </form>
+    ${due.length ? `<section class="card"><h2>Пора повторить</h2>${topicList(due)}</section>` : ""}
+    ${tasks.length ? `<section class="card"><h2>Задачи на сегодня</h2>${tasks.map((task) => `<button class="study-topic" data-study-id="${esc(task.id)}"><strong>${esc(task.title)}</strong></button>`).join("")}</section>` : ""}
+    ${topics.length ? `<section class="card"><h2>Мои темы</h2>${topicList(topics)}</section>` : ""}
+    ${data.tools_note ? '<button class="link" id="study-tools">Мои учебные инструменты ↗</button>' : ""}
+  </section>`;
+  if (restoreFocus) view.querySelector("#new-study-topic").focus();
+  const form = view.querySelector(".study-topic-form");
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    const topic = $("#new-study-topic").value.trim();
+    if (topic) openStudy(null, topic);
   };
-  input.oninput = draw;
-  draw();
+  view.querySelectorAll("[data-study-id]").forEach((button) => {
+    button.onclick = () => openStudy(button.dataset.studyId);
+  });
+  view.querySelectorAll("[data-topic]").forEach((button) => {
+    button.onclick = () => openStudy(null, button.dataset.topic);
+  });
+  if ($("#study-tools")) $("#study-tools").onclick = () => openNoteFromToday(data.tools_note);
 }
 
 function bindStudyRecorder(button, input) {
@@ -551,40 +562,42 @@ async function encodeStudyPhoto(file) {
   } finally { bitmap.close(); }
 }
 
-function openStudy(id) {
+function openStudy(id, topic = "") {
   let step, photo;
-  const task = findTask(id);
-  const title = task?.title || state.data?.focus?.title || "Занятие";
+  const endpoint = id ? `tasks/${encodeURIComponent(id)}/study` : "study";
+  const title = findTask(id)?.title || topic || "Занятие";
   const draw = (error = "", draft = "") => {
     openSheet(`<div class="study-session">
-      <div class="muted small">${esc(STUDY_STAGES[step?.stage] || "Учебный фокус")} · <span id="study-time">${esc($("#focus-left")?.textContent || "Фокус")}</span></div>
-      <h2>${esc(title)}</h2>
+      <h2>${esc(step?.title || title)}</h2>
       ${error ? `<p role="alert">${esc(error)}</p>` : ""}
+      ${step?.plan?.steps?.length ? `<details open><summary>План задачи</summary>${guideHtml(step.plan)}</details>` : ""}
+      ${step?.result ? `<p><strong>Прошлый результат</strong><br>${esc(step.result)}</p>` : ""}
+      ${step?.next_step ? `<p><strong>Дальше</strong><br>${esc(step.next_step)}</p>` : ""}
       ${step?.feedback ? `<p>${esc(step.feedback)}</p>` : ""}
-      ${step?.stage !== "finish" && step?.instruction ? `<p><strong>${esc(step.instruction)}</strong></p>${studyVisual(step.visual)}` : ""}
+      ${step?.visual ? `<pre class="study-visual">${esc(step.visual)}</pre>` : ""}
       ${step?.source ? `<p class="muted small">${esc(step.source)}</p>` : ""}
-      ${step && step.stage !== "finish" ? `<label for="study-attempt">Твой ход</label>
-        <textarea id="study-attempt" rows="3" maxlength="3000" placeholder="Первый шаг или объяснение своими словами">${esc(draft)}</textarea>
-        <label class="study-slider">Фото решения <input id="study-photo" type="file" accept="image/*"></label>
-        <div id="study-file" class="muted small">${esc(photo?.name || "")}</div>
+      ${step?.review_due ? `<p class="muted small">Повторение с ${esc(step.review_due)}</p>` : ""}
+      ${step ? `<label for="study-attempt">Результат или вопрос</label>
+        <textarea id="study-attempt" rows="3" maxlength="3000" placeholder="Решу ОГЭ: 7 из 10. Как начать №4?">${esc(draft)}</textarea>
+        <label><input id="study-review" type="checkbox"> Запланировать повторение</label>
         <div class="pills">
-          <button class="pill primary" data-study="attempt">Проверить</button>
+          <button class="pill primary" data-study="record">Записать результат</button>
+          <button class="pill" data-study="attempt">Разобрать с Arvix</button>
+        </div>
+        <details><summary>Фото и голос</summary>
+          <label class="study-slider">Фото решения <input id="study-photo" type="file" accept="image/*"></label>
+          <div id="study-file" class="muted small">${esc(photo?.name || "")}</div>
           ${navigator.mediaDevices?.getUserMedia && window.MediaRecorder ? '<button class="pill" id="study-mic">Надиктовать</button>' : ""}
-          <button class="pill" data-study="hint">Нужна подсказка</button>
-          <button class="pill" data-study="solution">Показать разбор</button>
-          <button class="pill" data-study="finish">Подвести итог</button>
-        </div>` : ""}
-      ${step?.stage === "finish" ? `<p>${esc(step.note)}</p><p>${esc(step.next_step)}</p>
-        ${step.review_due ? `<p class="muted small">Повторение с ${esc(step.review_due)}</p>` : ""}` : ""}
-      ${task?.guide ? `<details><summary>План и инструменты</summary>${guideHtml(task.guide)}</details>` : ""}
+        </details>` : ""}
       <div class="pills">
-        ${!step && error ? '<button class="pill primary" data-study="open">Повторить</button>' : ""}
-        <button class="pill" id="study-note" ${step ? 'data-study="note"' : ""}>Моя заметка</button>
-        <button class="pill" id="study-back">К таймеру</button>
+        ${step ? '<button class="pill" data-study="note">Моя заметка</button>' : ""}
+        ${step && id ? '<button class="pill" id="study-change-topic">Выбрать тему</button>' : ""}
+        ${!step && error ? '<button class="pill" data-study="open">Повторить</button>' : ""}
+        <button class="pill" id="study-back">Закрыть</button>
       </div>
       <p class="muted small" id="study-status" role="status"></p>
     </div>`, (root) => {
-      drawStudyTriangle(root);
+      root.querySelectorAll("[data-open-note]").forEach((el) => { el.onclick = () => openNoteFromToday(el.dataset.openNote); });
       const mic = root.querySelector("#study-mic");
       if (mic) bindStudyRecorder(mic, root.querySelector("#study-attempt"));
       const picker = root.querySelector("#study-photo");
@@ -595,24 +608,42 @@ function openStudy(id) {
       root.querySelectorAll("[data-study]").forEach((button) => {
         button.onclick = () => submit(button.dataset.study);
       });
+      const choose = root.querySelector("#study-change-topic");
+      if (choose) choose.onclick = () => {
+        openSheet(`<form class="study-topic-form"><label for="edit-study-topic">Тема для этой задачи</label>
+          <input required id="edit-study-topic" maxlength="160" list="known-study-topics" value="${esc(step.title)}">
+          <datalist id="known-study-topics">${(state.data?.study_topics || []).map((entry) => `<option value="${esc(entry.title)}"></option>`).join("")}</datalist>
+          <button class="btn primary">Открыть тему</button></form>`, (sheet) => {
+          sheet.querySelector("form").onsubmit = (event) => {
+            event.preventDefault();
+            const chosen = sheet.querySelector("input").value.trim();
+            if (chosen) openStudy(id, chosen);
+          };
+        });
+      };
       root.querySelector("#study-back").onclick = closeSheet;
-      if (!step) root.querySelector("#study-note").onclick = () => { closeSheet(); setTab("notes"); };
     });
   };
   const submit = async (action) => {
     const panel = $(".study-session");
-    const attempt = panel.querySelector("#study-attempt")?.value || "";
-    if (action === "attempt" && !attempt.trim() && !photo) {
-      panel.querySelector("#study-attempt").focus();
+    const input = panel.querySelector("#study-attempt");
+    const attempt = input?.value || "";
+    if ((action === "record" && !attempt.trim()) || (action === "attempt" && !attempt.trim() && !photo)) {
+      input.focus();
       return;
     }
     panel.querySelectorAll("[data-study]").forEach((button) => { button.disabled = true; });
-    panel.querySelector("#study-status").textContent = "Arvix разбирает шаг…";
+    panel.querySelector("#study-status").textContent = action === "attempt" ? "Arvix разбирает вопрос…" : "Обновляю тему…";
     const stillOpen = () => panel.isConnected && !$("#sheet").classList.contains("hidden");
     try {
       const image = action === "attempt" && photo ? await encodeStudyPhoto(photo) : undefined;
-      step = await api(`tasks/${encodeURIComponent(id)}/study`, { json: { action, attempt, photo: image, revision: step?.revision } });
+      step = await api(endpoint, { json: { action, topic, attempt, photo: image, revision: step?.revision,
+        review: panel.querySelector("#study-review")?.checked } });
       if (action === "attempt") photo = undefined;
+      if (action === "record" || action === "attempt") {
+        if (state.tab === "study") load("study");
+        if (action === "record") toast("Результат записан");
+      }
       if (stillOpen() && action === "note") openNoteFromToday(step.note_path);
       else if (stillOpen()) draw();
     } catch (err) {
@@ -635,7 +666,6 @@ function tickFocus() {
     const m = Math.floor(left / 60000), s = Math.floor((left % 60000) / 1000);
     const el = $("#focus-left"); if (!el) return clearInterval(focusTimer);
     el.textContent = `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-    if (state.data?.focus?.study && $("#study-time")) $("#study-time").textContent = el.textContent;
     $("#focus-ring").style.setProperty("--p", String(Math.min(1, 1 - left / total)));
     if (!left && !pausedAt) { clearInterval(focusTimer); notify("success"); setTimeout(() => load("today"), 1500); }
   };
@@ -704,14 +734,9 @@ function openAddSheet() {
 
 function openTaskSheet(t) {
   if (!t) return;
-  const g = t.guide, tools = state.data && state.data.tools_note, open = t.open || t.status === "debt";
+  const open = t.open || t.status === "debt";
   openSheet(`<h2>${esc(t.title)}</h2>
     <p class="muted small">${esc(t.start || "без времени")} · ${hm(t.duration_min)} · ${esc(t.sphere_ru)}</p>
-    <div class="guide-box">
-      ${g ? `<h3>🧭 Как сделать</h3>${guideHtml(g)}` : `<h3>🧭 Как сделать</h3><p class="muted small">Arvix распишет, что сделать и чем: шаги в твоих инструментах, минуты, «готово, когда» и куда записать.</p>`}
-      <div class="pills">${open ? `<button class="pill${g ? "" : " primary"}" data-op="guide">${g ? "↻ Другие шаги" : "🧭 Как сделать?"}</button>` : ""}
-        ${tools ? `<button class="pill" data-op="tools">🧰 Мои инструменты</button>` : ""}</div>
-    </div>
     ${open ? `<div class="sheet-actions">
       <button class="btn" data-op="part">◐ Сделано частично…</button>
       <button class="btn" data-op="report">📝 Сделано, с отчётом…</button>
@@ -721,13 +746,10 @@ function openTaskSheet(t) {
       <button class="btn danger" data-op="fail">✕ Не сделано…</button>
       <button class="btn danger" data-op="cancel">Отменить задачу…</button>
     </div>` : ""}`, (root) => {
-    root.querySelectorAll("[data-open-note]").forEach((el) => el.addEventListener("click", () => openNoteFromToday(el.dataset.openNote)));
     root.querySelectorAll("[data-op]").forEach((b) => b.addEventListener("click", async () => {
       const op = b.dataset.op;
       haptic();
       try {
-        if (op === "guide") { askGuide(t); return; }
-        if (op === "tools") { openNoteFromToday(tools); return; }
         if (op === "part") { openPartSheet(t); return; }
         if (op === "report") { openReportSheet(t); return; }
         if (op === "defer") { const r = await api(`tasks/${t.id}/defer`, { json: { minutes: +b.dataset.min } }); toast("→ " + r.start); }
@@ -2024,10 +2046,10 @@ function onChange(ev) {
 }
 
 // --- клавиатура (ноутбук) ----------------------------------------------------------------------
-/* Ctrl/Alt+1…4 — вкладки, Alt+N — новая задача, / — поиск или поле сообщения, E — править заметку
+/* Ctrl/Alt+1…5 — вкладки, Alt+N — новая задача, / — поиск или поле сообщения, E — править заметку
  * (клавиши — по e.code, чтобы работали и на русской раскладке),
  * Ctrl+S — сохранить, Esc — закрыть окно, заметку или разговор. На телефоне клавиатуры нет — ничего не мешает. */
-const TABS = ["today", "chat", "notes", "progress"];
+const TABS = ["today", "chat", "notes", "progress", "study"];
 document.addEventListener("keydown", (e) => {
   const typing = e.target instanceof Element && !!e.target.closest("input, textarea, select, [contenteditable]");
   if ((e.ctrlKey || e.metaKey) && e.code === "KeyS" && $("#e-text")) { e.preventDefault(); saveEditor(); return; }
@@ -2037,7 +2059,7 @@ document.addEventListener("keydown", (e) => {
     if (typing) e.target.blur();
     return;
   }
-  if ((e.altKey || e.ctrlKey) && !e.shiftKey && /^Digit[1-4]$/.test(e.code)) {
+  if ((e.altKey || e.ctrlKey) && !e.shiftKey && /^Digit[1-5]$/.test(e.code)) {
     e.preventDefault();
     const tab = TABS[+e.code.slice(5) - 1];
     if (tab !== state.tab && !(state.noteEdit && !confirmLeaveEditor())) setTab(tab);

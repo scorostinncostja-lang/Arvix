@@ -264,6 +264,8 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     data = str(self.body_json().get("data") or "")
                     app.hub.post(api.button(data), label="думаю")
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
+                elif parts == ["study"]:
+                    self.send_json(app.hub.call(api.study(self.body_json()), timeout=200, label="разбираю занятие"))
                 elif parts == ["tasks"]:
                     self.send_json(app.hub.call(api.add_task(self.body_json())))
                 elif len(parts) == 3 and parts[0] == "tasks" and parts[2] == "photo":
@@ -274,7 +276,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     kind = (self.headers.get("Content-Type") or "").split(";")[0]
                     self.send_json(app.hub.call(api.task_photo(parts[1], data, name, kind)))
                 elif len(parts) == 3 and parts[0] == "tasks" and parts[2] == "study":
-                    self.send_json(app.hub.call(api.task_study(parts[1], self.body_json()),
+                    self.send_json(app.hub.call(api.study(self.body_json(), parts[1]),
                                                timeout=200, label="разбираю занятие"))
                 elif len(parts) == 3 and parts[0] == "tasks" and parts[2] == "guide":
                     # Шаги пишет голова (10–60 с): ждём ответа здесь, приложение покажет их у задачи

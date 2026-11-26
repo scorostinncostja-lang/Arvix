@@ -86,10 +86,10 @@ class LaptopLayoutTest(unittest.TestCase):
     def test_sidebar_markup(self) -> None:
         html = (STATIC / "index.html").read_text()
         self.assertIn('class="brand"', html)
-        # Сегодня · Arvix · Заметки · Прогресс: «Проекты» и «Обучение» убраны (D62) — Arvix даёт шаги в инструментах
-        self.assertEqual(html.count("data-tab="), 4)
+        # Обучение доступно как самостоятельный экран; проекты остаются в Obsidian.
+        self.assertEqual(html.count("data-tab="), 5)
         self.assertNotIn('data-tab="projects"', html)
-        self.assertNotIn('data-tab="study"', html)
+        self.assertIn('data-tab="study"', html)
 
     def test_sidebar_collapses(self) -> None:
         """Панель сворачивается в полосу значков кнопкой (касание, не наведение) и Ctrl+B; выбор помнится."""
@@ -102,7 +102,7 @@ class LaptopLayoutTest(unittest.TestCase):
         self.assertIn('"arvix_side_mini"', js)
         self.assertIn('e.code === "KeyB"', js)
         # Свёрнутая панель не прячет разделы: значки остаются, подписи уходят в title
-        self.assertEqual(html.count('class="lbl"'), 4)
+        self.assertEqual(html.count('class="lbl"'), 5)
 
 
 class CssStructureTest(unittest.TestCase):

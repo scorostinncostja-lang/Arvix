@@ -65,6 +65,7 @@ def state_view(core: Any, *, thinking: str = "") -> dict[str, Any]:
         base.update({"tasks": [task_view(small)] if small else [], "tomorrow": [], "debts": [], "stats": None,
                      "note": "Сегодня без плана и без цифр. Сон, еда, движение — и одна маленькая вещь, если захочется."})
         return base
+    base["study_topics"] = learning_focus.topics_view(core)
     status = core.status()
     day = st.days.get(today)
     done = sum(1 for t in tasks if t.status == "done")
@@ -255,7 +256,6 @@ def task_op(task_id: str, op: str, body: dict[str, Any]) -> Any:
                     raise ArvixError("Сначала закончи текущий фокус")
                 with bot.via("web", SINK):
                     bot.start_focus(task.duration_min or 25, task.id, source="web")
-                result["study"] = True
             else:
                 core.start_task(task.id, source="web")
         elif op == "done":
@@ -424,11 +424,11 @@ def study_transcribe(audio: bytes, filename: str) -> Any:
     return run
 
 
-def task_study(task_id: str, body: dict[str, Any]) -> Any:
+def study(body: dict[str, Any], task_id: str | None = None) -> Any:
     def run(bot: Any) -> dict[str, Any]:
-        task = bot.core.resolve_task(task_id)
+        task = bot.core.resolve_task(task_id) if task_id else None
         with bot.via("web", SINK):
-            return learning_focus.run(bot, task, body)
+            return learning_focus.run(bot, body, task)
     return run
 
 
