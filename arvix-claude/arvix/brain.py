@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from arvix.codex_brain import CodexBrain
 from arvix.config import Config, data_dir
 from arvix.core import ArvixError, Core
 
@@ -245,6 +246,8 @@ class Brain:
         self.last_error = ""
         self.last_stats: dict[str, Any] = {}
         self._flags: str | None = None
+        learning = cfg.section("roles").get("learning") or {}
+        self.learning_codex = CodexBrain(section | learning) if learning.get("provider") == "codex" else None
 
     def supports(self, flag: str) -> bool:
         """Старый claude не знает нового флага и падает на нём — а голова молчала бы на каждом
@@ -330,6 +333,13 @@ class Brain:
         отвечает шаблоном L0: напоминания и учёт от этого не ломаются. timeout — для длинной работы
         в фоне (сессия урока целиком), не меньше общего [brain] timeout_sec."""
         self._timeout = max(self.timeout, int(timeout or 0))
+        if role == "learning" and self.learning_codex is not None:
+            self.last_stats = {}
+            result = self.learning_codex.ask(system, prompt, schema, self._timeout)
+            self.last_error = "" if result is not None else "Codex CLI не ответил"
+            return result
+        if role == "learning":
+            role = "voice"
         result = self._ask(system=system, prompt=prompt, schema=schema, role=role, vault_tools=vault_tools, web=web,
                            skills=skills, effort=effort)
         if result is None and self.effort_level(effort) and "effort" in self.last_error.lower():

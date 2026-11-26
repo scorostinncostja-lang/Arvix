@@ -39,6 +39,7 @@ silent_weekday = -1     # -1 = автоматических тихих дней 
 
 [brain]
 claude_bin = "claude"
+codex_bin = "codex"
 timeout_sec = 180
 effort = "auto"         # усилие модели (D40): auto — код решает по сообщению (план, «почему», учёба — medium, остальное — low);
                         # low | medium | high — всегда так; "" — не передавать, как решит claude
@@ -49,6 +50,10 @@ skill_dirs = []         # свои папки-плагины с навыками
 
 [roles.voice]           # L1: всё, что пишется в чат
 model = "sonnet"
+
+[roles.learning]        # профиль учебного фокуса: claude | codex
+provider = "claude"
+codex_model = ""        # пусто — модель по умолчанию в Codex CLI
 
 [web]                   # приложение: Mini App в Telegram, PWA на телефоне, `arvix` в терминале (05-INTERFACES §7)
 enabled = true          # API внутри службы бота, слушает только 127.0.0.1
