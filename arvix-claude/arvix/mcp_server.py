@@ -280,7 +280,6 @@ def t_interview(core: Core, a: dict[str, Any]) -> str:
 
 def t_check_request(core: Core, a: dict[str, Any]) -> str:
     d = core.parse_day(a.get("date"))
-    st = core.state
     facts = core.day_facts(d)
     lines = [f"ПРОСЬБА: {a.get('description', '')}"]
     pct = f"{facts['completion']:.0f}%" if facts["completion"] is not None else "—"

@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-from arvix import rules, tools
+from arvix import learning_focus, rules, tools
 from arvix.context import DAY_TYPES_RU, QUOTA_RU, end_time
 from arvix.core import ArvixError, Core
 from arvix.telegram import templates as tpl
@@ -92,6 +92,7 @@ def focus_view(core: Any, focus: dict[str, Any] | None) -> dict[str, Any] | None
     task = core.state.tasks.get(focus.get("task_id") or "")
     return {"until": focus["until"], "started": focus["started"], "minutes": int(focus["minutes"]),
             "task_id": focus.get("task_id"), "title": task.title if task else focus.get("topic"), "topic": focus.get("topic"),
+            "study": bool(task and task.sphere == "learning" and task.is_open),
             "paused_at": focus.get("paused_at"), "max_pause_min": tpl.FOCUS_MAX_PAUSE_MIN}
 
 
@@ -247,7 +248,16 @@ def task_op(task_id: str, op: str, body: dict[str, Any]) -> Any:
         task = core.resolve_task(task_id)
         result: dict[str, Any] = {}
         if op == "start":
-            core.start_task(task.id, source="web")
+            if task.sphere == "learning" and task.status in ("planned", "active"):
+                bot.release_stale_focus()
+                focus = core.store.kv_get(FOCUS)
+                if focus and focus.get("task_id") != task.id:
+                    raise ArvixError("Сначала закончи текущий фокус")
+                with bot.via("web", SINK):
+                    bot.start_focus(task.duration_min or 25, task.id, source="web")
+                result["study"] = True
+            else:
+                core.start_task(task.id, source="web")
         elif op == "done":
             pct = rules.clamp(int(body.get("pct") or 100), 1, 100)
             photos = [str(x) for x in (body.get("photos") or []) if x]
@@ -280,7 +290,7 @@ def task_photo(task_id: str, data: bytes, name: str, mime: str) -> Any:
 def focus_start(minutes: int, task_id: str | None, topic: str | None = None) -> Any:
     def run(bot: Any) -> dict[str, Any]:
         with bot.via("web", SINK):
-            bot.start_focus(minutes, task_id or None, topic=(topic or "").strip() or None)
+            bot.start_focus(minutes, task_id or None, topic=(topic or "").strip() or None, source="web")
         return {"focus": focus_view(bot.core, bot.core.store.kv_get(FOCUS))}
     return run
 
@@ -395,6 +405,30 @@ def claim_pair(code: str) -> Any:
         from arvix.web.auth import claim_pair as claim
 
         return claim(bot.core, code)
+    return run
+
+
+def study_transcribe(audio: bytes, filename: str) -> Any:
+    def run(bot: Any) -> dict[str, Any]:
+        from arvix.stt import STTError
+
+        if not bot.stt.enabled:
+            raise ArvixError("Распознавание голоса выключено. Введи свой ход текстом.")
+        try:
+            text = bot.stt.transcribe(audio, filename=filename, browser=True).strip()
+        except STTError as exc:
+            raise ArvixError(f"Запись не разобрал: {exc}") from exc
+        if not text:
+            raise ArvixError("В записи не разобрал слов.")
+        return {"text": text[:3000]}
+    return run
+
+
+def task_study(task_id: str, body: dict[str, Any]) -> Any:
+    def run(bot: Any) -> dict[str, Any]:
+        task = bot.core.resolve_task(task_id)
+        with bot.via("web", SINK):
+            return learning_focus.run(bot, task, body)
     return run
 
 

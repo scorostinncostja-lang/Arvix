@@ -226,15 +226,19 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                         raise ArvixError("Пустое сообщение")
                     app.hub.post(api.chat(text[:16000], reply_to=reply_id(body.get("reply_to"))), label="думаю", chat=True)
                     self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
-                elif parts == ["voice"]:
+                elif parts in (["voice"], ["study-transcribe"]):
                     audio = self.body_bytes()
                     if not audio:
                         raise ArvixError("Пустая запись")
                     kind = (self.headers.get("Content-Type") or "audio/webm").split(";")[0]
                     ext = {"audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav"}.get(kind, "webm")
-                    app.hub.post(api.voice(audio, f"voice.{ext}", reply_to=reply_id(self.headers.get("X-Reply-To"))),
-                                 label="слушаю", chat=True)
-                    self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
+                    if parts == ["study-transcribe"]:
+                        self.send_json(app.hub.call(api.study_transcribe(audio, f"voice.{ext}"),
+                                                    timeout=90, label="слушаю"))
+                    else:
+                        app.hub.post(api.voice(audio, f"voice.{ext}", reply_to=reply_id(self.headers.get("X-Reply-To"))),
+                                     label="слушаю", chat=True)
+                        self.send_json({"queued": True}, HTTPStatus.ACCEPTED)
                 elif parts == ["upload"]:
                     data = self.body_bytes()
                     if not data:
@@ -269,6 +273,9 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                     name = urllib.parse.unquote(self.headers.get("X-File-Name") or "фото.jpg")
                     kind = (self.headers.get("Content-Type") or "").split(";")[0]
                     self.send_json(app.hub.call(api.task_photo(parts[1], data, name, kind)))
+                elif len(parts) == 3 and parts[0] == "tasks" and parts[2] == "study":
+                    self.send_json(app.hub.call(api.task_study(parts[1], self.body_json()),
+                                               timeout=200, label="разбираю занятие"))
                 elif len(parts) == 3 and parts[0] == "tasks" and parts[2] == "guide":
                     # Шаги пишет голова (10–60 с): ждём ответа здесь, приложение покажет их у задачи
                     self.send_json(app.hub.call(api.task_guide(parts[1]), timeout=200, label="собираю шаги"))

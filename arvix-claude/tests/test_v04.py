@@ -360,7 +360,8 @@ class ServerTest(BotCase):
                 raw = response.read()
                 return response.status, json.loads(raw) if path.startswith("/api/") else raw.decode()
         except urllib.error.HTTPError as exc:
-            return exc.code, json.loads(exc.read() or b"{}")
+            with exc:
+                return exc.code, json.loads(exc.read() or b"{}")
 
     def test_keep_alive_posts_do_not_share_a_body(self) -> None:
         """Браузер шлёт запросы по одному соединению: второй POST не должен получить тело первого,

@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from arvix.prompt import render_claude_ai_instructions, render_output_style
+from arvix.prompt import render_claude_ai_instructions, render_output_style  # noqa: E402
 
 SKILL_HEADER = """---
 name: arvix-mentor

@@ -66,7 +66,7 @@ class CoreChecksTest(ArvixCase):
         self.core.profile_set("bedtime_target", "00:30")
         self.assertIn("до отбоя", " | ".join(self.core.task_warnings(self.core.add_task("Ночью", start="23:45", duration_min=30, day="tomorrow"))))
         self.assertNotIn("до отбоя", " | ".join(self.core.task_warnings(self.core.add_task("Вечер", start="20:00", duration_min=60, day="tomorrow"))))
-        self.assertEqual(self.core.task_warnings(algebra), [f"пересекается с «Физика» 16:30–17:30"])
+        self.assertEqual(self.core.task_warnings(algebra), ["пересекается с «Физика» 16:30–17:30"])
 
     def test_report_that_numbers_do_not_believe(self) -> None:
         """Отчёт записывается, но сомнение видно — и в ответе, и в журнале для разбора."""
