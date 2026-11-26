@@ -28,7 +28,7 @@ class InitiativeTest(BotCase):
     def calls(self) -> list[dict]:
         return [c for c in self.brain.calls if "<initiative>" in c["raw_prompt"]]
 
-    def test_silent_block_makes_arvix_write_first_with_an_action(self) -> None:
+    def test_silent_block_makes_arvix_write_first_without_changing_plan(self) -> None:
         self.brain.answers.append({"reply": "Математика с 10:00 — тишина. **Ставлю на 13:00, 30 минут.**",
                                    "actions": [{"type": "defer_task", "task": self.math.id, "start": "13:00"}]})
         self.tick(10, 50)  # кончилась в 10:30, прошло 20 минут — ещё рано
@@ -36,8 +36,9 @@ class InitiativeTest(BotCase):
         self.tick(11, 15)
         self.assertEqual(len(self.calls()), 1)
         self.assertIn("БЛОК ПРОШЁЛ, ОТЧЁТА НЕТ", self.calls()[0]["raw_prompt"])
-        self.assertIn("Ставлю на 13:00", self.api.last)
-        self.assertEqual(self.core.state.tasks[self.math.id].start, "13:00")  # решил и сделал, а не спросил
+        self.assertNotIn("Ставлю на 13:00", self.api.last)
+        self.assertIn("Ты успел сделать часть", self.api.last)
+        self.assertEqual(self.core.state.tasks[self.math.id].start, "10:00")
 
     def test_same_reason_is_not_asked_twice_even_if_head_was_silent(self) -> None:
         self.brain.answers.append({"reply": "", "actions": []})  # голова решила: писать незачем

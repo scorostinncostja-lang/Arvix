@@ -221,8 +221,8 @@ class InboxTest(BotCase):
             {"type": "complete_task", "task": task.id},
             {"type": "add_task", "title": "Матан", "duration_min": 60, "deadline": "20:30", "importance": 4},
         ]})
-        self.text("английский сделал: 30 карточек")
-        self.assertEqual(self.core.state.tasks[task.id].report, "английский сделал: 30 карточек")
+        self.text("Английский сделал: 30 карточек. Добавь матан до 20:30.")
+        self.assertEqual(self.core.state.tasks[task.id].report, "Английский сделал: 30 карточек. Добавь матан до 20:30.")
         added = next(t for t in self.core.state.tasks.values() if t.title == "Матан")
         self.assertEqual(added.start, "19:30")
         self.assertNotIn("Не выполнено", self.api.last)
@@ -344,7 +344,7 @@ class OneMessageTest(BotCase):
         self.brain.answers.append({"reply": "Ставлю Пушкина на 19:30, блок математики сдвигаю на 20:40.", "actions": [
             {"type": "add_task", "title": "Русский: биография Пушкина", "start": "19:30", "duration_min": 60, "importance": 4},
         ]})
-        self.text("пушкин завтра сдаётся")
+        self.text("Поставь Пушкина на 19:30.")
         self.assertEqual(len(self.api.sent), 1)
         message = self.api.last
         self.assertTrue(message.startswith("Ставлю Пушкина на 19:30"))
@@ -359,7 +359,7 @@ class OneMessageTest(BotCase):
             {"type": "add_task", "title": "Пушкин", "start": "19:30", "duration_min": 60, "importance": 4},
             {"type": "defer_task", "task": math.id, "minutes": 70},
         ]})
-        self.text("пушкин первым")
+        self.text("Поставь Пушкина первым. Перенеси математику.")
         self.assertNotIn("пересекается", self.api.last)
         self.assertIn("⏳ Математика → 20:40", self.api.last)
 
@@ -371,7 +371,7 @@ class OneMessageTest(BotCase):
         self.brain.answers.append({"reply": "Переношу блок на 19:45, до 20:30.", "actions": [
             {"type": "defer_task", "task": math.id, "start": "19:45"},
         ]})
-        self.text("пойду погуляю, сяду в 19:45")
+        self.text("Пойду погуляю. Перенеси математику на 19:45.")
         self.assertEqual(self.core.state.tasks[math.id].start, "19:45")
         self.assertIn("⏳ Математика: блок 45 минут → 19:45", self.api.last)
 
