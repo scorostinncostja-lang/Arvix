@@ -195,7 +195,13 @@ class State:
         )
 
     def _on_study_focus_step(self, ev: Event, p: dict, day: Day) -> None:
-        self.study_focus[p["topic"]] = {**p, "revision": ev.id}
+        # D65: событие несёт только изменённые поля темы — сливаем с прежним; события D63–D64 — полные снимки.
+        prior = self.study_focus.get(p["topic"], {})
+        entry = {**prior, **p, "revision": ev.id}
+        if p.get("kind") == "record":
+            mark = {"day": p.get("day") or ev.at.date().isoformat(), "score": p.get("score"), "clean": p.get("clean")}
+            entry["history"] = [*(prior.get("history") or []), mark][-20:]
+        self.study_focus[p["topic"]] = entry
 
     def _on_ink_saved(self, ev: Event, p: dict, day: Day) -> None:
         entry = self.ink.setdefault(p["path"], {"png": {}, "text": {}})

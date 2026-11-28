@@ -90,9 +90,12 @@ CREATE TABLE runtime (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `State.ink[path]`: страница не расшифрована, пока sha её PNG не совпал с sha расшифрованной; «разбираю» дольше 10 минут
 считается прерванным (служба перезапустилась).
 
-Учебная тема (D64): `study_focus_step` хранит ключ и видимое название темы, связанный ID задачи (если есть),
-результат, обратную связь, источник, схему, следующий шаг, заметку и дату повторения. Свёртка использует
-последний шаг темы в `State.study_focus`. События D63 остаются читаемыми.
+Учебная тема (D65): `study_focus_step` — `topic` (ключ), `title`, `task_id`, `kind` (`record` · `help` · `note` ·
+`plan_review`) и только изменённые поля: для `record` — `score {correct, total}`, `mistakes`, `result`, `clean`,
+`interval`, `review_due`, `mastered`, `day`; для `help` — `help {question, feedback, source, visual, next_step}`;
+для `note` — `note_path`; для `plan_review` — `task_id` задачи «Повтор: …». Свёртка сливает событие с прежней темой в
+`State.study_focus` и на `record` дописывает `history` (`day, score, clean`, последние 20). События D63–D64 — полные
+снимки темы — сливаются так же и остаются читаемыми.
 
 Старые события проектов и учебных сессий (D43–D61: `channel_set`, `learn_item_set`, `lesson_checked`, `lesson_started`, `milestone_set`, `project_logged`, `project_money`, `project_set`, `repo_activity`, `resource_set`, `review_answer`, `review_quiz`, `review_set`, `study_answer`, `study_fix`, `study_mine`, `study_panel`, `study_shadow`, `study_stage`) остаются в журнале;
 с D62 свёртка их не читает, как XP и HP после D41.
